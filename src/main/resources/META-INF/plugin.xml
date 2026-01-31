@@ -13,8 +13,18 @@
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
     <description><![CDATA[
-<p><b>Json2Typescript</b> is a lightweight IntelliJ / WebStorm plugin that converts copied JSON data into TypeScript type definitions with one click.</p>
-<p><b>Features:</b></p>
+Vue Chinese i18n Extractor
+
+This plugin helps developers quickly internationalize hard-coded Chinese strings in Vue Single File Components (.vue):
+
+- Scans template text nodes, attributes (including slot name), script string literals and concatenations
+- Replaces Chinese with standard Vue i18n calls: {{ $t('key') }} in templates or $t('key') in JS
+- Automatically uses dynamic binding :name="$t('key')" for slot name attributes
+- Uses original Chinese (or lightly cleaned) as key, supports idempotency (skips already internationalized text)
+- All changes wrapped in WriteCommandAction – fully supports undo (Ctrl+Z)
+- Collects extracted strings in a map for later export to JSON or locale files
+
+Significantly improves i18n workflow in Vue projects and reduces manual work.
 ]]></description>
 
     <!-- Product and plugin compatibility requirements.
