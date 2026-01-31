@@ -26,6 +26,7 @@ dependencies {
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
         bundledPlugin("JavaScript") // 让 PSI API 可用
+        //bundledPlugin("org.jetbrains.plugins.vue")
     }
 }
 
@@ -36,7 +37,8 @@ intellijPlatform {
         }
 
         changeNotes = """
-      Initial version
+      1.0.1 fix StringTemplate
+      1.0.0 Initial version
     """.trimIndent()
     }
 }

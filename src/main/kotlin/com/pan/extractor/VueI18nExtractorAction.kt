@@ -8,7 +8,6 @@ import com.intellij.openapi.command.WriteCommandAction
 class VueI18nExtractorAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val psiFile = e.getData(CommonDataKeys.PSI_FILE) ?: return
 
         val extracted = mutableMapOf<String, String>()

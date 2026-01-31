@@ -30,6 +30,7 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
     <!-- Product and plugin compatibility requirements.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
+   <!-- <depends>org.jetbrains.plugins.vue</depends>-->
     <depends>JavaScript</depends>
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->

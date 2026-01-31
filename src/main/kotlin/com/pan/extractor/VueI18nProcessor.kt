@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
@@ -25,8 +26,27 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
-    /** 正则匹配连续中文字符 */
-    private val chineseRegex = Regex("[\\u4e00-\\u9fff]+")
+    fun isMustache(text: String): Boolean {
+        return text.contains("{{") && text.contains("}}")
+    }
+
+    // 處理帶 Mustache 的 XmlText：獲取注入的 JS
+    fun visitMustache(element: PsiElement, visitElement: (JSLiteralExpression) -> Unit) {
+
+        val injected = InjectedLanguageManager.getInstance(project)
+            .getInjectedPsiFiles(element)  // 或 getInjectedFragments
+        injected?.forEach { pair ->
+            val injectedRoot: PsiElement = pair.first     // 這才是注入的 PSI 根元素
+            injectedRoot.accept(object : PsiRecursiveElementWalkingVisitor() {
+                override fun visitElement(e: PsiElement) {
+                    if (e is JSLiteralExpression) {
+                        visitElement(e)
+                    }
+                    super.visitElement(e)
+                }
+            })
+        }
+    }
 
     /** 处理整个 Vue 文件，支持 undo */
     fun processFile() {
@@ -35,7 +55,13 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             override fun visitElement(element: PsiElement) {
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
-                        collectTemplateTextChange(element, changes)
+                        if (isMustache(element.text)) {
+                            visitMustache(element, { item ->
+                                collectJSStringChange(item, changes)
+                            })
+                        } else {
+                            collectTemplateTextChange(element, changes)
+                        }
                     }
 
                     is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
@@ -116,23 +142,28 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     // Template 文本节点
     // ───────────────────────────────────────────────
     private fun collectTemplateTextChange(textNode: XmlText, changes: MutableList<() -> Unit>) {
-        val text = textNode.text.trim()
-        if (text === "") {
+        val original = textNode.text
+        val trimmed = original.trim()
+        if (trimmed === "") {
             return;
         }
-        if (!hasChinese(text)) {
+        if (!hasChinese(trimmed)) {
             return
         }
-        if (text.contains("\$t(")) return
+        if (trimmed.contains("\$t(")) return
+        println("TemplateText-${textNode.text}")
 
-        val key = generateKey(text, textNode)
-        extractedStrings.putIfAbsent(key, text)
-
-        val newText = "{{ \$t('$key') }}"
-
+        val key = collectExtractedStrings(textNode)
         changes.add {
             val factory = XmlElementFactory.getInstance(project)
-            val dummyTag = factory.createTagFromText("<div>$newText</div>")
+            // 計算前導空白（leading whitespace）
+            val leading = original.substringBefore(trimmed)
+
+            // 計算尾隨空白（trailing whitespace）
+            val trailing = original.substringAfterLast(trimmed)
+            val newContent = "$leading{{ \$t('$key') }}$trailing"
+
+            val dummyTag = factory.createTagFromText("<div>$newContent</div>")
             val newPsiText = PsiTreeUtil.findChildOfType(dummyTag, XmlText::class.java)
             if (newPsiText != null) {
                 textNode.replace(newPsiText)
@@ -144,17 +175,26 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return text.any { it in '\u4e00'..'\u9fff' }
     }
 
+
+    fun isJSTemplateLiteral(text: String): Boolean {
+        return text.startsWith("`") && text.contains("\${")
+    }
+
     // ───────────────────────────────────────────────
     // 属性值（重点处理 <slot name="中文"> → :name）
     // ───────────────────────────────────────────────
     private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<() -> Unit>) {
-        val originalText = attrValue.value.trim()
+        val originalText = attrValue.value.trim();
+        println("XmlAttributeValue-${originalText}-${attrValue.text}")
         if (originalText.isEmpty()) return
         if (!hasChinese(originalText)) {
             return
         }
         if (originalText.contains("\$t(")) {
             return
+        }
+        if (isJSTemplateLiteral(originalText)) {
+            return;
         }
 
         val key = generateKey(originalText, attrValue)
@@ -181,14 +221,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     private val templateVarRegex = Regex("""\$\{\s*([^}]+?)\s*}""")
 
-    fun collectJSStringTemplate(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
-        val raw = stringExpr.text
-        if (raw.isEmpty()) return
-        if (isCalled(stringExpr)) {
-            return
-        }
-        val content = raw.substring(1, raw.length - 1)
 
+    fun collectJSStringTemplate(raw:String, changes: MutableList<() -> Unit>, ele: PsiElement){
+        val content = raw.substring(1, raw.length - 1)
         val params = LinkedHashMap<String, String>()
 
         val message = templateVarRegex.replace(content) { match ->
@@ -204,22 +239,31 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         ) { (k, v) ->
             if (k.all { it.isDigit() }) "\"$k\": $v" else "$k: $v"
         }
-        val key = generateKey(message, stringExpr)
+
+        val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, key);
 
-
-        //print("text${stringExpr.text},${message}-${paramsObject}\n")
+        println("text${content},${message}-${paramsObject}")
         changes.add {
-            val newExprText = "\$t(\"$message\",$paramsObject)"
+            val newExprText = "\$t(\'$message\',$paramsObject)"
             val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
             if (newExpr != null) {
                 val newElement = newExpr.psi  // 或者 newAstNode.psi
-                stringExpr.replace(newElement)
+                ele.replace(newElement)
             }
         }
     }
 
-    fun isCalled(stringExpr: JSLiteralExpression): Boolean {
+    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
+        val raw = stringExpr.text
+        if (raw.isEmpty()) return
+        if (isTransformedCalled(stringExpr)) {
+            return
+        }
+        collectJSStringTemplate(raw, changes,stringExpr)
+    }
+
+    fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean {
         val parent = stringExpr.parent.parent
         //print("parent,${parent.text}${parent is JSCallExpression}")
         if (parent is JSCallExpression) {
@@ -227,6 +271,16 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             if (callee == "\$t") return true
         }
         return false;
+    }
+
+    fun collectExtractedStrings(ele: PsiElement): String {
+        var text = ele.text;
+        if (ele is JSLiteralExpression) {
+            text = ele.stringValue;
+        }
+        val key = generateKey(text.trim(), ele)
+        extractedStrings.putIfAbsent(key, text)
+        return key;
     }
 
     // ───────────────────────────────────────────────
@@ -238,9 +292,10 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         if (raw.isEmpty()) {
             return
         }
+        println("JSString${raw}")
 
-        if (raw.startsWith("`") && raw.contains("\${")) {
-            return collectJSStringTemplate(stringExpr, changes);
+        if (isJSTemplateLiteral(raw)) {
+            return collectJSStringTemplateFromExpression(stringExpr, changes);
         }
         val text = stringExpr.stringValue ?: return
 
@@ -249,13 +304,11 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         if (!hasChinese(text)) {
             return
         }
-        if (isCalled(stringExpr)) {
+        val key = collectExtractedStrings(stringExpr)
+
+        if (isTransformedCalled(stringExpr)) {
             return
         }
-
-        val key = generateKey(text.trim(), stringExpr)
-        extractedStrings.putIfAbsent(key, text)
-
 
         val quote = if (stringExpr.text.startsWith('"')) "\"" else "'"
         val newText = "\$t($quote$key$quote)"
@@ -275,17 +328,44 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     // JS 字符串拼接 (+)
     // ───────────────────────────────────────────────
     private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<() -> Unit>) {
-        if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
 
-        binaryExpr.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                if (element is JSLiteralExpression) {
-                    collectJSStringChange(element, changes)
-                }
-                super.visitElement(element)
-            }
-        })
+        if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
+        val template = convertConcatTextToTemplate(binaryExpr.text)
+        println("JSBinaryExpression${binaryExpr.text}")
+        println("template${template}${isJSTemplateLiteral(template)}")
+        /* binaryExpr.accept(object : PsiRecursiveElementWalkingVisitor() {
+             override fun visitElement(element: PsiElement) {
+                 if (element is JSLiteralExpression) {
+                     collectJSStringChange(element, changes)
+                 }
+                 super.visitElement(element)
+             }
+         })*/
+        collectJSStringTemplate(template, changes,binaryExpr)
     }
+
+    private fun convertConcatTextToTemplate(concatText: String): String {
+        // 步骤1：按 + 分割（处理空格，如 "a" + b → ["a", "b"]）
+        val parts = concatText.split(Regex("\\s*\\+\\s*")).map { it.trim() }
+
+        // 步骤2：拼接模板字符串
+        val sb = StringBuilder("`")
+        parts.forEach { part ->
+            when {
+                // 字符串字面量：去掉引号（处理 "" 或 '' 包裹的情况）
+                part.startsWith("\"") && part.endsWith("\"") ->
+                    sb.append(part.substring(1, part.length - 1))
+
+                part.startsWith("'") && part.endsWith("'") ->
+                    sb.append(part.substring(1, part.length - 1))
+                // 变量/表达式：用 ${} 包裹
+                else -> sb.append("\${$part}")
+            }
+        }
+        sb.append("`")
+        return sb.toString()
+    }
+
 
     // ───────────────────────────────────────────────
     // 生成 key：直接用中文（简单清理）
