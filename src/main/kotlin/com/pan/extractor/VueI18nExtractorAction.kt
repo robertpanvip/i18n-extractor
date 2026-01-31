@@ -14,8 +14,8 @@ class VueI18nExtractorAction : AnAction() {
         val extracted = mutableMapOf<String, String>()
 
         WriteCommandAction.runWriteCommandAction(project) {
-            val ins = VueI18nProcessor(project)
-            ins.processFile(psiFile);
+            val ins = VueI18nProcessor(project,psiFile)
+            ins.processFile();
             extracted.putAll(ins.extractedStrings)
         }
 

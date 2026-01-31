@@ -18,18 +18,19 @@ import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlToken
 import com.intellij.psi.xml.XmlTokenType
 
-class VueI18nProcessor(private val project: Project) {
+class VueI18nProcessor(private val project: Project, private var psiFile: PsiElement) {
 
     /** 收集的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
+
+    val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
     /** 正则匹配连续中文字符 */
     private val chineseRegex = Regex("[\\u4e00-\\u9fff]+")
 
     /** 处理整个 Vue 文件，支持 undo */
-    fun processFile(psiFile: PsiElement) {
+    fun processFile() {
         val changes = mutableListOf<() -> Unit>()
-
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element) {
@@ -59,42 +60,56 @@ class VueI18nProcessor(private val project: Project) {
         }
     }
 
+    fun getScriptTag(): XmlTag? {
+        return PsiTreeUtil.findChildrenOfType(psiFile, XmlTag::class.java)
+            .firstOrNull { it.name == "script" }
+    }
+
     private fun ensureVueI18nImported(
         psiFile: PsiElement
     ) {
-        val scriptTag = PsiTreeUtil.findChildrenOfType(psiFile, XmlTag::class.java)
-            .firstOrNull { it.name == "script" } ?: return
-        val project = psiFile.project
-
+        var scriptTag = this.getScriptTag();
+        if (scriptTag === null) {
+            psiFile.add(factory.createTagFromText("<script setup lang=\"ts\">\n</script>"));
+            scriptTag = this.getScriptTag()
+        }
 
         val endToken = PsiTreeUtil.findChildrenOfType(scriptTag, XmlToken::class.java)
             .firstOrNull { it.tokenType == XmlTokenType.XML_TAG_END } ?: return
 
         val setup = endToken.nextSibling
 
-        val factory = XmlElementFactory.getInstance(project)
+        val content = setup?.text ?: "";
 
-        val oldText = setup?.text
-        val newText = "\nimport { useI18n } from 'vue-i18n'\n const { t: \$t } = useI18n()${oldText ?: ""}"
-        if (oldText === null) {
-            // 没有文本节点，直接添加一个新的
-            val newText = factory.createTagFromText("<script>$newText</script>")
-            val newXmlText = PsiTreeUtil.findChildOfType(newText, XmlText::class.java)
-            if (newXmlText != null) {
-                setup.add(newXmlText)
+        val insetText = "import { useI18n } from 'vue-i18n'"
+        val lines = content.split("\\n".toRegex()).toMutableList()
+        if (!content.contains("useI18n")) {
+            if (lines[0] === "") {
+                lines.removeAt(0)
             }
-            return
+            lines.add(0, "")
+            lines.add(1, insetText)
         }
+        val lastImportIndex = lines.indexOfLast { item -> item.startsWith("import") }
+        val toAdd = "const { t: \$t } = useI18n();"
 
-        if (!oldText.contains("vue-i18n")) {
-
-            val dummy = factory.createTagFromText("<script>$newText</script>")
-            val newXmlText = PsiTreeUtil.findChildOfType(dummy, XmlText::class.java)
-
+        if (lastImportIndex == -1) {
+            lines.add(toAdd);
+        } else {
+            lines[lastImportIndex] = "${lines[lastImportIndex]}\n${toAdd}"
+        }
+        if (!content.contains("useI18n")) {
+            val newXmlText = createXmlTextElement(lines.joinToString("\n"))
             if (newXmlText != null) {
                 setup.replace(newXmlText)
             }
         }
+    }
+
+    fun createXmlTextElement(newText: String): XmlText? {
+        val dummy = factory.createTagFromText("<script>$newText</script>")
+        val newXmlText = PsiTreeUtil.findChildOfType(dummy, XmlText::class.java)
+        return newXmlText
     }
 
     // ───────────────────────────────────────────────
@@ -138,7 +153,7 @@ class VueI18nProcessor(private val project: Project) {
         if (!hasChinese(originalText)) {
             return
         }
-        if(originalText.contains("\$t(")){
+        if (originalText.contains("\$t(")) {
             return
         }
 
