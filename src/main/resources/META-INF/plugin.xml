@@ -1,0 +1,43 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.pan.vue-i18n-extractor</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+    <name>Vue-I18n-Extractor</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+    <description><![CDATA[
+<p><b>Json2Typescript</b> is a lightweight IntelliJ / WebStorm plugin that converts copied JSON data into TypeScript type definitions with one click.</p>
+<p><b>Features:</b></p>
+]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>JavaScript</depends>
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+
+    </extensions>
+    <actions>
+        <action
+                id="VueI18nExtractorAction"
+                class="com.pan.extractor.VueI18nExtractorAction"
+                text="Vue 中文国际化提取"
+                description="提取 Vue 文件中的中文，替换为 $t() 并生成 JSON"
+                icon="/icon.svg"
+        >
+            <add-to-group
+                    group-id="EditorPopupMenu"
+                    anchor="first"
+            />
+        </action>
+    </actions>
+</idea-plugin>
