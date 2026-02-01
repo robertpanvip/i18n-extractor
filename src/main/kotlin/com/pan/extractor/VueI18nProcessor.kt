@@ -1,28 +1,26 @@
 package com.pan.extractor
 
 import com.intellij.lang.injection.InjectedLanguageManager
-import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiElement
-import com.intellij.psi.util.PsiTreeUtil
-import com.intellij.psi.xml.XmlText
-import com.intellij.lang.javascript.psi.impl.JSChangeUtil
-import com.intellij.lang.javascript.psi.JSLiteralExpression
-import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.JSTokenTypes
+import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSElement
+import com.intellij.lang.javascript.psi.JSExpression
+import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
+import com.intellij.lang.javascript.psi.impl.JSChangeUtil
+import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
-import com.intellij.psi.PsiComment
-import com.intellij.psi.PsiFile
-import com.intellij.psi.xml.XmlTag
-import com.intellij.psi.PsiRecursiveElementWalkingVisitor
-import com.intellij.psi.XmlElementFactory
-import com.intellij.psi.xml.XmlAttribute
-import com.intellij.psi.xml.XmlAttributeValue
-import com.intellij.psi.xml.XmlToken
-import com.intellij.psi.xml.XmlTokenType
+import com.intellij.openapi.project.Project
+import com.intellij.psi.*
+import com.intellij.psi.impl.source.CharTableImpl
+import com.intellij.psi.impl.source.tree.CompositePsiElement
+import com.intellij.psi.impl.source.tree.LeafPsiElement
+import com.intellij.psi.tree.IElementType
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.*
 
 class VueI18nProcessor(private val project: Project, private var psiFile: PsiElement) {
 
@@ -58,20 +56,56 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return psiFile.name.endsWith(".vue", ignoreCase = true)
     }
 
-    /** 处理整个 Vue 文件，支持 undo */
-    fun processFile() {
-        val changes = mutableListOf<() -> Unit>()
+    fun preProcess() {
+        val pre = mutableListOf<() -> Unit>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
-                        println("XmlText${element.text}")
+                        val original = element.text;
+                        if (!original.isEmpty() && isMustache(original) && hasChinese(original)) {
+                            val trimmed = original.trim()
+                            // 計算前導空白（leading whitespace）
+                            val leading = original.substringBefore(trimmed)
+                            // 計算尾隨空白（trailing whitespace）
+                            val trailing = original.substringAfterLast(trimmed)
+                            val content = convertMustacheToTemplate(trimmed)
+                            val output = "${leading}{{ `$content` }}${trailing}"
+                            val originalCore = trimmed.removeSurrounding("{{", "}}").trim()
+                            val originalContent = content.removeSurrounding("\${", "}").trim()
+
+                            if (originalCore == originalContent) {
+                                return
+                            }
+                            pre.add {
+                                element.value = output
+                            }
+                        }
+                    }
+                }
+                super.visitElement(element)
+            }
+        })
+        pre.forEach { it() }
+    }
+
+    /** 处理整个 Vue 文件，支持 undo */
+    fun processFile() {
+        preProcess();
+        return
+        val changes = mutableListOf<() -> Unit>();
+        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: PsiElement) {
+                when (element) {
+                    is XmlText -> if (!isInStyleOrComment(element)) {
                         if (isMustache(element.text)) {
+                            println("visitMustache${element.text}")
                             visitMustache(element, { item ->
                                 collectJSStringChange(item, changes)
                             })
+                        } else {
+                            collectTemplateTextChange(element, changes)
                         }
-                        collectTemplateTextChange(element, changes)
                     }
 
                     is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
@@ -156,10 +190,6 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return
         }
 
-        if(isMustache(textNode.text)){
-            return
-        }
-
         val inScript = isInScript(textNode);
 
         if (trimmed.contains("\$t(")) return
@@ -167,7 +197,6 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
         val key = collectExtractedStrings(textNode)
         changes.add {
-            val factory = XmlElementFactory.getInstance(project)
             // 計算前導空白（leading whitespace）
             val leading = original.substringBefore(trimmed)
 
@@ -176,11 +205,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
             val newContent = if (!inScript) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
 
-            val dummyTag = factory.createTagFromText("<div>$newContent</div>")
-            val newPsiText = PsiTreeUtil.findChildOfType(dummyTag, XmlText::class.java)
-            if (newPsiText != null) {
-                textNode.replace(newPsiText)
-            }
+            val newElement = createStringExpressionNode(newContent, textNode)
+
+            textNode.replace(newElement)
         }
     }
 
@@ -265,13 +292,46 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         extractedStrings.putIfAbsent(key, key);
         //println("text${content},${message}-${paramsObject}")
         changes.add {
-            val newExprText = "\$t(\'$message\',$paramsObject)"
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
-            if (newExpr != null) {
-                val newElement = newExpr.psi  // 或者 newAstNode.psi
-                ele.replace(newElement)
-            }
+            //val newExprText = "\$t(`${message.trim()}`,$paramsObject)"
+            val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
+            val newElement = createStringExpressionNode(newExprText, ele)
+            println("raw${raw}")
+            println("message.trim()${message.trim()}")
+            println("newElement${newElement.text}")
+            ele.replace(newElement)
         }
+    }
+
+    fun buildTFunctionExpr(message: String, paramsObject: String): String {
+        // 步骤1：处理 message（trim 并转义特殊字符）
+        val trimmedMsg = message.trim()
+
+        // 步骤2：转义特殊字符（避免引号闭合、语法错误）
+        val escapedMsg = if (trimmedMsg.contains("\n")) {
+            // 模板字符串：转义反引号
+            trimmedMsg.replace("`", "\\`")
+        } else {
+            // 单引号字符串：转义单引号
+            trimmedMsg.replace("'", "\\'")
+        }
+
+        // 步骤3：判断是否包含换行符，选择引号类型
+        val quote = if (trimmedMsg.contains("\n")) "`" else "'"
+
+        // 步骤4：拼接最终的 $t 函数调用表达式
+        return "\$t($quote$escapedMsg$quote, $paramsObject)"
+    }
+
+    fun createStringExpressionNode(text: String, context: PsiElement): PsiElement {
+        val dummyLiteral = JSPsiElementFactory.createJSExpression("''", context)
+        val elementType: IElementType = JSTokenTypes.STRING_LITERAL
+        // 步骤：创建纯文本 LeafPsiElement（无语法解析，保留原始文本）
+        val textNode = LeafPsiElement(elementType, text)
+
+        dummyLiteral.node.addChild(textNode.node)
+
+        // 步骤：返回挂载后的完整节点（此时文本节点已关联 CharTable）
+        return dummyLiteral.lastChild
     }
 
     fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
@@ -322,9 +382,15 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return
         }
 
+        if (!hasChinese(raw)) {
+            return
+        }
+
         if (isJSTemplateLiteral(raw)) {
             return collectJSStringTemplateFromExpression(ele, changes);
         }
+
+
         if (ele.parent is TypeScriptEnumField) {
             if (processedEnums.add(ele.parent.parent)) {
                 val notificationGroup = NotificationGroupManager.getInstance()
@@ -343,11 +409,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
         val text = ele.stringValue ?: return
 
-        //print("$text,contains${raw.contains("\$t(")}\n")
         if (text.isEmpty()) return
-        if (!hasChinese(text)) {
-            return
-        }
+        //print("$text,contains${raw.contains("\$t(")}\n")
+
         val key = collectExtractedStrings(ele)
 
         if (isTransformedCalled(ele)) {
@@ -377,6 +441,36 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         val template = convertConcatTextToTemplate(binaryExpr.text)
         //println("template${template}${isJSTemplateLiteral(template)}")
         collectJSStringTemplate(template, changes, binaryExpr)
+    }
+
+    fun convertMustacheToTemplate(text: String): String {
+        // 匹配 {{ ... }} （允许中间有空格，非贪婪）
+        val regex = Regex("""\{\{\s*(.+?)\s*\}\}""")
+
+        val result = StringBuilder()
+        var lastEnd = 0
+
+        regex.findAll(text).forEach { match ->
+            // 添加插值前面的普通文本
+            if (match.range.first > lastEnd) {
+                result.append(text.substring(lastEnd, match.range.first))
+            }
+
+            // 添加 ${表达式}
+            val expr = match.groupValues[1].trim()
+            if (expr.isNotEmpty()) {
+                result.append("\${$expr}")
+            }
+
+            lastEnd = match.range.last + 1
+        }
+
+        // 添加最后的普通文本
+        if (lastEnd < text.length) {
+            result.append(text.substring(lastEnd))
+        }
+
+        return result.toString()
     }
 
     private fun convertConcatTextToTemplate(concatText: String): String {
