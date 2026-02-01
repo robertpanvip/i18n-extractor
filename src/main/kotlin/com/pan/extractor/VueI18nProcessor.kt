@@ -15,6 +15,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.psi.PsiComment
+import com.intellij.psi.PsiFile
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.XmlElementFactory
@@ -53,6 +54,10 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
     }
 
+    private fun isVueFile(psiFile: PsiFile): Boolean {
+        return psiFile.name.endsWith(".vue", ignoreCase = true)
+    }
+
     /** 处理整个 Vue 文件，支持 undo */
     fun processFile() {
         val changes = mutableListOf<() -> Unit>()
@@ -89,7 +94,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         })
 
         changes.forEach { it() }
-        if (extractedStrings.isNotEmpty()) {
+        if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
             ensureVueI18nImported(psiFile)
         }
     }
@@ -317,7 +322,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return collectJSStringTemplateFromExpression(ele, changes);
         }
         if (ele.parent is TypeScriptEnumField) {
-            if(processedEnums.add(ele.parent.parent)){
+            if (processedEnums.add(ele.parent.parent)) {
                 val notificationGroup = NotificationGroupManager.getInstance()
                     .getNotificationGroup("Vue i18n 提取提示")  // 自定义组名
 
