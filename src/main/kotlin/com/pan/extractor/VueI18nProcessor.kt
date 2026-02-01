@@ -1,4 +1,5 @@
 package com.pan.extractor
+
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
@@ -9,8 +10,11 @@ import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.notification.Notifications
 import com.intellij.psi.PsiComment
-import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.XmlElementFactory
@@ -23,6 +27,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     /** 收集的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
+
     //val psiFactory = PsiFileFactory.getInstance(project)
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
@@ -65,14 +70,17 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
                     }
 
                     is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
+                        //println("XmlAttributeValue${element.text}")
                         collectXmlAttributeValueChange(element, changes)
                     }
 
                     is JSLiteralExpression -> if (!isInComment(element)) {
+                        //println("JSString${element.text}")
                         collectJSStringChange(element, changes)
                     }
 
                     is JSBinaryExpression -> if (!isInComment(element)) {
+                        //println("JSBinaryExpression${element.text}")
                         collectJSBinaryExpressionChange(element, changes)
                     }
                 }
@@ -157,7 +165,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             // 計算尾隨空白（trailing whitespace）
             val trailing = original.substringAfterLast(trimmed)
 
-            val newContent = if(!inScript) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
+            val newContent = if (!inScript) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
 
             val dummyTag = factory.createTagFromText("<div>$newContent</div>")
             val newPsiText = PsiTreeUtil.findChildOfType(dummyTag, XmlText::class.java)
@@ -176,7 +184,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return text.startsWith("`") && text.contains("\${")
     }
 
-    fun isBlock(originalText:String): Boolean{
+    fun isBlock(originalText: String): Boolean {
         return originalText.startsWith('{') && originalText.endsWith('}')
     }
 
@@ -286,37 +294,58 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return key;
     }
 
+    /**
+     * 判断这个字符串字面量是否是 enum entry 的初始化值
+     * 如 enum X { A = "中文" } 中的 "中文"
+     */
+    private val processedEnums = mutableSetOf<PsiElement>()
+
     // ───────────────────────────────────────────────
     // JS 字符串字面量
     // ───────────────────────────────────────────────
-    private fun collectJSStringChange(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
+    private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
 
-        val raw = stringExpr.text
+        val raw = ele.text
         if (raw.isEmpty()) {
             return
         }
-        if (stringExpr is XmlTag) {
+        if (ele is XmlTag) {
             return
         }
-        //println("JSString${raw}")
 
         if (isJSTemplateLiteral(raw)) {
-            return collectJSStringTemplateFromExpression(stringExpr, changes);
+            return collectJSStringTemplateFromExpression(ele, changes);
         }
-        val text = stringExpr.stringValue ?: return
+        if (ele.parent is TypeScriptEnumField) {
+            if(processedEnums.add(ele.parent.parent)){
+                val notificationGroup = NotificationGroupManager.getInstance()
+                    .getNotificationGroup("Vue i18n 提取提示")  // 自定义组名
+
+                val notification = notificationGroup.createNotification(
+                    "跳过枚举成员 i18n 提取",
+                    "枚举成员初始化值（如 ${ele.parent.parent.parent.text}）不支持运行时 \$t()，会报 TS18033 错误。\n" +
+                            "建议改为 const 对象",
+                    NotificationType.WARNING
+                )
+
+                Notifications.Bus.notify(notification, project)
+            }
+            return
+        }
+        val text = ele.stringValue ?: return
 
         //print("$text,contains${raw.contains("\$t(")}\n")
         if (text.isEmpty()) return
         if (!hasChinese(text)) {
             return
         }
-        val key = collectExtractedStrings(stringExpr)
+        val key = collectExtractedStrings(ele)
 
-        if (isTransformedCalled(stringExpr)) {
+        if (isTransformedCalled(ele)) {
             return
         }
 
-        val quote = if (stringExpr.text.startsWith('"')) "\"" else "'"
+        val quote = if (ele.text.startsWith('"')) "\"" else "'"
         val newText = "\$t($quote$key$quote)"
         if (newText == text) return
 
@@ -325,7 +354,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
             if (newExpr != null) {
                 val newElement = newExpr.psi  // 或者 newAstNode.psi
-                stringExpr.replace(newElement)
+                ele.replace(newElement)
             }
         }
     }

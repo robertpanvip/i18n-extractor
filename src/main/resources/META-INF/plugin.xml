@@ -30,12 +30,17 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
     <!-- Product and plugin compatibility requirements.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
-   <!-- <depends>org.jetbrains.plugins.vue</depends>-->
+    <!-- <depends>org.jetbrains.plugins.vue</depends>-->
     <depends>JavaScript</depends>
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-
+        <notificationGroup
+                id="Vue i18n 提取提示"
+                displayType="BALLOON"
+                toolWindowId="Project"
+                isLogByDefault="false"
+        />
     </extensions>
     <actions>
         <action
