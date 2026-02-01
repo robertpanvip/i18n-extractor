@@ -65,13 +65,13 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             override fun visitElement(element: PsiElement) {
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
+                        println("XmlText${element.text}")
                         if (isMustache(element.text)) {
                             visitMustache(element, { item ->
                                 collectJSStringChange(item, changes)
                             })
-                        } else {
-                            collectTemplateTextChange(element, changes)
                         }
+                        collectTemplateTextChange(element, changes)
                     }
 
                     is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
@@ -153,6 +153,10 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return;
         }
         if (!hasChinese(trimmed)) {
+            return
+        }
+
+        if(isMustache(textNode.text)){
             return
         }
 
