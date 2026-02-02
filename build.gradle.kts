@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.1.0"
+version = "1.1.1"
 
 repositories {
     maven { url = uri("https://maven.aliyun.com/repository/public") }
@@ -37,6 +37,7 @@ intellijPlatform {
         }
 
         changeNotes = """
+      1.1.1 react tsx support
       1.1.0 bugfix
       1.0.2 feat jsx support  
       1.0.1 fix StringTemplate
