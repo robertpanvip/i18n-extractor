@@ -4,8 +4,6 @@ import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
-import com.intellij.lang.javascript.psi.JSElement
-import com.intellij.lang.javascript.psi.JSExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
@@ -15,8 +13,6 @@ import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.project.Project
 import com.intellij.psi.*
-import com.intellij.psi.impl.source.CharTableImpl
-import com.intellij.psi.impl.source.tree.CompositePsiElement
 import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
@@ -92,14 +88,13 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     /** 处理整个 Vue 文件，支持 undo */
     fun processFile() {
         preProcess();
-        return
         val changes = mutableListOf<() -> Unit>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
                         if (isMustache(element.text)) {
-                            println("visitMustache${element.text}")
+                            //println("visitMustache${element.text}")
                             visitMustache(element, { item ->
                                 collectJSStringChange(item, changes)
                             })
@@ -224,6 +219,27 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return originalText.startsWith('{') && originalText.endsWith('}')
     }
 
+    fun isVueDirective(targetStr: String): Boolean {
+        // 全面的 Vue 核心指令列表（包含常用指令+特殊指令）
+        val vueCoreDirectives = listOf(
+            // 基础指令
+            "v-text", "v-html", "v-show", "v-if", "v-else", "v-else-if",
+            "v-for", "v-on", "v-bind", "v-model", "v-slot", "v-pre",
+            "v-cloak", "v-once", "v-memo",
+            // 指令缩写（实际开发中可能遇到的简写形式）
+            "@", ":", "#"
+        )
+
+// 通用判断逻辑：覆盖「v-开头指令」+「核心指令」+「指令缩写」
+        // 1. 匹配所有以 v- 开头的指令（覆盖自定义指令/未枚举的v-指令）
+        return targetStr.startsWith("v-")
+                // 2. 匹配核心指令（包含无v-前缀的特殊指令/缩写）
+                || targetStr in vueCoreDirectives
+                // 3. 兼容指令带参数的情况（比如 v-on:click、v-bind:class）
+                || targetStr.split(":").first() in vueCoreDirectives
+
+    }
+
 
     // 属性值（重点处理 <slot name="中文"> → :name）
     // ───────────────────────────────────────────────
@@ -245,25 +261,34 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return;
         }
 
-        val key = collectExtractedStrings(attrValue)
+        val attr = attrValue.parent as? XmlAttribute ?: return
 
-        val newText = "\$t('$key')"
+        val isDirective = isVueDirective(attr.name);
+
+        var newText = originalText;
+
+        if (!(isDirective && !attr.text.startsWith("\"")
+                    && !attr.text.startsWith("'")
+                    && !attr.text.startsWith("`"))
+        ) {
+            val key = collectExtractedStrings(attrValue);
+            newText = "\$t('$key')"
+        }
 
         if (newText == originalText) return
 
-        val attr = attrValue.parent as? XmlAttribute ?: return
         //val tag = attr.parent ?: return
 
         changes.add {
-            var quote = if (attrValue.text.startsWith('"')) "\"" else "'"
-            val prefix = if (inScript) "" else ":";
+            var quote = if (attrValue.text.startsWith('"')) "" else "'"
+            val prefix = if (inScript || isVueDirective(attr.name)) "" else ":";
             var endQuote = quote;
             if (inScript) {
                 quote = "{"
                 endQuote = "}"
             }
+            attr.setValue("${quote}${newText}${endQuote}")
             attr.name = "${prefix}${attr.name}"
-            attr.setValue("$quote$newText$endQuote")
         }
     }
 
@@ -357,6 +382,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         var text = ele.text;
         if (ele is JSLiteralExpression) {
             text = ele.stringValue;
+        } else if (ele is XmlAttributeValue) {
+            text = ele.value;
         }
         val key = generateKey(text.trim(), ele)
         extractedStrings.putIfAbsent(key, text)
@@ -370,8 +397,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     private val processedEnums = mutableSetOf<PsiElement>()
 
     // ───────────────────────────────────────────────
-    // JS 字符串字面量
-    // ───────────────────────────────────────────────
+// JS 字符串字面量
+// ───────────────────────────────────────────────
     private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
 
         val raw = ele.text
@@ -433,11 +460,14 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     }
 
     // ───────────────────────────────────────────────
-    // JS 字符串拼接 (+)
-    // ───────────────────────────────────────────────
+// JS 字符串拼接 (+)
+// ───────────────────────────────────────────────
     private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<() -> Unit>) {
 
         if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
+        if (!hasChinese(binaryExpr.text)) {
+            return
+        }
         val template = convertConcatTextToTemplate(binaryExpr.text)
         //println("template${template}${isJSTemplateLiteral(template)}")
         collectJSStringTemplate(template, changes, binaryExpr)
@@ -497,8 +527,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
 
     // ───────────────────────────────────────────────
-    // 生成 key：直接用中文（简单清理）
-    // ───────────────────────────────────────────────
+// 生成 key：直接用中文（简单清理）
+// ───────────────────────────────────────────────
     private fun generateKey(value: String, element: PsiElement): String {
         return value;
         /* val cleaned = value.trim()
