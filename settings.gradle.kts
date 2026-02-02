@@ -1,1 +1,1 @@
-rootProject.name = "vue-i18n-extractor"
+rootProject.name = "i18n-extractor"
