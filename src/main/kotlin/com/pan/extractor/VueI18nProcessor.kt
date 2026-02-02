@@ -172,7 +172,6 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
     }
 
-    // ───────────────────────────────────────────────
     // Template 文本节点
     // ───────────────────────────────────────────────
     private fun collectTemplateTextChange(textNode: XmlText, changes: MutableList<() -> Unit>) {
@@ -185,7 +184,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             return
         }
 
-        val inScript = isInScript(textNode);
+        val isJSX = Util.isJSX(textNode);
 
         if (trimmed.contains("\$t(")) return
         //println("TemplateText-${textNode.text}")
@@ -198,7 +197,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             // 計算尾隨空白（trailing whitespace）
             val trailing = original.substringAfterLast(trimmed)
 
-            val newContent = if (!inScript) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
+            val newContent = if (!isJSX) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
 
             val newElement = createStringExpressionNode(newContent, textNode)
 
@@ -219,17 +218,17 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return originalText.startsWith('{') && originalText.endsWith('}')
     }
 
-    fun isVueDirective(targetStr: String): Boolean {
-        // 全面的 Vue 核心指令列表（包含常用指令+特殊指令）
-        val vueCoreDirectives = listOf(
-            // 基础指令
-            "v-text", "v-html", "v-show", "v-if", "v-else", "v-else-if",
-            "v-for", "v-on", "v-bind", "v-model", "v-slot", "v-pre",
-            "v-cloak", "v-once", "v-memo",
-            // 指令缩写（实际开发中可能遇到的简写形式）
-            "@", ":", "#"
-        )
+    /** Vue 核心指令列表（用于属性判断） */
+    private val vueCoreDirectives = setOf(
+        // 基础指令
+        "v-text", "v-html", "v-show", "v-if", "v-else", "v-else-if",
+        "v-for", "v-on", "v-bind", "v-model", "v-slot", "v-pre",
+        "v-cloak", "v-once", "v-memo",
+        // 指令缩写
+        "@", ":", "#"
+    )
 
+    fun isVueDirective(targetStr: String): Boolean {
 // 通用判断逻辑：覆盖「v-开头指令」+「核心指令」+「指令缩写」
         // 1. 匹配所有以 v- 开头的指令（覆盖自定义指令/未枚举的v-指令）
         return targetStr.startsWith("v-")
@@ -245,9 +244,10 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
     // ───────────────────────────────────────────────
     private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<() -> Unit>) {
         val originalText = attrValue.value.trim();
+        //println("jsx${Util.isJSX(attrValue)}")
         //println("XmlAttributeValue-${originalText}-${attrValue.text}")
-        val inScript = isInScript(attrValue);
-        if (inScript && isBlock(originalText)) {
+        val isJSX = Util.isJSX(attrValue);
+        if (isJSX && isBlock(originalText)) {
             return
         }
         if (originalText.isEmpty()) return
@@ -277,13 +277,11 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
         if (newText == originalText) return
 
-        //val tag = attr.parent ?: return
-
         changes.add {
             var quote = if (attrValue.text.startsWith('"')) "" else "'"
-            val prefix = if (inScript || isVueDirective(attr.name)) "" else ":";
+            val prefix = if (isJSX || isVueDirective(attr.name)) "" else ":";
             var endQuote = quote;
-            if (inScript) {
+            if (isJSX) {
                 quote = "{"
                 endQuote = "}"
             }
@@ -547,15 +545,6 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         var parent = element.parent
         while (parent != null) {
             if (parent is PsiComment) return true
-            parent = parent.parent
-        }
-        return false
-    }
-
-    private fun isInScript(element: PsiElement): Boolean {
-        var parent = element.parent
-        while (parent != null) {
-            if (parent is XmlTag && parent.name == "script") return true
             parent = parent.parent
         }
         return false
