@@ -5,7 +5,7 @@
 
     <!-- Public plugin name should be written in Title Case.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
-    <name>Vue-I18n-Extractor</name>
+    <name>I18n-Extractor</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
     <vendor url="https://github.com/robertpanvip/i18n-extractor">pan</vendor>
@@ -44,10 +44,10 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
     </extensions>
     <actions>
         <action
-                id="VueI18nExtractorAction"
+                id="I18nExtractorAction"
                 class="com.pan.extractor.VueI18nExtractorAction"
-                text="Vue 中文国际化提取"
-                description="提取 Vue 文件中的中文，替换为 $t() 并生成 JSON"
+                text="中文国际化提取"
+                description="提取 Vue React文件中的中文，替换为 $t() 并生成 JSON"
                 icon="/icon.svg"
         >
             <add-to-group
