@@ -250,6 +250,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 // 通用判断逻辑：覆盖「v-开头指令」+「核心指令」+「指令缩写」
         // 1. 匹配所有以 v- 开头的指令（覆盖自定义指令/未枚举的v-指令）
         return targetStr.startsWith("v-")
+                || targetStr.startsWith(':')
+                || targetStr.startsWith('#')
+                || targetStr.startsWith('@')
                 // 2. 匹配核心指令（包含无v-前缀的特殊指令/缩写）
                 || targetStr in vueCoreDirectives
                 // 3. 兼容指令带参数的情况（比如 v-on:click、v-bind:class）
