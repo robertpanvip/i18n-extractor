@@ -11,12 +11,14 @@ import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.*
 import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
+import com.intellij.psi.PsiWhiteSpace
 
 class VueI18nProcessor(private val project: Project, private var psiFile: PsiElement) {
 
@@ -28,6 +30,11 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
+    }
+
+    fun isFullMustache(text: String): Boolean {
+        val content = text.trim();
+        return content.startsWith("{{") && content.endsWith("}}")
     }
 
     // 處理帶 Mustache 的 XmlText：獲取注入的 JS
@@ -52,14 +59,19 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return psiFile.name.endsWith(".vue", ignoreCase = true)
     }
 
-    fun preProcess() {
+    fun preProcess(): MutableList<() -> Unit> {
         val pre = mutableListOf<() -> Unit>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
                         val original = element.text;
-                        if (!original.isEmpty() && isMustache(original) && hasChinese(original)) {
+                        //println("original$original")
+                        if (!original.isEmpty()
+                            && !isFullMustache(original)
+                            && isMustache(original)
+                            && hasChinese(original)
+                        ) {
                             val trimmed = original.trim()
                             // 計算前導空白（leading whitespace）
                             val leading = original.substringBefore(trimmed)
@@ -82,49 +94,51 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
                 super.visitElement(element)
             }
         })
-        pre.forEach { it() }
+        return pre
     }
 
     /** 处理整个 Vue 文件，支持 undo */
     fun processFile() {
-        preProcess();
-        val changes = mutableListOf<() -> Unit>();
-        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                when (element) {
-                    is XmlText -> if (!isInStyleOrComment(element)) {
-                        if (isMustache(element.text)) {
+        WriteCommandAction.runWriteCommandAction(project) {
+            preProcess().forEach { it() }
+            val changes = mutableListOf<() -> Unit>();
+            psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+                override fun visitElement(element: PsiElement) {
+                    when (element) {
+                        is XmlText -> if (!isInStyleOrComment(element)) {
                             //println("visitMustache${element.text}")
-                            visitMustache(element, { item ->
-                                collectJSStringChange(item, changes)
-                            })
-                        } else {
-                            collectTemplateTextChange(element, changes)
+                            if (isMustache(element.text)) {
+                                //println("visitMustache${element.text}")
+                                visitMustache(element, { item ->
+                                    collectJSStringChange(item, changes)
+                                })
+                            } else {
+                                collectTemplateTextChange(element, changes)
+                            }
+                        }
+
+                        is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
+                            //println("XmlAttributeValue${element.text}")
+                            collectXmlAttributeValueChange(element, changes)
+                        }
+
+                        is JSLiteralExpression -> if (!isInComment(element)) {
+                            //println("JSString${element.text}")
+                            collectJSStringChange(element, changes)
+                        }
+
+                        is JSBinaryExpression -> if (!isInComment(element)) {
+                            //println("JSBinaryExpression${element.text}")
+                            collectJSBinaryExpressionChange(element, changes)
                         }
                     }
-
-                    is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
-                        //println("XmlAttributeValue${element.text}")
-                        collectXmlAttributeValueChange(element, changes)
-                    }
-
-                    is JSLiteralExpression -> if (!isInComment(element)) {
-                        //println("JSString${element.text}")
-                        collectJSStringChange(element, changes)
-                    }
-
-                    is JSBinaryExpression -> if (!isInComment(element)) {
-                        //println("JSBinaryExpression${element.text}")
-                        collectJSBinaryExpressionChange(element, changes)
-                    }
+                    super.visitElement(element)
                 }
-                super.visitElement(element)
+            })
+            changes.forEach { it() }
+            if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
+                ensureVueI18nImported(psiFile).forEach { it() }
             }
-        })
-
-        changes.forEach { it() }
-        if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
-            ensureVueI18nImported(psiFile)
         }
     }
 
@@ -135,7 +149,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     private fun ensureVueI18nImported(
         psiFile: PsiElement
-    ) {
+    ): MutableList<() -> Unit> {
+        val action = mutableListOf<() -> Unit>();
         var scriptTag = this.getScriptTag();
         if (scriptTag === null) {
             psiFile.add(factory.createTagFromText("<script setup lang=\"ts\">\n</script>"));
@@ -143,7 +158,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
 
         val endToken = PsiTreeUtil.findChildrenOfType(scriptTag, XmlToken::class.java)
-            .firstOrNull { it.tokenType == XmlTokenType.XML_TAG_END } ?: return
+            .firstOrNull { it.tokenType == XmlTokenType.XML_TAG_END } ?: return action
 
         val setup = endToken.nextSibling
 
@@ -168,8 +183,11 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
         if (!content.contains("useI18n")) {
             val newContent = lines.joinToString("\n")
-            scriptTag?.value?.text = newContent  // 直接设置 value.text
+            action.add {
+                scriptTag?.value?.text = newContent  // 直接设置 value.text
+            }
         }
+        return action
     }
 
     // Template 文本节点
@@ -197,7 +215,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             // 計算尾隨空白（trailing whitespace）
             val trailing = original.substringAfterLast(trimmed)
 
-            val newContent = if (!isJSX) "$leading{{ \$t('$key') }}$trailing" else "$leading{ \$t('$key') }$trailing"
+            val newContent = if (!isJSX) "$leading{{ \$t(`$key`) }}$trailing" else "$leading{ \$t(`$key`) }$trailing"
 
             val newElement = createStringExpressionNode(newContent, textNode)
 
@@ -312,15 +330,11 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
 
         val key = generateKey(message, ele)
-        extractedStrings.putIfAbsent(key, key);
-        //println("text${content},${message}-${paramsObject}")
+        extractedStrings.putIfAbsent(key, message);
+
         changes.add {
-            //val newExprText = "\$t(`${message.trim()}`,$paramsObject)"
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val newElement = createStringExpressionNode(newExprText, ele)
-            println("raw${raw}")
-            println("message.trim()${message.trim()}")
-            println("newElement${newElement.text}")
             ele.replace(newElement)
         }
     }
@@ -376,15 +390,55 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return false;
     }
 
-    fun collectExtractedStrings(ele: PsiElement): String {
-        var text = ele.text;
-        if (ele is JSLiteralExpression) {
-            text = ele.stringValue;
-        } else if (ele is XmlAttributeValue) {
-            text = ele.value;
+    /**
+     * 核心方法：提取 XmlText 中的纯文本（过滤注释、空白符、换行符）
+     * 处理场景：<h1>123<!-- 注释 -->这是我的测试</h1> → 输出 "123这是我的测试"
+     */
+    private fun getPureXmlText(xmlText: XmlText): String {
+        val stringBuilder = StringBuilder()
+
+        // 遍历 XmlText 的所有子节点
+        xmlText.children.forEach { child ->
+            // 跳过注释节点
+            when (child) {
+                is XmlComment -> return@forEach
+                // 跳过纯空白符（换行、空格、制表符）
+                is PsiWhiteSpace -> {
+                    // 可选：保留单个空格（避免文本拼接在一起），根据需求调整
+                    /*val whitespaceText = child.text ?: ""
+                    if (whitespaceText.contains("\n") || whitespaceText.contains("\t")) {
+                        return@forEach // 跳过换行/制表符
+                    } else if (whitespaceText.isBlank()) {
+                        return@forEach // 跳过空空白符
+                    } else {
+                        stringBuilder.append(" ") // 保留单个空格
+                    }*/
+                    stringBuilder.append(child.text) // 保留单个空格
+                }
+                // 有效文本节点：拼接内容
+                else -> stringBuilder.append(child.text ?: "")
+            }
         }
-        val key = generateKey(text.trim(), ele)
-        extractedStrings.putIfAbsent(key, text)
+
+        // 最终处理：去掉多余空格，合并连续空格为一个
+        return stringBuilder.toString()
+            .trim() // 去掉首尾空格
+    }
+
+    fun collectExtractedStrings(ele: PsiElement): String {
+        val text = when (ele) {
+            // JS 字面量：取纯字符串值（去掉引号）
+            is JSLiteralExpression -> ele.stringValue ?: ""
+            // XML 属性值：取纯值
+            is XmlAttributeValue -> ele.value
+            // XML 文本：过滤注释+空白符，只保留有效文本
+            is XmlText -> getPureXmlText(ele)
+            // 其他类型：直接取文本
+            else -> ele.text ?: ""
+        }
+        val trimmed = text.trim()
+        val key = generateKey(trimmed, ele)
+        extractedStrings.putIfAbsent(key, trimmed)
         return key;
     }
 
@@ -528,7 +582,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 // 生成 key：直接用中文（简单清理）
 // ───────────────────────────────────────────────
     private fun generateKey(value: String, element: PsiElement): String {
-        return value;
+        return value.trim();
         /* val cleaned = value.trim()
              .replace(Regex("\\s+"), " ")           // 多个空格 → 一个
              .replace(Regex("[\\p{Punct}&&[^，。！？]]"), "")  // 去除大部分标点，保留常见中文标点
