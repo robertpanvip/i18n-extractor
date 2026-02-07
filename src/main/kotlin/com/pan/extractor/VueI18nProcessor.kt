@@ -198,12 +198,12 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         if (trimmed === "") {
             return;
         }
-        println("trimmed${trimmed}")
+
         if (trimmed.startsWith("<!--") && trimmed.endsWith("-->")) {
             val startTagCount = trimmed.split("<!--").size - 1 // 得到 Int（次数）
             val endTagCount = trimmed.split("-->").size - 1     // 得到 Int（次数）
 
-            if (startTagCount == 1&& endTagCount == 1) { // 同上，布尔条件
+            if (startTagCount == 1 && endTagCount == 1) { // 同上，布尔条件
                 return
             }
         }
@@ -217,6 +217,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         //println("TemplateText-${textNode.text}")
 
         val key = collectExtractedStrings(textNode)
+        val comments = PsiTreeUtil.findChildrenOfType(psiFile, XmlComment::class.java)
+        val commentsString = comments.joinToString("\n") { it.text }
         changes.add {
             // 計算前導空白（leading whitespace）
             val leading = original.substringBefore(trimmed)
@@ -224,7 +226,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             // 計算尾隨空白（trailing whitespace）
             val trailing = original.substringAfterLast(trimmed)
 
-            val newContent = if (!isJSX) "$leading{{ \$t(`$key`) }}$trailing" else "$leading{ \$t(`$key`) }$trailing"
+            val newContent = if (!isJSX) "${leading}${commentsString}{{ \$t(`$key`) }}$trailing" else "${leading}${commentsString}{ \$t(`$key`) }$trailing"
 
             val newElement = createStringExpressionNode(newContent, textNode)
 
