@@ -218,7 +218,10 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
         val key = collectExtractedStrings(textNode)
         val comments = PsiTreeUtil.findChildrenOfType(psiFile, XmlComment::class.java)
-        val commentsString = comments.joinToString("\n") { it.text }
+        var commentsString = comments.joinToString("\n") { it.text }
+        if (commentsString != "") {
+            commentsString = "${commentsString}\n"
+        }
         changes.add {
             // 計算前導空白（leading whitespace）
             val leading = original.substringBefore(trimmed)
@@ -226,7 +229,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             // 計算尾隨空白（trailing whitespace）
             val trailing = original.substringAfterLast(trimmed)
 
-            val newContent = if (!isJSX) "${leading}${commentsString}{{ \$t(`$key`) }}$trailing" else "${leading}${commentsString}{ \$t(`$key`) }$trailing"
+            val newContent =
+                if (!isJSX) "${leading}${commentsString}{{ \$t(`$key`) }}$trailing" else "${leading}${commentsString}{ \$t(`$key`) }$trailing"
 
             val newElement = createStringExpressionNode(newContent, textNode)
 
