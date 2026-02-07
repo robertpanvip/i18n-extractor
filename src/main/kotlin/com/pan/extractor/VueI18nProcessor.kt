@@ -198,6 +198,15 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         if (trimmed === "") {
             return;
         }
+        println("trimmed${trimmed}")
+        if (trimmed.startsWith("<!--") && trimmed.endsWith("-->")) {
+            val startTagCount = trimmed.split("<!--").size - 1 // 得到 Int（次数）
+            val endTagCount = trimmed.split("-->").size - 1     // 得到 Int（次数）
+
+            if (startTagCount == 1&& endTagCount == 1) { // 同上，布尔条件
+                return
+            }
+        }
         if (!hasChinese(trimmed)) {
             return
         }
