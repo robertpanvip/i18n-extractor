@@ -11,6 +11,7 @@ import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
+import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.*
@@ -99,47 +100,55 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
     /** 处理整个 Vue 文件，支持 undo */
     fun processFile() {
-        WriteCommandAction.runWriteCommandAction(project) {
-            preProcess().forEach { it() }
-            val changes = mutableListOf<() -> Unit>();
-            psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-                override fun visitElement(element: PsiElement) {
-                    when (element) {
-                        is XmlText -> if (!isInStyleOrComment(element)) {
-                            //println("visitMustache${element.text}")
-                            if (isMustache(element.text)) {
-                                //println("visitMustache${element.text}")
-                                visitMustache(element, { item ->
-                                    collectJSStringChange(item, changes)
-                                })
-                            } else {
-                                collectTemplateTextChange(element, changes)
+        CommandProcessor.getInstance().executeCommand(
+            project,
+            {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    preProcess().forEach { it() }
+                    val changes = mutableListOf<() -> Unit>();
+                    psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+                        override fun visitElement(element: PsiElement) {
+                            when (element) {
+                                is XmlText -> if (!isInStyleOrComment(element)) {
+                                    //println("visitMustache${element.text}")
+                                    if (isMustache(element.text)) {
+                                        //println("visitMustache${element.text}")
+                                        visitMustache(element, { item ->
+                                            collectJSStringChange(item, changes)
+                                        })
+                                    } else {
+                                        collectTemplateTextChange(element, changes)
+                                    }
+                                }
+
+                                is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
+                                    //println("XmlAttributeValue${element.text}")
+                                    collectXmlAttributeValueChange(element, changes)
+                                }
+
+                                is JSLiteralExpression -> if (!isInComment(element)) {
+                                    //println("JSString${element.text}")
+                                    collectJSStringChange(element, changes)
+                                }
+
+                                is JSBinaryExpression -> if (!isInComment(element)) {
+                                    //println("JSBinaryExpression${element.text}")
+                                    collectJSBinaryExpressionChange(element, changes)
+                                }
                             }
+                            super.visitElement(element)
                         }
-
-                        is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
-                            //println("XmlAttributeValue${element.text}")
-                            collectXmlAttributeValueChange(element, changes)
-                        }
-
-                        is JSLiteralExpression -> if (!isInComment(element)) {
-                            //println("JSString${element.text}")
-                            collectJSStringChange(element, changes)
-                        }
-
-                        is JSBinaryExpression -> if (!isInComment(element)) {
-                            //println("JSBinaryExpression${element.text}")
-                            collectJSBinaryExpressionChange(element, changes)
-                        }
+                    })
+                    changes.forEach { it() }
+                    if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
+                        ensureVueI18nImported(psiFile).forEach { it() }
                     }
-                    super.visitElement(element)
                 }
-            })
-            changes.forEach { it() }
-            if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
-                ensureVueI18nImported(psiFile).forEach { it() }
-            }
-        }
+            },
+            "Vue i18n Extract",
+            null
+        )
+
     }
 
     fun getScriptTag(): XmlTag? {
@@ -219,7 +228,8 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
         changes.add {
             // 只找“同一个父节点”下的 XmlText（非常关键）
-            val textChild = textNode.children.filterIsInstance<XmlToken>().filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
+            val textChild = textNode.children.filterIsInstance<XmlToken>()
+                .filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
             val textNodes = textChild.ifEmpty { listOf(textNode) }
             val newContent =
                 if (!isJSX) "{{ \$t(`$key`) }}" else "{ \$t(`$key`) }"
