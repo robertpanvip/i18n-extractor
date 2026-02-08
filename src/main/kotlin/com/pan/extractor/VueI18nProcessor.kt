@@ -19,7 +19,6 @@ import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
-import com.intellij.psi.PsiWhiteSpace
 
 class VueI18nProcessor(private val project: Project, private var psiFile: PsiElement) {
 
@@ -56,46 +55,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         }
     }
 
+
     private fun isVueFile(psiFile: PsiFile): Boolean {
         return psiFile.name.endsWith(".vue", ignoreCase = true)
-    }
-
-    fun preProcess(): MutableList<() -> Unit> {
-        val pre = mutableListOf<() -> Unit>();
-        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                when (element) {
-                    is XmlText -> if (!isInStyleOrComment(element)) {
-                        val original = element.text;
-                        //println("original$original")
-                        if (!original.isEmpty()
-                            && !isFullMustache(original)
-                            && isMustache(original)
-                            && hasChinese(original)
-                        ) {
-                            val trimmed = original.trim()
-                            // 計算前導空白（leading whitespace）
-                            val leading = original.substringBefore(trimmed)
-                            // 計算尾隨空白（trailing whitespace）
-                            val trailing = original.substringAfterLast(trimmed)
-                            val content = convertMustacheToTemplate(trimmed)
-                            val output = "${leading}{{ `$content` }}${trailing}"
-                            val originalCore = trimmed.removeSurrounding("{{", "}}").trim()
-                            val originalContent = content.removeSurrounding("\${", "}").trim()
-
-                            if (originalCore == originalContent) {
-                                return
-                            }
-                            pre.add {
-                                element.value = output
-                            }
-                        }
-                    }
-                }
-                super.visitElement(element)
-            }
-        })
-        return pre
     }
 
     /** 处理整个 Vue 文件，支持 undo */
@@ -104,18 +66,19 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
             project,
             {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    preProcess().forEach { it() }
                     val changes = mutableListOf<() -> Unit>();
                     psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
                         override fun visitElement(element: PsiElement) {
                             when (element) {
                                 is XmlText -> if (!isInStyleOrComment(element)) {
-                                    //println("visitMustache${element.text}")
                                     if (isMustache(element.text)) {
-                                        //println("visitMustache${element.text}")
                                         visitMustache(element, { item ->
                                             collectJSStringChange(item, changes)
                                         })
+                                        val list = getNotMustacheElement(element)
+                                        list.forEach { ele ->
+                                            collectTemplateTextChange(ele, changes)
+                                        }
                                     } else {
                                         collectTemplateTextChange(element, changes)
                                     }
@@ -199,9 +162,34 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return action
     }
 
+    fun getCharactersText(textNode: XmlElement): List<XmlToken> {
+        val textChild = textNode.children.filterIsInstance<XmlToken>()
+            .filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
+        return textChild
+    }
+
+    fun getNotMustacheElement(element: XmlText): MutableList<XmlToken> {
+        val result = mutableListOf<XmlToken>()
+
+        var inMustache = false
+
+        getCharactersText(element).forEach { token ->
+            when (token.text) {
+                "{{" -> inMustache = true
+                "}}" -> inMustache = false
+                else -> {
+                    if (!inMustache) {
+                        result.add(token)
+                    }
+                }
+            }
+        }
+        return result
+    }
+
     // Template 文本节点
     // ───────────────────────────────────────────────
-    private fun collectTemplateTextChange(textNode: XmlText, changes: MutableList<() -> Unit>) {
+    private fun collectTemplateTextChange(textNode: XmlElement, changes: MutableList<() -> Unit>) {
         val original = textNode.text
         val trimmed = original.trim()
         if (trimmed === "") {
@@ -228,8 +216,7 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 
         changes.add {
             // 只找“同一个父节点”下的 XmlText（非常关键）
-            val textChild = textNode.children.filterIsInstance<XmlToken>()
-                .filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
+            val textChild = getCharactersText(textNode)
             val textNodes = textChild.ifEmpty { listOf(textNode) }
             val newContent =
                 if (!isJSX) "{{ \$t(`$key`) }}" else "{ \$t(`$key`) }"
