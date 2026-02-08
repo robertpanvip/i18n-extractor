@@ -214,27 +214,28 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         val isJSX = Util.isJSX(textNode);
 
         if (trimmed.contains("\$t(")) return
-        //println("TemplateText-${textNode.text}")
 
         val key = collectExtractedStrings(textNode)
-        val comments = PsiTreeUtil.findChildrenOfType(psiFile, XmlComment::class.java)
-        var commentsString = comments.joinToString("\n") { it.text }
-        if (commentsString != "") {
-            commentsString = "${commentsString}\n"
-        }
+
         changes.add {
-            // 計算前導空白（leading whitespace）
-            val leading = original.substringBefore(trimmed)
-
-            // 計算尾隨空白（trailing whitespace）
-            val trailing = original.substringAfterLast(trimmed)
-
+            // 只找“同一个父节点”下的 XmlText（非常关键）
+            val textChild = textNode.children.filterIsInstance<XmlToken>().filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
+            val textNodes = textChild.ifEmpty { listOf(textNode) }
             val newContent =
-                if (!isJSX) "${leading}${commentsString}{{ \$t(`$key`) }}$trailing" else "${leading}${commentsString}{ \$t(`$key`) }$trailing"
+                if (!isJSX) "{{ \$t(`$key`) }}" else "{ \$t(`$key`) }"
 
-            val newElement = createStringExpressionNode(newContent, textNode)
+            textNodes.forEachIndexed { index, node ->
+                if (!node.isValid) return@forEachIndexed
 
-            textNode.replace(newElement)
+                if (index == 0) {
+                    val newElement = createStringExpressionNode(newContent, node)
+                    // 第一个：替换
+                    node.replace(newElement)
+                } else {
+                    // 其他：删除
+                    node.delete()
+                }
+            }
         }
     }
 
