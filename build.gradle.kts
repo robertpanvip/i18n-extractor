@@ -37,11 +37,7 @@ intellijPlatform {
         }
 
         changeNotes = """
-      1.1.1 react tsx support
-      1.1.0 bugfix
-      1.0.2 feat jsx support  
-      1.0.1 fix StringTemplate
-      1.0.0 Initial version
+             1.2.0 fix: optimize comment extraction logic
     """.trimIndent()
     }
 }
