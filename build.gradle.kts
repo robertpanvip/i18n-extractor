@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.2.0"
+version = "1.2.1"
 
 repositories {
     maven { url = uri("https://maven.aliyun.com/repository/public") }
