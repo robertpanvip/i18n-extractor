@@ -5,6 +5,7 @@ import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
@@ -476,6 +477,9 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         if (ele is XmlTag) {
             return
         }
+        if (ele.parent is JSBinaryExpression) {
+            return
+        }
 
         if (!hasChinese(raw)) {
             return
@@ -531,62 +535,35 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
 // JS 字符串拼接 (+)
 // ───────────────────────────────────────────────
     private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<() -> Unit>) {
-
+        if (binaryExpr.parent is JSBinaryExpression) {
+            return
+        }
         if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
         if (!hasChinese(binaryExpr.text)) {
             return
         }
-        val template = convertConcatTextToTemplate(binaryExpr.text)
-        //println("template${template}${isJSTemplateLiteral(template)}")
+        val template = convertConcatTextToTemplate(binaryExpr)
+        //println("template${template}")
         collectJSStringTemplate(template, changes, binaryExpr)
     }
 
-    fun convertMustacheToTemplate(text: String): String {
-        // 匹配 {{ ... }} （允许中间有空格，非贪婪）
-        val regex = Regex("""\{\{\s*(.+?)\s*\}\}""")
-
-        val result = StringBuilder()
-        var lastEnd = 0
-
-        regex.findAll(text).forEach { match ->
-            // 添加插值前面的普通文本
-            if (match.range.first > lastEnd) {
-                result.append(text.substring(lastEnd, match.range.first))
-            }
-
-            // 添加 ${表达式}
-            val expr = match.groupValues[1].trim()
-            if (expr.isNotEmpty()) {
-                result.append("\${$expr}")
-            }
-
-            lastEnd = match.range.last + 1
-        }
-
-        // 添加最后的普通文本
-        if (lastEnd < text.length) {
-            result.append(text.substring(lastEnd))
-        }
-
-        return result.toString()
-    }
-
-    private fun convertConcatTextToTemplate(concatText: String): String {
-        // 步骤1：按 + 分割（处理空格，如 "a" + b → ["a", "b"]）
-        val parts = concatText.split(Regex("\\s*\\+\\s*")).map { it.trim() }
-
+    private fun convertConcatTextToTemplate(binaryExpr: JSBinaryExpression): String {
         // 步骤2：拼接模板字符串
         val sb = StringBuilder("`")
-        parts.forEach { part ->
+        binaryExpr.children.forEach { part ->
             when {
+                part is JSBinaryExpression -> {
+                    val text = convertConcatTextToTemplate(part)
+                    sb.append(text.substring(1, text.length - 1))
+                }
                 // 字符串字面量：去掉引号（处理 "" 或 '' 包裹的情况）
-                part.startsWith("\"") && part.endsWith("\"") ->
-                    sb.append(part.substring(1, part.length - 1))
+                part is JSStringTemplateExpression || part.text.startsWith("\'") || part.text.startsWith("\"") ->
+                    sb.append(part.text.substring(1, part.text.length - 1))
 
-                part.startsWith("'") && part.endsWith("'") ->
-                    sb.append(part.substring(1, part.length - 1))
+                part.text == "+" ->
+                    sb.append("")
                 // 变量/表达式：用 ${} 包裹
-                else -> sb.append("\${$part}")
+                else -> sb.append("\${${part.text}}")
             }
         }
         sb.append("`")
