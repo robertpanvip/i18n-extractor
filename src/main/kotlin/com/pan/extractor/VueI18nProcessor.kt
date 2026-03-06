@@ -21,7 +21,11 @@ import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
 
-class VueI18nProcessor(private val project: Project, private var psiFile: PsiElement) {
+class VueI18nProcessor(
+    private val project: Project,
+    private var psiFile: PsiElement,
+) {
+    var effects = mutableListOf<() -> Unit>()
 
     /** 收集的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
@@ -61,49 +65,54 @@ class VueI18nProcessor(private val project: Project, private var psiFile: PsiEle
         return psiFile.name.endsWith(".vue", ignoreCase = true)
     }
 
+    fun collect(): MutableList<() -> Unit> {
+        val changes = mutableListOf<() -> Unit>();
+        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: PsiElement) {
+                when (element) {
+                    is XmlText -> if (!isInStyleOrComment(element)) {
+                        if (isMustache(element.text)) {
+                            visitMustache(element, { item ->
+                                collectJSStringChange(item, changes)
+                            })
+                            val list = getNotMustacheElement(element)
+                            list.forEach { ele ->
+                                collectTemplateTextChange(ele, changes)
+                            }
+                        } else {
+                            collectTemplateTextChange(element, changes)
+                        }
+                    }
+
+                    is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
+                        //println("XmlAttributeValue${element.text}")
+                        collectXmlAttributeValueChange(element, changes)
+                    }
+
+                    is JSLiteralExpression -> if (!isInComment(element)) {
+                        //println("JSString${element.text}")
+                        collectJSStringChange(element, changes)
+                    }
+
+                    is JSBinaryExpression -> if (!isInComment(element)) {
+                        //println("JSBinaryExpression${element.text}")
+                        collectJSBinaryExpressionChange(element, changes)
+                    }
+                }
+                super.visitElement(element)
+            }
+        })
+        effects = changes;
+        return changes;
+    }
+
     /** 处理整个 Vue 文件，支持 undo */
-    fun processFile() {
+    fun execute() {
         CommandProcessor.getInstance().executeCommand(
             project,
             {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    val changes = mutableListOf<() -> Unit>();
-                    psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-                        override fun visitElement(element: PsiElement) {
-                            when (element) {
-                                is XmlText -> if (!isInStyleOrComment(element)) {
-                                    if (isMustache(element.text)) {
-                                        visitMustache(element, { item ->
-                                            collectJSStringChange(item, changes)
-                                        })
-                                        val list = getNotMustacheElement(element)
-                                        list.forEach { ele ->
-                                            collectTemplateTextChange(ele, changes)
-                                        }
-                                    } else {
-                                        collectTemplateTextChange(element, changes)
-                                    }
-                                }
-
-                                is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
-                                    //println("XmlAttributeValue${element.text}")
-                                    collectXmlAttributeValueChange(element, changes)
-                                }
-
-                                is JSLiteralExpression -> if (!isInComment(element)) {
-                                    //println("JSString${element.text}")
-                                    collectJSStringChange(element, changes)
-                                }
-
-                                is JSBinaryExpression -> if (!isInComment(element)) {
-                                    //println("JSBinaryExpression${element.text}")
-                                    collectJSBinaryExpressionChange(element, changes)
-                                }
-                            }
-                            super.visitElement(element)
-                        }
-                    })
-                    changes.forEach { it() }
+                    this.effects.forEach { it() }
                     if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
                         ensureVueI18nImported(psiFile).forEach { it() }
                     }

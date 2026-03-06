@@ -21,14 +21,14 @@ class ExtractedStringsDialog(
     }
 
     private var editor: Editor? = null   // 用成員變數保存
-
+    var json: String? = null   // 用成員變數保存
     override fun createCenterPanel(): JComponent {
         // 美化 JSON
         val prettyJson = GsonBuilder()
             .setPrettyPrinting()
             .create()
             .toJson(extracted)
-
+        json = prettyJson;
         // 創建 document
         val editorFactory = EditorFactory.getInstance()
         val document = editorFactory.createDocument(prettyJson)
