@@ -2,10 +2,15 @@ package com.pan.extractor
 
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
+import com.intellij.lang.javascript.psi.JSAssignmentExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSExpression
+import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
+import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnum
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
@@ -20,6 +25,7 @@ import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
+import kotlin.text.replace
 
 class VueI18nProcessor(
     private val project: Project,
@@ -43,7 +49,7 @@ class VueI18nProcessor(
     }
 
     // 處理帶 Mustache 的 XmlText：獲取注入的 JS
-    fun visitMustache(element: PsiElement, visitElement: (JSLiteralExpression) -> Unit) {
+    fun visitMustache(element: PsiElement, visitElement: (JSExpression) -> Unit) {
 
         val injected = InjectedLanguageManager.getInstance(project)
             .getInjectedPsiFiles(element)  // 或 getInjectedFragments
@@ -54,6 +60,12 @@ class VueI18nProcessor(
                     if (e is JSLiteralExpression) {
                         visitElement(e)
                     }
+                    if (e is JSBinaryExpression) {
+                        visitElement(e)
+                    }
+                    /* if (e.javaClass.simpleName == "VueJSEmbeddedExpressionContentImpl") {
+
+                     }*/
                     super.visitElement(e)
                 }
             })
@@ -65,19 +77,72 @@ class VueI18nProcessor(
         return psiFile.name.endsWith(".vue", ignoreCase = true)
     }
 
-    fun collect(): MutableList<() -> Unit> {
+    fun collectMustache(): MutableList<() -> Unit> {
         val changes = mutableListOf<() -> Unit>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
+                //println("${element.text},${element.javaClass.simpleName}")
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
                         if (isMustache(element.text)) {
                             visitMustache(element, { item ->
-                                collectJSStringChange(item, changes)
+                                if (item is JSLiteralExpression) {
+                                    collectJSStringChange(item, changes)
+                                }
                             })
-                            val list = getNotMustacheElement(element)
-                            list.forEach { ele ->
-                                collectTemplateTextChange(ele, changes)
+                        }
+                    }
+                }
+                super.visitElement(element)
+            }
+        })
+        return changes;
+    }
+
+    fun rm(element: PsiElement): String {
+        return element.text.replace("{{", "\${")  // 替换左符号（注意$需要转义）
+            .replace("}}", "}")
+    }
+
+    fun collect(): MutableList<() -> Unit> {
+        val changes = mutableListOf<() -> Unit>();
+        val that = this;
+        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: PsiElement) {
+                //println("${element.text},${element.javaClass.simpleName}")
+                when (element) {
+                    is XmlText -> if (!isInStyleOrComment(element)) {
+                        if (isMustache(element.text)) {
+                            visitMustache(element, { item ->
+                                if (item is JSBinaryExpression) {
+                                    collectJSBinaryExpressionChange(item, changes)
+                                }
+                                if (item is JSLiteralExpression) {
+                                    collectJSStringChange(item, changes)
+                                }
+                            })
+                            if (isComment(element)) {
+                                return
+                            }
+                            changes.add {
+                                var first = element.children.first();
+                                val n1 = createStringExpressionNode("{{`${rm(first)}", first)
+                                first = first.replace(n1)
+
+                                var last = element.children.last();
+                                rm(last)
+                                val n2 = createStringExpressionNode("${rm(last)}`}}", last)
+                                last = last.replace(n2)
+
+                                element.children.forEach { e ->
+                                    if (e !== first && e !== last&& e !is PsiWhiteSpace) {
+                                        val b = createStringExpressionNode(rm(e), e)
+                                        e.replace(b)
+                                    }
+                                }
+                                val changes = that.collectMustache();
+                                changes.forEach { it() }
+
                             }
                         } else {
                             collectTemplateTextChange(element, changes)
@@ -113,6 +178,7 @@ class VueI18nProcessor(
             {
                 WriteCommandAction.runWriteCommandAction(project) {
                     this.effects.forEach { it() }
+
                     if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
                         ensureVueI18nImported(psiFile).forEach { it() }
                     }
@@ -334,30 +400,40 @@ class VueI18nProcessor(
         }
     }
 
-    private val templateVarRegex = Regex("""\$\{\s*([^}]+?)\s*}""")
-
+    private val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
     fun collectJSStringTemplate(raw: String, changes: MutableList<() -> Unit>, ele: PsiElement) {
+        // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
         val content = raw.substring(1, raw.length - 1)
-        val params = LinkedHashMap<String, String>()
+        val params = LinkedHashMap<String, String>() // 索引 -> ${}内的原始内容
+        var index = 0 // 按出现顺序分配数字索引
 
+        // 步骤2：替换所有${任意内容}为${数字索引}，并收集${}内的原始内容
         val message = templateVarRegex.replace(content) { match ->
-            val expr = match.groupValues[1].trim()
-            val key = expr.replace(".", "_")
-            params[key] = expr
+            // 提取${}内的原始内容（groupValues[1] 是正则括号内的匹配结果）
+            val innerContent = match.groupValues[1].trim()
+            // 按顺序分配索引
+            val key = index.toString()
+            params[key] = innerContent
+            index++
+            // 替换为${数字索引}
             "{$key}"
         }
 
+        // 步骤3：生成paramsObject（{ 0: 原始内容, 1: 原始内容... }）
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
         ) { (k, v) ->
-            if (k.all { it.isDigit() }) "\"$k\": $v" else "$k: $v"
+            // 数字索引加引号，内容保留原始格式
+            "\"$k\": $v"
         }
 
+        // 步骤4：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
-        extractedStrings.putIfAbsent(key, message);
-
+        extractedStrings.putIfAbsent(key, message)
+        println(":zzz${message} -${paramsObject}")
+        // 步骤5：添加替换逻辑（保持你的原有逻辑）
         changes.add {
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val newElement = createStringExpressionNode(newExprText, ele)
@@ -480,13 +556,15 @@ class VueI18nProcessor(
     private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
 
         val raw = ele.text
+
         if (raw.isEmpty()) {
             return
         }
         if (ele is XmlTag) {
             return
         }
-        if (ele.parent is JSBinaryExpression) {
+
+        if (ele.parent is JSBinaryExpression && ele.parent !is JSAssignmentExpression) {
             return
         }
 
@@ -497,7 +575,10 @@ class VueI18nProcessor(
         if (isJSTemplateLiteral(raw)) {
             return collectJSStringTemplateFromExpression(ele, changes);
         }
-
+        //跳过Enum['中文']
+        if (ele.parent is JSIndexedPropertyAccessExpression && ele.prevSibling.prevSibling is JSReferenceExpression && ele.prevSibling.prevSibling.reference?.resolve() is TypeScriptEnum) {
+            return
+        }
 
         if (ele.parent is TypeScriptEnumField) {
             if (processedEnums.add(ele.parent.parent)) {
@@ -552,29 +633,46 @@ class VueI18nProcessor(
             return
         }
         val template = convertConcatTextToTemplate(binaryExpr)
-        //println("template${template}")
+        //println("template${template}${binaryExpr.text}")
         collectJSStringTemplate(template, changes, binaryExpr)
     }
 
     private fun convertConcatTextToTemplate(binaryExpr: JSBinaryExpression): String {
-        // 步骤2：拼接模板字符串
         val sb = StringBuilder("`")
-        binaryExpr.children.forEach { part ->
-            when {
-                part is JSBinaryExpression -> {
-                    val text = convertConcatTextToTemplate(part)
-                    sb.append(text.substring(1, text.length - 1))
-                }
-                // 字符串字面量：去掉引号（处理 "" 或 '' 包裹的情况）
-                part is JSStringTemplateExpression || part.text.startsWith("\'") || part.text.startsWith("\"") ->
-                    sb.append(part.text.substring(1, part.text.length - 1))
 
-                part.text == "+" ->
-                    sb.append("")
-                // 变量/表达式：用 ${} 包裹
-                else -> sb.append("\${${part.text}}")
+        // 核心：递归处理「左右操作数」，而非所有子节点（避免空白/多余节点）
+        fun processOperand(operand: PsiElement) {
+            when (operand) {
+                // 递归处理嵌套的 + 拼接表达式
+                is JSBinaryExpression -> {
+                    val nestedTemplate = convertConcatTextToTemplate(operand)
+                    sb.append(nestedTemplate.substring(1, nestedTemplate.length - 1))
+                }
+                // 字符串字面量：去掉引号
+                is JSStringTemplateExpression -> {
+                    sb.append(operand.text.substring(1, operand.text.length - 1))
+                }
+
+                else -> {
+                    val text = operand.text.trim() // 去除节点文本的首尾空格
+                    when {
+                        // 过滤空文本/空格/+号
+                        text.isBlank() || text == "+" -> return
+                        // 普通字符串字面量（单/双引号）
+                        text.startsWith("'") || text.startsWith("\"") -> {
+                            sb.append(text.substring(1, text.length - 1))
+                        }
+                        // 变量/数字/表达式：用 ${} 包裹
+                        else -> sb.append("\${$text}")
+                    }
+                }
             }
         }
+
+        // 只处理「左操作数」和「右操作数」（+ 表达式的核心片段）
+        binaryExpr.lOperand?.let { processOperand(it) }
+        binaryExpr.rOperand?.let { processOperand(it) }
+
         sb.append("`")
         return sb.toString()
     }
@@ -604,6 +702,12 @@ class VueI18nProcessor(
             parent = parent.parent
         }
         return false
+    }
+
+    fun isComment(element: PsiElement): Boolean {
+        val content = element.text.trim();
+
+        return content.startsWith("<!--") && content.endsWith("-->")
     }
 
     private fun isInStyleOrComment(element: PsiElement): Boolean {
