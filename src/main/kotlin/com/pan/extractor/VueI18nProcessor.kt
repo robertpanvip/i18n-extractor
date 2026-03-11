@@ -77,36 +77,42 @@ class VueI18nProcessor(
         return psiFile.name.endsWith(".vue", ignoreCase = true)
     }
 
-    fun collectMustache(): MutableList<() -> Unit> {
-        val changes = mutableListOf<() -> Unit>();
-        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                //println("${element.text},${element.javaClass.simpleName}")
-                when (element) {
-                    is XmlText -> if (!isInStyleOrComment(element)) {
-                        if (isMustache(element.text)) {
-                            visitMustache(element, { item ->
-                                if (item is JSLiteralExpression) {
-                                    collectJSStringChange(item, changes)
-                                }
-                            })
-                        }
-                    }
-                }
-                super.visitElement(element)
-            }
-        })
-        return changes;
-    }
-
     fun rm(element: PsiElement): String {
         return element.text.replace("{{", "\${")  // 替换左符号（注意$需要转义）
             .replace("}}", "}")
     }
 
+    fun collectXmlText(element: PsiElement, changes: MutableList<() -> Unit>) {
+        if (isComment(element)) {
+            return
+        }
+
+        val quote = "`"
+        val sb = StringBuilder()
+        element.children.forEachIndexed { index, e ->
+            val text = rm(e)
+            when (index) {
+                // 第一个节点：拼接`开头
+                0 -> sb.append(quote).append(text)
+                // 最后一个节点：拼接`结尾
+                element.children.lastIndex -> sb.append(text).append(quote)
+                // 中间节点：过滤空白，直接拼接
+                else -> if (e !is PsiWhiteSpace) sb.append(text)
+            }
+        }
+        if (element.children.size == 1) {
+            sb.append(quote)
+        }
+        val raw = sb.toString().trim()
+
+        if (raw.startsWith("`\${\$t(")) {
+            return
+        }
+        collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
+    }
+
     fun collect(): MutableList<() -> Unit> {
         val changes = mutableListOf<() -> Unit>();
-        val that = this;
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 //println("${element.text},${element.javaClass.simpleName}")
@@ -121,29 +127,7 @@ class VueI18nProcessor(
                                     collectJSStringChange(item, changes)
                                 }
                             })
-                            if (isComment(element)) {
-                                return
-                            }
-                            changes.add {
-                                var first = element.children.first();
-                                val n1 = createStringExpressionNode("{{`${rm(first)}", first)
-                                first = first.replace(n1)
-
-                                var last = element.children.last();
-                                rm(last)
-                                val n2 = createStringExpressionNode("${rm(last)}`}}", last)
-                                last = last.replace(n2)
-
-                                element.children.forEach { e ->
-                                    if (e !== first && e !== last&& e !is PsiWhiteSpace) {
-                                        val b = createStringExpressionNode(rm(e), e)
-                                        e.replace(b)
-                                    }
-                                }
-                                val changes = that.collectMustache();
-                                changes.forEach { it() }
-
-                            }
+                            collectXmlText(element, changes)
                         } else {
                             collectTemplateTextChange(element, changes)
                         }
@@ -402,7 +386,12 @@ class VueI18nProcessor(
 
     private val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
-    fun collectJSStringTemplate(raw: String, changes: MutableList<() -> Unit>, ele: PsiElement) {
+    fun collectJSStringTemplate(
+        raw: String,
+        changes: MutableList<() -> Unit>,
+        ele: PsiElement,
+        creator: (String) -> String
+    ) {
         // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
         val content = raw.substring(1, raw.length - 1)
         val params = LinkedHashMap<String, String>() // 索引 -> ${}内的原始内容
@@ -436,7 +425,8 @@ class VueI18nProcessor(
         // 步骤5：添加替换逻辑（保持你的原有逻辑）
         changes.add {
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
-            val newElement = createStringExpressionNode(newExprText, ele)
+            val text = creator(newExprText)
+            val newElement = createStringExpressionNode(text, ele)
             ele.replace(newElement)
         }
     }
@@ -479,7 +469,7 @@ class VueI18nProcessor(
         if (isTransformedCalled(stringExpr)) {
             return
         }
-        collectJSStringTemplate(raw, changes, stringExpr)
+        collectJSStringTemplate(raw, changes, stringExpr) { value -> value }
     }
 
     fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean {
@@ -634,7 +624,7 @@ class VueI18nProcessor(
         }
         val template = convertConcatTextToTemplate(binaryExpr)
         //println("template${template}${binaryExpr.text}")
-        collectJSStringTemplate(template, changes, binaryExpr)
+        collectJSStringTemplate(template, changes, binaryExpr) { value -> value }
     }
 
     private fun convertConcatTextToTemplate(binaryExpr: JSBinaryExpression): String {
