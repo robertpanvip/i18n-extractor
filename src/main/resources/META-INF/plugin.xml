@@ -43,9 +43,17 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
         />
     </extensions>
     <actions>
+        <!-- Refactor 菜单下的批量转换 -->
+        <action id="com.pan.extractor.AllI18nExtractorAction"
+                class="com.pan.extractor.AllI18nExtractorAction"
+                text="项目中文国际提取"
+                description="提取 vue react文件中的中文，替换为 $t()"
+                icon="/icon.svg">
+            <add-to-group group-id="RefactoringMenu" anchor="last"/>
+        </action>
         <action
                 id="I18nExtractorAction"
-                class="com.pan.extractor.VueI18nExtractorAction"
+                class="com.pan.extractor.I18nExtractorAction"
                 text="中文国际化提取"
                 description="提取 Vue React文件中的中文，替换为 $t() 并生成 JSON"
                 icon="/icon.svg"

@@ -1,5 +1,7 @@
 package com.pan.extractor
+
 import com.intellij.lang.ecmascript6.psi.ES6ExportDefaultAssignment
+import com.intellij.lang.javascript.TypeScriptFileType
 import com.intellij.lang.javascript.psi.JSArrayLiteralExpression
 import com.intellij.lang.javascript.psi.JSAssignmentExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
@@ -9,6 +11,10 @@ import com.intellij.lang.javascript.psi.JSReturnStatement
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptFunctionExpression
 import com.intellij.psi.PsiElement
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
+import java.io.File
 
 object Util {
     fun isJSX(element: PsiElement): Boolean {
@@ -64,4 +70,61 @@ object Util {
 
         return false
     }
+
+    fun getJsonContent(json: String): String {
+        val content = json
+            .trim()
+            .removePrefix("{")
+            .removeSuffix("}")
+            .trim()
+        return content
+    }
+
+    fun findFilesByIncludePatterns(
+        project: Project,
+        rawIncludePatterns: List<String>
+    ): List<VirtualFile> {
+
+        val basePath = project.basePath ?: return emptyList()
+        val baseDir = File(basePath)
+
+        if (!baseDir.exists()) return emptyList()
+
+        // 预编译 glob -> regex
+        val regexList = rawIncludePatterns.map { globToRegex(it) }
+
+        val result = mutableSetOf<VirtualFile>()
+
+        baseDir.walkTopDown().forEach { file ->
+            if (!file.isFile) return@forEach
+
+            val relativePath = baseDir
+                .toPath()
+                .relativize(file.toPath())
+                .toString()
+                .replace("\\", "/")
+
+            if (regexList.any { it.matches(relativePath) }) {
+                LocalFileSystem.getInstance()
+                    .findFileByIoFile(file)
+                    ?.let { result.add(it) }
+            }
+        }
+
+        return result.toList()
+    }
+
+    private fun globToRegex(glob: String): Regex {
+        var pattern = glob.replace("\\", "/")
+
+        pattern = pattern
+            .replace(".", "\\.")
+            .replace("**/", "(.*/)?")
+            .replace("/**", "(/.*)?")
+            .replace("**", ".*")
+            .replace("*", "[^/]*")
+
+        return Regex("^$pattern$")
+    }
+
 }

@@ -30,7 +30,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
 import kotlin.text.replace
 
-class VueI18nProcessor(
+class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
@@ -149,22 +149,25 @@ class VueI18nProcessor(
         return changes;
     }
 
+    fun run() {
+        this.effects.forEach { it() }
+        if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
+            ensureVueI18nImported(psiFile);
+        }
+    }
+
     /** 处理整个 Vue 文件，支持 undo */
     fun execute() {
         CommandProcessor.getInstance().executeCommand(
             project,
             {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    this.effects.forEach { it() }
-                    if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
-                        ensureVueI18nImported(psiFile);
-                    }
+                    this.run();
                 }
             },
             "Vue i18n Extract",
             null
         )
-
     }
 
     fun getScriptTag(): XmlTag? {
