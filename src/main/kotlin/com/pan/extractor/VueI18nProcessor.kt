@@ -1,14 +1,17 @@
 package com.pan.extractor
 
+import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSAssignmentExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSEmbeddedContent
 import com.intellij.lang.javascript.psi.JSExpression
 import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnum
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
@@ -36,16 +39,10 @@ class VueI18nProcessor(
     /** 收集的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
 
-    //val psiFactory = PsiFileFactory.getInstance(project)
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
-    }
-
-    fun isFullMustache(text: String): Boolean {
-        val content = text.trim();
-        return content.startsWith("{{") && content.endsWith("}}")
     }
 
     // 處理帶 Mustache 的 XmlText：獲取注入的 JS
@@ -63,9 +60,6 @@ class VueI18nProcessor(
                     if (e is JSBinaryExpression) {
                         visitElement(e)
                     }
-                    /* if (e.javaClass.simpleName == "VueJSEmbeddedExpressionContentImpl") {
-
-                     }*/
                     super.visitElement(e)
                 }
             })
@@ -162,9 +156,8 @@ class VueI18nProcessor(
             {
                 WriteCommandAction.runWriteCommandAction(project) {
                     this.effects.forEach { it() }
-
                     if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
-                        ensureVueI18nImported(psiFile).forEach { it() }
+                        ensureVueI18nImported(psiFile);
                     }
                 }
             },
@@ -179,72 +172,60 @@ class VueI18nProcessor(
             .firstOrNull { it.name == "script" }
     }
 
-    private fun ensureVueI18nImported(
-        psiFile: PsiElement
-    ): MutableList<() -> Unit> {
-        val action = mutableListOf<() -> Unit>();
-        var scriptTag = this.getScriptTag();
-        if (scriptTag === null) {
-            psiFile.add(factory.createTagFromText("<script setup lang=\"ts\">\n</script>"));
-            scriptTag = this.getScriptTag()
+    private fun ensureVueI18nImported(psiFile: PsiElement) {
+
+        val scriptTag = getScriptTag() ?: run {
+            val script = factory.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
+            psiFile.add(script);
+            getScriptTag()
+        } ?: return;
+        // 關鍵：找到 <script> 內部的文本節點（注入宿主通常在這裡）
+        val scriptContent = PsiTreeUtil.findChildOfType(scriptTag, JSEmbeddedContent::class.java)
+        if (scriptContent === null) {
+            return
         }
+        val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
+        // 1. 创建 import 语句
+        val importUseI18n = createStringExpressionNode("import { useI18n } from 'vue-i18n';", psiFile)
 
-        val endToken = PsiTreeUtil.findChildrenOfType(scriptTag, XmlToken::class.java)
-            .firstOrNull { it.tokenType == XmlTokenType.XML_TAG_END } ?: return action
+        // 2. 创建 const 语句
+        val constUseI18n = createStringExpressionNode("const { t: \$t } = useI18n();", psiFile)
 
-        val setup = endToken.nextSibling
 
-        val content = setup?.text ?: "";
-
-        val insetText = "import { useI18n } from 'vue-i18n'"
-        val lines = content.split("\\n".toRegex()).toMutableList()
-        if (!content.contains("useI18n")) {
-            if (lines[0] === "") {
-                lines.removeAt(0)
-            }
-            lines.add(0, "")
-            lines.add(1, insetText)
-        }
-        val lastImportIndex = lines.indexOfLast { item -> item.startsWith("import") }
-        val toAdd = "const { t: \$t } = useI18n();"
-
-        if (lastImportIndex == -1) {
-            lines.add(toAdd);
+        if (importStatements.isEmpty()) {
+            // 没有 import，直接加到内容最前面（或合适位置）
+            scriptContent.addBefore(importUseI18n, scriptContent.firstChild)
+            scriptContent.addAfter(constUseI18n, importUseI18n)
         } else {
-            lines[lastImportIndex] = "${lines[lastImportIndex]}\n${toAdd}"
-        }
-        if (!content.contains("useI18n")) {
-            val newContent = lines.joinToString("\n")
-            action.add {
-                scriptTag?.value?.text = newContent  // 直接设置 value.text
+            val alreadyExists = importStatements.find({ s ->
+                s.text == importUseI18n.text
+            })
+
+            if (alreadyExists === null) {
+                // 有 import → 新 import 加到第一个 import 前面
+                val firstImport = importStatements.first()
+                firstImport.parent.addBefore(importUseI18n, firstImport)
             }
+
+            val jsVars = PsiTreeUtil.findChildrenOfType(scriptContent, JSVarStatement::class.java)
+            val alreadyUseI18Exists = jsVars.find({ s ->
+                s.text == constUseI18n.text
+            })
+
+            if (alreadyUseI18Exists === null) {
+                // const 加到最后一个 import 后面
+                val lastImport = importStatements.last()
+                lastImport.parent.addAfter(constUseI18n, lastImport)
+            }
+
         }
-        return action
     }
+
 
     fun getCharactersText(textNode: XmlElement): List<XmlToken> {
         val textChild = textNode.children.filterIsInstance<XmlToken>()
             .filter { it.tokenType == XmlTokenType.XML_DATA_CHARACTERS }
         return textChild
-    }
-
-    fun getNotMustacheElement(element: XmlText): MutableList<XmlToken> {
-        val result = mutableListOf<XmlToken>()
-
-        var inMustache = false
-
-        getCharactersText(element).forEach { token ->
-            when (token.text) {
-                "{{" -> inMustache = true
-                "}}" -> inMustache = false
-                else -> {
-                    if (!inMustache) {
-                        result.add(token)
-                    }
-                }
-            }
-        }
-        return result
     }
 
     // Template 文本节点
