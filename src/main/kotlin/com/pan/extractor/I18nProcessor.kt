@@ -3,7 +3,6 @@ package com.pan.extractor
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
-import com.intellij.lang.javascript.psi.JSAssignmentExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSEmbeddedContent
@@ -28,6 +27,7 @@ import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
+import kotlin.collections.forEach
 import kotlin.text.replace
 
 class I18nProcessor(
@@ -105,7 +105,7 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
-    fun collect(): MutableList<() -> Unit> {
+    fun pureCollect(psiFile: PsiElement): MutableList<() -> Unit> {
         val changes = mutableListOf<() -> Unit>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
@@ -145,6 +145,11 @@ class I18nProcessor(
                 super.visitElement(element)
             }
         })
+        return changes
+    }
+
+    fun collect(): MutableList<() -> Unit> {
+        val changes = pureCollect(psiFile)
         effects = changes;
         return changes;
     }
@@ -176,7 +181,6 @@ class I18nProcessor(
     }
 
     private fun ensureVueI18nImported(psiFile: PsiElement) {
-
         val scriptTag = getScriptTag() ?: run {
             val script = factory.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
             psiFile.add(script);
@@ -197,8 +201,9 @@ class I18nProcessor(
 
         if (importStatements.isEmpty()) {
             // 没有 import，直接加到内容最前面（或合适位置）
-            scriptContent.addBefore(importUseI18n, scriptContent.firstChild)
-            scriptContent.addAfter(constUseI18n, importUseI18n)
+            val importUseI18n = scriptContent.addAfter(importUseI18n, scriptContent.firstChild)
+            val whiteSpace = scriptContent.addAfter(createStringExpressionNode("\n", psiFile), importUseI18n)
+            scriptContent.addAfter(constUseI18n, whiteSpace)
         } else {
             val alreadyExists = importStatements.find({ s ->
                 s.text == importUseI18n.text
@@ -393,21 +398,32 @@ class I18nProcessor(
             "{$key}"
         }
 
-        // 步骤3：生成paramsObject（{ 0: 原始内容, 1: 原始内容... }）
-        val paramsObject = params.entries.joinToString(
-            prefix = "{ ",
-            postfix = " }"
-        ) { (k, v) ->
-            // 数字索引加引号，内容保留原始格式
-            "\"$k\": $v"
-        }
 
         // 步骤4：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
-        println(":zzz${message} -${paramsObject}")
         // 步骤5：添加替换逻辑（保持你的原有逻辑）
         changes.add {
+            // 步骤3：生成paramsObject（{ 0: 原始内容, 1: 原始内容... }）
+            val paramsObject = params.entries.joinToString(
+                prefix = "{ ",
+                postfix = " }"
+            ) { (k, v) ->
+                val expr = JSChangeUtil.createExpressionFromText(
+                    project,
+                    v,
+                    null,  // context
+                    false  // 不抛异常
+                )
+                if (expr?.psi !== null) {
+                    val changes = pureCollect(expr.psi);
+                    changes.forEach { it() }
+                    "\"$k\": ${expr.text}"
+                } else {
+                    // 数字索引加引号，内容保留原始格式
+                    "\"$k\": $v"
+                }
+            }
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val text = creator(newExprText)
             val newElement = createStringExpressionNode(text, ele)
@@ -518,6 +534,15 @@ class I18nProcessor(
         return key;
     }
 
+    fun hasEqInExpression(expr: PsiElement?): Boolean {
+        if (expr == null) return false
+        if (expr !is JSBinaryExpression) {
+            return false
+        }
+        val op = expr.operationNode?.elementType
+        return op == JSTokenTypes.EQEQ || op === JSTokenTypes.EQEQEQ
+    }
+
     /**
      * 判断这个字符串字面量是否是 enum entry 的初始化值
      * 如 enum X { A = "中文" } 中的 "中文"
@@ -537,10 +562,10 @@ class I18nProcessor(
         if (ele is XmlTag) {
             return
         }
-
-        if (ele.parent is JSBinaryExpression && ele.parent !is JSAssignmentExpression) {
+        // parent 不是赋值=表达式和 没有==
+        /*if (ele.parent is JSBinaryExpression && ele.parent !is JSAssignmentExpression && !hasEqInExpression(ele.parent)) {
             return
-        }
+        }*/
 
         if (!hasChinese(raw)) {
             return
