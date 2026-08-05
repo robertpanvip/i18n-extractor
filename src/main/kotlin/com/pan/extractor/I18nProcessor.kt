@@ -4,6 +4,7 @@ import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
+import com.intellij.lang.javascript.psi.JSBlockStatement
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSEmbeddedContent
 import com.intellij.lang.javascript.psi.JSExpression
@@ -156,8 +157,12 @@ class I18nProcessor(
 
     fun run() {
         this.effects.forEach { it() }
-        if (extractedStrings.isNotEmpty() && isVueFile(psiFile.containingFile)) {
-            ensureVueI18nImported(psiFile);
+        if (extractedStrings.isNotEmpty()) {
+            if (isVueFile(psiFile.containingFile)) {
+                ensureVueI18nImported(psiFile)
+            } else if (Util.isReact(psiFile)) {
+                ensureReactI18nImported(psiFile)
+            }
         }
     }
 
@@ -226,6 +231,46 @@ class I18nProcessor(
                 lastImport.parent.addAfter(constUseI18n, lastImport)
             }
 
+        }
+    }
+
+    /** React i18n 导入 + useTranslation hook 注入 */
+    private fun ensureReactI18nImported(psiFile: PsiElement) {
+        val containingFile = psiFile.containingFile ?: return
+
+        // 1. 确保 react-i18next 导入存在
+        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+        if (imports.none { it.text.contains("react-i18next") }) {
+            val importNode = createStringExpressionNode("import { useTranslation } from 'react-i18next';", psiFile)
+            if (imports.isNotEmpty()) {
+                val firstImport = imports.first()
+                val added = firstImport.parent.addBefore(importNode, firstImport)
+                firstImport.parent.addAfter(createStringExpressionNode("\n", psiFile), added)
+            } else {
+                val anchor = containingFile.firstChild
+                if (anchor != null) {
+                    val added = containingFile.addAfter(importNode, anchor)
+                    containingFile.addAfter(createStringExpressionNode("\n", psiFile), added)
+                } else {
+                    containingFile.add(importNode)
+                }
+            }
+        }
+
+        // 2. 找到所有 React 组件函数并注入 useTranslation hook
+        val componentFuncs = Util.findReactComponentFunctions(containingFile)
+        if (componentFuncs.isEmpty()) return
+
+        // 3. 逐个注入（从后往前插入，避免 offset 偏移）
+        val document = containingFile.viewProvider.document ?: return
+        for (func in componentFuncs.asReversed()) {
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            // 检查是否已存在 useTranslation 调用
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.none { it.text.contains("useTranslation") }) {
+                val insertOffset = body.textRange.startOffset + 1 // '{' 之后
+                document.insertString(insertOffset, "\n    const { t: \$t } = useTranslation();")
+            }
         }
     }
 
@@ -387,6 +432,9 @@ class I18nProcessor(
         var index = 0 // 按出现顺序分配数字索引
 
         // 步骤2：替换所有${任意内容}为${数字索引}，并收集${}内的原始内容
+        // react-i18next 使用 {{key}} 双括号插值，vue-i18n 使用 {key} 单括号插值
+        // 通过 JSX 上下文 / react 导入 / package.json 依赖综合判断
+        val isReact = Util.isReact(ele)
         val message = templateVarRegex.replace(content) { match ->
             // 提取${}内的原始内容（groupValues[1] 是正则括号内的匹配结果）
             val innerContent = match.groupValues[1].trim()
@@ -394,8 +442,8 @@ class I18nProcessor(
             val key = index.toString()
             params[key] = innerContent
             index++
-            // 替换为${数字索引}
-            "{$key}"
+            // 替换为${数字索引}，React 使用双括号，Vue 使用单括号
+            if (isReact) "{{$key}}" else "{$key}"
         }
 
 
