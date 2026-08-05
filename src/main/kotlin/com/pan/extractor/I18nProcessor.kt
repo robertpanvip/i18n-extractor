@@ -339,6 +339,29 @@ class I18nProcessor(
         return text.startsWith("`") && text.contains("\${")
     }
 
+    /**
+     * 如果内容是纯字符串字面量（无插值的反引号、单引号、双引号字符串），
+     * 返回去掉外层引号后的内容；否则返回 null。
+     * 例如：`测试` -> "测试"，'hello' -> "hello"，"world" -> "world"
+     */
+    fun extractPureStringContent(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.length < 2) return null
+        // 双引号字符串
+        if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+            return trimmed.substring(1, trimmed.length - 1)
+        }
+        // 单引号字符串
+        if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+            return trimmed.substring(1, trimmed.length - 1)
+        }
+        // 反引号字符串（必须不含 ${} 插值才算纯字符串）
+        if (trimmed.startsWith("`") && trimmed.endsWith("`") && !trimmed.contains("\${")) {
+            return trimmed.substring(1, trimmed.length - 1)
+        }
+        return null
+    }
+
     fun isBlock(originalText: String): Boolean {
         return originalText.startsWith('{') && originalText.endsWith('}')
     }
@@ -438,6 +461,11 @@ class I18nProcessor(
         val message = templateVarRegex.replace(content) { match ->
             // 提取${}内的原始内容（groupValues[1] 是正则括号内的匹配结果）
             val innerContent = match.groupValues[1].trim()
+            // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
+            val pureString = extractPureStringContent(innerContent)
+            if (pureString != null) {
+                return@replace pureString
+            }
             // 按顺序分配索引
             val key = index.toString()
             params[key] = innerContent
@@ -457,18 +485,10 @@ class I18nProcessor(
                 prefix = "{ ",
                 postfix = " }"
             ) { (k, v) ->
-                val expr = JSChangeUtil.createExpressionFromText(
-                    project,
-                    v,
-                    null,  // context
-                    false  // 不抛异常
-                )
-                if (expr?.psi !== null) {
-                    val changes = pureCollect(expr.psi);
-                    changes.forEach { it() }
-                    "\"$k\": ${expr.text}"
+                // 模板字面量带插值：递归构建嵌套 $t() 调用
+                if (isJSTemplateLiteral(v)) {
+                    "\"$k\": ${buildNestedTExprFromText(v, ele)}"
                 } else {
-                    // 数字索引加引号，内容保留原始格式
                     "\"$k\": $v"
                 }
             }
@@ -495,8 +515,43 @@ class I18nProcessor(
         // 步骤3：判断是否包含换行符，选择引号类型
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
 
-        // 步骤4：拼接最终的 $t 函数调用表达式
-        return "\$t($quote$escapedMsg$quote, $paramsObject)"
+        // 步骤4：拼接最终的 $t 函数调用表达式（空参数对象时省略第二个参数）
+        return if (paramsObject.replace(" ", "") == "{}") {
+            "\$t($quote$escapedMsg$quote)"
+        } else {
+            "\$t($quote$escapedMsg$quote, $paramsObject)"
+        }
+    }
+
+    /**
+     * 从模板字面量文本直接构建嵌套 $t() 表达式（纯文本处理，不操作 PSI）
+     * 例如: `中国${1}` -> $t('中国{0}', { "0": 1 })
+     */
+    fun buildNestedTExprFromText(raw: String, ele: PsiElement): String {
+        val content = raw.substring(1, raw.length - 1)
+        val params = LinkedHashMap<String, String>()
+        var index = 0
+        val isReact = Util.isReact(ele)
+
+        val message = templateVarRegex.replace(content) { match ->
+            val innerContent = match.groupValues[1].trim()
+            val pureString = extractPureStringContent(innerContent)
+            if (pureString != null) return@replace pureString
+            val key = index.toString()
+            params[key] = innerContent
+            index++
+            if (isReact) "{{$key}}" else "{$key}"
+        }
+
+        val key = generateKey(message, ele)
+        extractedStrings.putIfAbsent(key, message)
+
+        val paramsObject = params.entries.joinToString(
+            prefix = "{ ",
+            postfix = " }"
+        ) { (k, v) -> "\"$k\": $v" }
+
+        return buildTFunctionExpr(message.trim(), paramsObject)
     }
 
     fun createStringExpressionNode(text: String, context: PsiElement): PsiElement {
