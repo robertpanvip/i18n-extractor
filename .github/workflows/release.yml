@@ -65,6 +65,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
-            build/libs/*.jar
+            build/distributions/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
