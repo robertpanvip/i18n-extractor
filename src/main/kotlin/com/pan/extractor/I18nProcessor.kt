@@ -100,7 +100,8 @@ class I18nProcessor(
         }
         val raw = sb.toString().trim()
 
-        if (raw.startsWith("`\${\$t(")) {
+        // 已是 $t() 调用的跳过（兼容 ${ $t( 和 ${$t( 两种写法）
+        if (raw.replace(" ", "").startsWith("`\${\$t(")) {
             return
         }
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
@@ -114,14 +115,7 @@ class I18nProcessor(
                 when (element) {
                     is XmlText -> if (!isInStyleOrComment(element)) {
                         if (isMustache(element.text)) {
-                            visitMustache(element, { item ->
-                                if (item is JSBinaryExpression) {
-                                    collectJSBinaryExpressionChange(item, changes)
-                                }
-                                if (item is JSLiteralExpression) {
-                                    collectJSStringChange(item, changes)
-                                }
-                            })
+                            // 只用 collectXmlText 统一处理，避免 visitMustache 重复提取单个表达式
                             collectXmlText(element, changes)
                         } else {
                             collectTemplateTextChange(element, changes)
@@ -478,20 +472,22 @@ class I18nProcessor(
         // 步骤4：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
-        // 步骤5：添加替换逻辑（保持你的原有逻辑）
-        changes.add {
-            // 步骤3：生成paramsObject（{ 0: 原始内容, 1: 原始内容... }）
-            val paramsObject = params.entries.joinToString(
-                prefix = "{ ",
-                postfix = " }"
-            ) { (k, v) ->
-                // 模板字面量带插值：递归构建嵌套 $t() 调用
-                if (isJSTemplateLiteral(v)) {
-                    "\"$k\": ${buildNestedTExprFromText(v, ele)}"
-                } else {
-                    "\"$k\": $v"
-                }
+
+        // 步骤5：预生成 paramsObject（在 lambda 外执行，确保 extractedStrings 在 collect 阶段就完整）
+        val paramsObject = params.entries.joinToString(
+            prefix = "{ ",
+            postfix = " }"
+        ) { (k, v) ->
+            // 模板字面量带插值：递归构建嵌套 $t() 调用（同时注册到 extractedStrings）
+            if (isJSTemplateLiteral(v)) {
+                "\"$k\": ${buildNestedTExprFromText(v, ele)}"
+            } else {
+                "\"$k\": $v"
             }
+        }
+
+        // 步骤6：添加替换逻辑
+        changes.add {
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val text = creator(newExprText)
             val newElement = createStringExpressionNode(text, ele)
