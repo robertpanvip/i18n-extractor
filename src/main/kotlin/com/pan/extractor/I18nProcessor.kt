@@ -37,8 +37,11 @@ class I18nProcessor(
 ) {
     var effects = mutableListOf<() -> Unit>()
 
-    /** 收集的 key -> 原文本 */
+    /** 新提取的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
+
+    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换） */
+    val existingStrings = mutableMapOf<String, String>()
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
@@ -144,9 +147,70 @@ class I18nProcessor(
     }
 
     fun collect(): MutableList<() -> Unit> {
+        collectExistingTKeys()
         val changes = pureCollect(psiFile)
         effects = changes;
         return changes;
+    }
+
+    /**
+     * 扫描文件中已有的 $t() / t() 调用，收集其 key 到 existingStrings。
+     * 覆盖模板注入 JS 和 script/JS/TS 两种来源。
+     */
+    private fun collectExistingTKeys() {
+        // 1. 模板 {{ }} 中的注入 JS
+        PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
+            if (isMustache(xmlText.text)) {
+                InjectedLanguageManager.getInstance(project)
+                    .getInjectedPsiFiles(xmlText)?.forEach { pair ->
+                        collectTKeysRecursive(pair.first)
+                    }
+            }
+        }
+
+        // 2. script / JS / TS 中的 $t() 调用
+        PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
+            collectTKeyFromCall(call)
+        }
+    }
+
+    private fun collectTKeysRecursive(root: PsiElement) {
+        root.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: PsiElement) {
+                if (element is JSCallExpression) {
+                    collectTKeyFromCall(element)
+                }
+                super.visitElement(element)
+            }
+        })
+    }
+
+    private fun collectTKeyFromCall(call: JSCallExpression) {
+        val method = call.methodExpression
+        if (method is JSReferenceExpression) {
+            val name = method.referenceName
+            if (name == "\$t" || name == "t") {
+                val firstArg = call.arguments.firstOrNull() ?: return
+                val text = extractStringArgText(firstArg) ?: return
+                val key = generateKey(text.trim(), call)
+                existingStrings.putIfAbsent(key, text.trim())
+            }
+        }
+    }
+
+    private fun extractStringArgText(expr: PsiElement): String? {
+        return when (expr) {
+            is JSLiteralExpression -> {
+                if (expr.isStringLiteral) expr.value as? String else null
+            }
+            is JSStringTemplateExpression -> {
+                // 纯文本模板字面量（无插值），去反引号
+                if (expr.text.startsWith("`") && expr.text.endsWith("`")) {
+                    expr.text.substring(1, expr.text.length - 1)
+                } else null
+            }
+            else -> null
+        }
     }
 
     fun run() {

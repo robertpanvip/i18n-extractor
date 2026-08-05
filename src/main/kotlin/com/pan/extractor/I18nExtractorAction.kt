@@ -12,13 +12,16 @@ class I18nExtractorAction : AnAction() {
         val project = e.project ?: return
         val psiFile = e.getData(CommonDataKeys.PSI_FILE) ?: return
 
-        val extracted = mutableMapOf<String, String>()
         val ins = I18nProcessor(project, psiFile)
         ins.collect();
-        extracted.putAll(ins.extractedStrings)
+
+        // 合并已有 key + 新提取 key，已有在前，新提取覆盖同名
+        val allStrings = mutableMapOf<String, String>()
+        allStrings.putAll(ins.existingStrings)
+        allStrings.putAll(ins.extractedStrings)
 
         // 弹出模态框显示 JSON
-        val dialog = ExtractedStringsDialog(project, extracted);
+        val dialog = ExtractedStringsDialog(project, allStrings);
         if (dialog.showAndGet()) {
             ins.execute();
             if (dialog.json !== null) {
