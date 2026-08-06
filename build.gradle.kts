@@ -20,6 +20,7 @@ repositories {
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
+        jetbrainsRuntime()
         intellijIdeaUltimate("2025.3") {
           useInstaller = false
         }
