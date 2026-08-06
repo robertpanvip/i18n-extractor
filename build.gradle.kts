@@ -56,6 +56,12 @@ intellijPlatform {
     }
 }
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
 tasks {
   test {
         useJUnit()
@@ -70,11 +76,6 @@ tasks {
                 "standardError"
             )
         }
-    }
-    // Set the JVM compatibility versions
-    withType<JavaCompile> {
-        sourceCompatibility = "21"
-        targetCompatibility = "21"
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
