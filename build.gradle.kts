@@ -22,9 +22,9 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         intellijIdeaUltimate(
-         ext("platform.version"),
-         false
-       )
+            "253.28294.332",
+            false
+        )
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
