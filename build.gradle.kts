@@ -24,7 +24,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         
-        intellijIdeaUltimate("261.24374.151") {
+        intellijIdeaUltimate("2026.1") {
             useInstaller = false
         }
 
