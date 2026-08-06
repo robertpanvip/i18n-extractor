@@ -21,10 +21,12 @@ repositories {
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        intellijIdeaUltimate(
-            "LATEST-EAP-SNAPSHOT",
-            false
-        )
+        
+intellijIdeaUltimate(
+    "LATEST-EAP-SNAPSHOT"
+) {
+    useInstaller = false
+}
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
