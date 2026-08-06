@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.ide.plugins.PluginManager
-
+import com.intellij.ide.plugins.PluginManagerCore
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
