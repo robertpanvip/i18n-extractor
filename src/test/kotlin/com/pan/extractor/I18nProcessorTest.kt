@@ -6,11 +6,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import com.intellij.openapi.fileTypes.FileTypeManager
 
-val vuePlugin = PluginManagerCore.isPluginInstalled(
-    PluginId.getId("org.jetbrains.plugins.vue")
-)
+import com.intellij.openapi.extensions.PluginId
+import com.intellij.ide.plugins.PluginManager
 
-println("vue plugin installed = $vuePlugin")
+
+val vuePlugin = PluginManager
+    .getLoadedPlugins()
+    .any {
+        it.pluginId == PluginId.getId("org.jetbrains.plugins.vue")
+    }
+
+println("vue loaded = $vuePlugin")
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
