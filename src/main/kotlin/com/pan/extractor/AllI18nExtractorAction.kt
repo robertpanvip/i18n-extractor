@@ -30,13 +30,19 @@ class AllI18nExtractorAction : AnAction() {
         return ActionUpdateThread.BGT  // Background Thread
     }
 
-    override fun update(e: AnActionEvent) {
-        // 这里可以安全访问 PSI_File / PSI_Element 了
-        val file = e.getData(CommonDataKeys.PSI_FILE)
-        e.presentation.isEnabledAndVisible = file != null && file.name.lowercase().let {
-            it.endsWith(".js") || it.endsWith(".jsx") || it.endsWith(".ts") || it.endsWith(".tsx") || it.endsWith(".vue")
-        }
-    }
+   override fun update(e: AnActionEvent) {
+    val file = e.getData(CommonDataKeys.PSI_FILE)
+
+    e.presentation.isEnabledAndVisible =
+        file?.let {
+            val name = it.name.lowercase()
+            name.endsWith(".js") ||
+                    name.endsWith(".jsx") ||
+                    name.endsWith(".ts") ||
+                    name.endsWith(".tsx") ||
+                    name.endsWith(".vue")
+        } ?: false
+  }
 
     /**
      * 查找项目中的 tsconfig.json 文件
