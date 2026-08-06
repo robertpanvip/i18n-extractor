@@ -51,10 +51,13 @@ tasks {
         useJUnit()
 
         testLogging {
+            showStandardStreams = true
             events(
                 "passed",
                 "failed",
-                "skipped"
+                "skipped",
+                "standardOut",
+                "standardError"
             )
         }
     }
