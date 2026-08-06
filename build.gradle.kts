@@ -20,7 +20,9 @@ repositories {
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
-       webstorm("2025.3")
+        intellijIdeaUltimate("2025.3") {
+          useInstaller = false
+        }
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(TestFrameworkType.Plugin.XML)
