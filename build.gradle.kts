@@ -22,7 +22,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         intellijIdeaUltimate(
-            "253.28294.332",
+            "LATEST-EAP-SNAPSHOT",
             false
         )
 
