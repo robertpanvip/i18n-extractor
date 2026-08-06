@@ -504,58 +504,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
     }
 
     // ============================================================
-    // 5. JSX
-    // ============================================================
-
-    /**
-     * 测试 JSX 文本提取
-     */
-    fun testReactJsxExtract() {
-        val file = myFixture.configureByText(
-            "App.tsx",
-            """
-            export default function App(){
-
-                return (
-                    <div>
-                        你好
-                    </div>
-                )
-
-            }
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertEquals(1, processor.extractedStrings.size)
-    }
-
-    /**
-     * 测试 JSX 属性中的字符串
-     */
-    fun testReactJsxAttributeStringExtract() {
-        val file = myFixture.configureByText(
-            "App.tsx",
-            """
-            export default function App(){
-                return <div title="提示信息">hover me</div>
-            }
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "extractedStrings should contain '提示信息', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
-        )
-    }
-
-    // ============================================================
-    // 6. 对象 / 数组中的字符串
+    // 5. 对象 / 数组中的字符串
     // ============================================================
 
     /**

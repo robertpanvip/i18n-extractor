@@ -92,6 +92,12 @@ object Util {
             return false
         }
 
+        // .jsx/.tsx 文件直接判定为 React
+        val name = containingFile.name.lowercase()
+        if (name.endsWith(".jsx") || name.endsWith(".tsx")) {
+            return true
+        }
+
         // 项目 package.json 依赖（react 且不依赖 vue）
         return hasReactDependency(containingFile)
     }

@@ -361,18 +361,18 @@ class I18nProcessor(
         // 1. 确保 react-i18next 导入存在
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
         if (imports.none { it.text.contains("react-i18next") }) {
-            val importNode = createStringExpressionNode("import { useTranslation } from 'react-i18next';", psiFile)
+            val importText = "import { useTranslation } from 'react-i18next';\n"
+            val importStmt = createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
                 val firstImport = imports.first()
-                val added = firstImport.parent.addBefore(importNode, firstImport)
-                firstImport.parent.addAfter(createStringExpressionNode("\n", psiFile), added)
+                firstImport.parent.addBefore(importStmt, firstImport)
             } else {
-                val anchor = containingFile.firstChild
-                if (anchor != null) {
-                    val added = containingFile.addAfter(importNode, anchor)
-                    containingFile.addAfter(createStringExpressionNode("\n", psiFile), added)
+                // 没有 import 时，加到文件最开头（第一个有效语句之前）
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
                 } else {
-                    containingFile.add(importNode)
+                    containingFile.add(importStmt)
                 }
             }
         }
@@ -382,16 +382,35 @@ class I18nProcessor(
         if (componentFuncs.isEmpty()) return
 
         // 3. 逐个注入（从后往前插入，避免 offset 偏移）
-        val document = containingFile.viewProvider.document ?: return
+        // 使用 PSI 操作创建语句并插入，全部使用纯 PSI 操作避免 Document locked 异常
         for (func in componentFuncs.asReversed()) {
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
             // 检查是否已存在 useTranslation 调用
             val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
             if (existingVars.none { it.text.contains("useTranslation") }) {
-                val insertOffset = body.textRange.startOffset + 1 // '{' 之后
-                document.insertString(insertOffset, "\n    const { t: \$t } = useTranslation();")
+                val hookStmt = createJSStatementFromText(
+                    "\n    const { t: \$t } = useTranslation();",
+                    func
+                )
+                // 插入到 body 的 '{' 之后（即第一个 LeafElement 之后）
+                val openingBrace = body.firstChild
+                if (openingBrace != null) {
+                    body.addAfter(hookStmt, openingBrace)
+                }
             }
         }
+    }
+
+    /** 找到第一个非空白符、非注释的子元素 */
+    private fun findFirstNonWhitespaceChild(element: PsiElement): PsiElement? {
+        var child = element.firstChild
+        while (child != null) {
+            if (child !is PsiWhiteSpace && child !is PsiComment) {
+                return child
+            }
+            child = child.nextSibling
+        }
+        return null
     }
 
 
@@ -693,6 +712,28 @@ class I18nProcessor(
         return dummyLiteral.lastChild
     }
 
+    /**
+     * 从文本创建 JS 语句（使用 PsiFileFactory 构造完整 PSI 语句节点）。
+     * 相比直接操作 AST 节点，这种方式创建的语句结构完整，
+     * 不会导致 Document is locked 异常。
+     */
+    private fun createJSStatementFromText(text: String, context: PsiElement): PsiElement {
+        val project = context.project
+        val language = context.containingFile?.language
+            ?: error("Cannot determine language for context element")
+        val dummyFile = PsiFileFactory.getInstance(project).createFileFromText(
+            "dummy.js",
+            language,
+            text
+        )
+        // 跳过空白符，取第一个有效语句
+        var child: PsiElement? = dummyFile.firstChild
+        while (child != null && child is PsiWhiteSpace) {
+            child = child.nextSibling
+        }
+        return child ?: dummyFile.firstChild
+    }
+
     fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
         val raw = stringExpr.text
         if (raw.isEmpty()) return
@@ -709,7 +750,7 @@ class I18nProcessor(
         val parent = stringExpr.parent
         val callExpr = when {
             parent is JSCallExpression -> parent
-            parent?.parent is JSCallExpression -> parent?.parent as JSCallExpression
+            parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
         if (callExpr != null) {
