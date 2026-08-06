@@ -36,7 +36,16 @@ dependencies {
     
         bundledPlugins(
             "JavaScript",
-            "org.jetbrains.plugins.vue"
+            "org.jetbrains.plugins.vue",
+ "org.intellij.plugins.postcss",
+      "com.intellij.css",
+      "org.jetbrains.plugins.sass",
+      "org.jetbrains.plugins.less",
+      "HtmlTools",
+      "com.intellij.copyright",
+      "intellij.webpack",
+      "JSIntentionPowerPack",
+      "JavaScriptDebugger",
         )
 
         platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
