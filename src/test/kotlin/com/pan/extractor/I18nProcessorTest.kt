@@ -131,7 +131,7 @@ println(file.text)
         val file = myFixture.configureByText(
             "test.ts",
             """
-            const msg = \$t("你好")
+           const msg = ${'$'}t("你好")
             """.trimIndent()
         )
 
