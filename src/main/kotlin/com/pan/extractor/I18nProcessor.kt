@@ -86,27 +86,65 @@ class I18nProcessor(
         }
 
         val quote = "`"
+        // 过滤掉 PsiWhiteSpace 子节点，避免首尾空白干扰 raw 字符串构建
+        val children = element.children.filter { it !is PsiWhiteSpace }
+        if (children.isEmpty()) return
+
         val sb = StringBuilder()
-        element.children.forEachIndexed { index, e ->
+        children.forEachIndexed { index, e ->
             val text = rm(e)
             when (index) {
-                // 第一个节点：拼接`开头
                 0 -> sb.append(quote).append(text)
-                // 最后一个节点：拼接`结尾
-                element.children.lastIndex -> sb.append(text).append(quote)
-                // 中间节点：过滤空白，直接拼接
-                else -> if (e !is PsiWhiteSpace) sb.append(text)
+                children.lastIndex -> sb.append(text).append(quote)
+                else -> sb.append(text)
             }
         }
-        if (element.children.size == 1) {
+        if (children.size == 1) {
             sb.append(quote)
         }
         val raw = sb.toString().trim()
 
         // 已是 $t() 调用的跳过（兼容 ${ $t( 和 ${$t( 两种写法）
-        if (raw.replace(" ", "").startsWith("`\${\$t(")) {
+        // 同时去除所有空白字符后检查，避免换行/空格干扰
+        val compactRaw = raw.replace(Regex("\\s"), "")
+        if (compactRaw.startsWith("`\${\$t(")) {
             return
         }
+
+        // 1. 先尝试通过注入的 JS 提取字符串字面量
+        // 对于复杂表达式（三目、函数调用等），注入的 JS PSI 能准确找到内部的字符串
+        val injected = InjectedLanguageManager.getInstance(project)
+            .getInjectedPsiFiles(element)
+        if (injected != null && injected.isNotEmpty()) {
+            var foundStrings = false
+            injected.forEach { pair ->
+                pair.first.accept(object : PsiRecursiveElementWalkingVisitor() {
+                    override fun visitElement(e: PsiElement) {
+                        if (e is JSLiteralExpression && !isInComment(e)) {
+                            // 跳过模板字面量内部的字符串（避免重复提取）
+                            if (PsiTreeUtil.getParentOfType(e, JSStringTemplateExpression::class.java) == null) {
+                                // 跳过已在 $t() 调用中的字符串
+                                if (!isTransformedCalled(e)) {
+                                    collectJSStringChange(e, changes)
+                                    foundStrings = true
+                                }
+                            }
+                        }
+                        if (e is JSBinaryExpression && !isInComment(e)) {
+                            collectJSBinaryExpressionChange(e, changes)
+                            foundStrings = true
+                        }
+                        super.visitElement(e)
+                    }
+                })
+            }
+            // 如果注入 JS 中找到了字符串，就不再用模板字符串方式处理
+            if (foundStrings) {
+                return
+            }
+        }
+
+        // 2. 回退方案：用模板字符串方式处理（适用于简单模板字面量场景）
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
@@ -161,16 +199,40 @@ class I18nProcessor(
         // 1. 模板 {{ }} 中的注入 JS
         PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
             if (isMustache(xmlText.text)) {
-                InjectedLanguageManager.getInstance(project)
-                    .getInjectedPsiFiles(xmlText)?.forEach { pair ->
+                val injected = InjectedLanguageManager.getInstance(project)
+                    .getInjectedPsiFiles(xmlText)
+                if (injected != null && injected.isNotEmpty()) {
+                    // 有 JS 注入：通过 PSI 遍历查找 $t() 调用
+                    injected.forEach { pair ->
                         collectTKeysRecursive(pair.first)
                     }
+                }
+                // 无论是否有 JS 注入，都从原始文本中补充提取 $t() 调用。
+                // backtick 模板字符串 $t(`确定`) 虽然有注入但注入的 PSI 可能不包含
+                // JSCallExpression，导致 $t() 调用被遗漏。
+                collectTKeysFromRawText(xmlText.text)
             }
         }
 
         // 2. script / JS / TS 中的 $t() 调用
         PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
             collectTKeyFromCall(call)
+        }
+    }
+
+    /**
+     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本') 调用，
+     * 用于 Vue 模板中 backtick 等无法被 JS 注入解析的情况。
+     */
+    private fun collectTKeysFromRawText(text: String) {
+        // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
+        // 使用反向引用确保引号配对（如开闭都是反引号）
+        // 注意：必须用普通字符串（非 raw string）才能正确转义 $ 为 \$
+        val pattern = Regex("\\$(?:t|tc)\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+        pattern.findAll(text).forEach { match ->
+            val content = match.groupValues[2]
+            val key = generateKey(content.trim(), psiFile)
+            existingStrings.putIfAbsent(key, content.trim())
         }
     }
 
@@ -299,18 +361,18 @@ class I18nProcessor(
         // 1. 确保 react-i18next 导入存在
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
         if (imports.none { it.text.contains("react-i18next") }) {
-            val importNode = createStringExpressionNode("import { useTranslation } from 'react-i18next';", psiFile)
+            val importText = "import { useTranslation } from 'react-i18next';\n"
+            val importStmt = createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
                 val firstImport = imports.first()
-                val added = firstImport.parent.addBefore(importNode, firstImport)
-                firstImport.parent.addAfter(createStringExpressionNode("\n", psiFile), added)
+                firstImport.parent.addBefore(importStmt, firstImport)
             } else {
-                val anchor = containingFile.firstChild
-                if (anchor != null) {
-                    val added = containingFile.addAfter(importNode, anchor)
-                    containingFile.addAfter(createStringExpressionNode("\n", psiFile), added)
+                // 没有 import 时，加到文件最开头（第一个有效语句之前）
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
                 } else {
-                    containingFile.add(importNode)
+                    containingFile.add(importStmt)
                 }
             }
         }
@@ -320,16 +382,35 @@ class I18nProcessor(
         if (componentFuncs.isEmpty()) return
 
         // 3. 逐个注入（从后往前插入，避免 offset 偏移）
-        val document = containingFile.viewProvider.document ?: return
+        // 使用 PSI 操作创建语句并插入，全部使用纯 PSI 操作避免 Document locked 异常
         for (func in componentFuncs.asReversed()) {
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
             // 检查是否已存在 useTranslation 调用
             val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
             if (existingVars.none { it.text.contains("useTranslation") }) {
-                val insertOffset = body.textRange.startOffset + 1 // '{' 之后
-                document.insertString(insertOffset, "\n    const { t: \$t } = useTranslation();")
+                val hookStmt = createJSStatementFromText(
+                    "\n    const { t: \$t } = useTranslation();",
+                    func
+                )
+                // 插入到 body 的 '{' 之后（即第一个 LeafElement 之后）
+                val openingBrace = body.firstChild
+                if (openingBrace != null) {
+                    body.addAfter(hookStmt, openingBrace)
+                }
             }
         }
+    }
+
+    /** 找到第一个非空白符、非注释的子元素 */
+    private fun findFirstNonWhitespaceChild(element: PsiElement): PsiElement? {
+        var child = element.firstChild
+        while (child != null) {
+            if (child !is PsiWhiteSpace && child !is PsiComment) {
+                return child
+            }
+            child = child.nextSibling
+        }
+        return null
     }
 
 
@@ -533,7 +614,12 @@ class I18nProcessor(
         }
 
 
-        // 步骤4：保存提取的message（按trim后的value去重）
+        // 步骤4：检查 message 是否包含中文，不含中文则跳过
+        if (!hasChinese(message)) {
+            return
+        }
+
+        // 步骤5：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
@@ -626,6 +712,28 @@ class I18nProcessor(
         return dummyLiteral.lastChild
     }
 
+    /**
+     * 从文本创建 JS 语句（使用 PsiFileFactory 构造完整 PSI 语句节点）。
+     * 相比直接操作 AST 节点，这种方式创建的语句结构完整，
+     * 不会导致 Document is locked 异常。
+     */
+    private fun createJSStatementFromText(text: String, context: PsiElement): PsiElement {
+        val project = context.project
+        val language = context.containingFile?.language
+            ?: error("Cannot determine language for context element")
+        val dummyFile = PsiFileFactory.getInstance(project).createFileFromText(
+            "dummy.js",
+            language,
+            text
+        )
+        // 跳过空白符，取第一个有效语句
+        var child: PsiElement? = dummyFile.firstChild
+        while (child != null && child is PsiWhiteSpace) {
+            child = child.nextSibling
+        }
+        return child ?: dummyFile.firstChild
+    }
+
     fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
         val raw = stringExpr.text
         if (raw.isEmpty()) return
@@ -642,7 +750,7 @@ class I18nProcessor(
         val parent = stringExpr.parent
         val callExpr = when {
             parent is JSCallExpression -> parent
-            parent?.parent is JSCallExpression -> parent?.parent as JSCallExpression
+            parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
         if (callExpr != null) {
@@ -738,6 +846,12 @@ class I18nProcessor(
         }*/
 
         if (!hasChinese(raw)) {
+            return
+        }
+
+        // 跳过模板字面量内部的字符串字面量（如 `${'中文'}` 中的 '中文'），
+        // 因为外层模板字面量的处理逻辑会统一处理
+        if (PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java) != null) {
             return
         }
 
