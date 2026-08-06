@@ -4,11 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import com.intellij.openapi.fileTypes.FileTypeManager
-import com.intellij.openapi.extensions.PluginId
-import com.intellij.ide.plugins.PluginManager
-import com.intellij.ide.plugins.PluginManagerCore
-import com.intellij.openapi.application.ApplicationManager
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
@@ -17,7 +12,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
-    
+
         val file = myFixture.configureByText(
             "Test.vue",
             """
@@ -28,26 +23,18 @@ class I18nProcessorTest : BasePlatformTestCase() {
             </template>
             """.trimIndent()
         )
-        
-println(file.language)
-println(file.node.elementType)
-println(file.text)
-println(file.fileType)
-println(file.language)
+
         val processor = I18nProcessor(
             project,
             file
         )
 
-
         processor.collect()
-
 
         assertEquals(
             1,
             processor.extractedStrings.size
         )
-
 
         assertEquals(
             "你好",
@@ -68,21 +55,17 @@ println(file.language)
             """.trimIndent()
         )
 
-
         val processor = I18nProcessor(
             project,
             file
         )
 
-
         processor.collect()
-
 
         assertEquals(
             1,
             processor.extractedStrings.size
         )
-
 
         assertEquals(
             "你好",
@@ -111,15 +94,12 @@ println(file.language)
             """.trimIndent()
         )
 
-
         val processor = I18nProcessor(
             project,
             file
         )
 
-
         processor.collect()
-
 
         assertEquals(
             1,
@@ -140,18 +120,124 @@ println(file.language)
             """.trimIndent()
         )
 
+        val processor = I18nProcessor(
+            project,
+            file
+        )
+
+        processor.collect()
+
+        val extractedStr = processor.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val existingStr = processor.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        if (processor.extractedStrings.isNotEmpty()) {
+            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.effects.size}")
+        }
+    }
+
+
+    /**
+     * 测试 Vue 模板中已存在 $t(`反引号字符串`) 应跳过提取并正确识别为已有
+     */
+    fun testVueExistingBacktickTShouldSkip() {
+
+        val file = myFixture.configureByText(
+            "Test.vue",
+            """
+            <template>
+                <Button type="primary" :loading="loading" @click="() => handleSubmit()">
+                    {{ ${'$'}t(`确定`) }}
+                </Button>
+            </template>
+            """.trimIndent()
+        )
 
         val processor = I18nProcessor(
             project,
             file
         )
 
-
         processor.collect()
 
-
+        // 不应提取已有 $t() 调用的文本
         assertTrue(
+            "extractedStrings should be empty but got: ${processor.extractedStrings}",
             processor.extractedStrings.isEmpty()
+        )
+        // 应正确识别已有 $t() 调用
+        assertTrue(
+            "existingStrings should contain '确定' but got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("确定")
+        )
+    }
+
+
+    /**
+     * 测试 Vue 模板中各种引号风格的 $t() 都能跳过并识别
+     */
+    fun testVueAllQuoteStylesShouldSkip() {
+        val styles = listOf(
+            "backtick" to "`确定`",
+            "double" to "\"确定\"",
+            "single" to "'确定'"
+        )
+
+        for ((name, argText) in styles) {
+            val file = myFixture.configureByText(
+                "Test_$name.vue",
+                """
+                <template>
+                    <div>{{ ${'$'}t($argText) }}</div>
+                </template>
+                """.trimIndent()
+            )
+
+            val processor = I18nProcessor(project, file)
+            processor.collect()
+
+            assertTrue(
+                "[$name] extractedStrings should be empty but got: ${processor.extractedStrings}",
+                processor.extractedStrings.isEmpty()
+            )
+            assertTrue(
+                "[$name] existingStrings should contain '确定' but got: ${processor.existingStrings}",
+                processor.existingStrings.containsValue("确定")
+            )
+        }
+    }
+
+
+    /**
+     * 测试混合场景：已有 $t(`确定`) 和其他中文文本共存
+     * 确保已有的不会被重复提取，新的文本正常提取
+     */
+    fun testVueMixedContent() {
+        val file = myFixture.configureByText(
+            "Test.vue",
+            """<template>
+  <Button type="primary" :loading="loading" @click="() => handleSubmit()">
+        {{ ${'$'}t(`确定`) }}
+      </Button>
+  <div>其他文本</div>
+</template>""".trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 已有的 $t(`确定`) 不应被提取
+        assertFalse(
+            "extractedStrings should not contain '确定'",
+            processor.extractedStrings.containsValue("确定")
+        )
+        // 新的中文文本应被提取
+        assertTrue(
+            "extractedStrings should contain '其他文本' but got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("其他文本")
+        )
+        // 已有的 $t(`确定`) 应被识别
+        assertTrue(
+            "existingStrings should contain '确定'",
+            processor.existingStrings.containsValue("确定")
         )
     }
 
@@ -166,17 +252,14 @@ println(file.language)
             ""
         )
 
-
         val processor = I18nProcessor(
             project,
             file
         )
 
-
         assertTrue(
             processor.hasChinese("你好")
         )
-
 
         assertFalse(
             processor.hasChinese("hello")
@@ -194,12 +277,10 @@ println(file.language)
             ""
         )
 
-
         val processor = I18nProcessor(
             project,
             file
         )
-
 
         assertEquals(
             "\$t('你好')",

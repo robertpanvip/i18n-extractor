@@ -86,25 +86,28 @@ class I18nProcessor(
         }
 
         val quote = "`"
+        // 过滤掉 PsiWhiteSpace 子节点，避免首尾空白干扰 raw 字符串构建
+        val children = element.children.filter { it !is PsiWhiteSpace }
+        if (children.isEmpty()) return
+
         val sb = StringBuilder()
-        element.children.forEachIndexed { index, e ->
+        children.forEachIndexed { index, e ->
             val text = rm(e)
             when (index) {
-                // 第一个节点：拼接`开头
                 0 -> sb.append(quote).append(text)
-                // 最后一个节点：拼接`结尾
-                element.children.lastIndex -> sb.append(text).append(quote)
-                // 中间节点：过滤空白，直接拼接
-                else -> if (e !is PsiWhiteSpace) sb.append(text)
+                children.lastIndex -> sb.append(text).append(quote)
+                else -> sb.append(text)
             }
         }
-        if (element.children.size == 1) {
+        if (children.size == 1) {
             sb.append(quote)
         }
         val raw = sb.toString().trim()
 
         // 已是 $t() 调用的跳过（兼容 ${ $t( 和 ${$t( 两种写法）
-        if (raw.replace(" ", "").startsWith("`\${\$t(")) {
+        // 同时去除所有空白字符后检查，避免换行/空格干扰
+        val compactRaw = raw.replace(Regex("\\s"), "")
+        if (compactRaw.startsWith("`\${\$t(")) {
             return
         }
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
@@ -161,16 +164,40 @@ class I18nProcessor(
         // 1. 模板 {{ }} 中的注入 JS
         PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
             if (isMustache(xmlText.text)) {
-                InjectedLanguageManager.getInstance(project)
-                    .getInjectedPsiFiles(xmlText)?.forEach { pair ->
+                val injected = InjectedLanguageManager.getInstance(project)
+                    .getInjectedPsiFiles(xmlText)
+                if (injected != null && injected.isNotEmpty()) {
+                    // 有 JS 注入：通过 PSI 遍历查找 $t() 调用
+                    injected.forEach { pair ->
                         collectTKeysRecursive(pair.first)
                     }
+                }
+                // 无论是否有 JS 注入，都从原始文本中补充提取 $t() 调用。
+                // backtick 模板字符串 $t(`确定`) 虽然有注入但注入的 PSI 可能不包含
+                // JSCallExpression，导致 $t() 调用被遗漏。
+                collectTKeysFromRawText(xmlText.text)
             }
         }
 
         // 2. script / JS / TS 中的 $t() 调用
         PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
             collectTKeyFromCall(call)
+        }
+    }
+
+    /**
+     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本') 调用，
+     * 用于 Vue 模板中 backtick 等无法被 JS 注入解析的情况。
+     */
+    private fun collectTKeysFromRawText(text: String) {
+        // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
+        // 使用反向引用确保引号配对（如开闭都是反引号）
+        // 注意：必须用普通字符串（非 raw string）才能正确转义 $ 为 \$
+        val pattern = Regex("\\$(?:t|tc)\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+        pattern.findAll(text).forEach { match ->
+            val content = match.groupValues[2]
+            val key = generateKey(content.trim(), psiFile)
+            existingStrings.putIfAbsent(key, content.trim())
         }
     }
 
