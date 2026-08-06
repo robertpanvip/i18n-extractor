@@ -4,7 +4,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-
+import com.intellij.openapi.fileTypes.FileTypeManager
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
@@ -28,7 +28,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
 println(file.language)
 println(file.node.elementType)
 println(file.text)
-
+println(file.fileType)
+println(file.language)
         val processor = I18nProcessor(
             project,
             file
