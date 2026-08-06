@@ -21,9 +21,10 @@ repositories {
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        intellijIdeaUltimate(ext("platform.version")) {
-         useInstaller = false
-        }
+        intellijIdeaUltimate(
+         ext("platform.version"),
+         false
+       )
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
