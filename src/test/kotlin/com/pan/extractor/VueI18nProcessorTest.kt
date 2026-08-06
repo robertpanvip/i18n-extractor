@@ -18,6 +18,23 @@ import org.junit.Assert.assertTrue
  */
 class VueI18nProcessorTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // 创建 Vue 项目的 package.json（包含 vue 依赖，无 react 依赖）
+        myFixture.addFileToProject(
+            "package.json",
+            """
+            {
+              "name": "vue-test-project",
+              "dependencies": {
+                "vue": "^3.0.0",
+                "vue-i18n": "^9.0.0"
+              }
+            }
+            """.trimIndent()
+        )
+    }
+
     // ============================================================
     // 1. 基础文本提取
     // ============================================================
@@ -599,5 +616,69 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         assertEquals(1, processor.extractedStrings.size)
         assertTrue(processor.extractedStrings.containsValue("真实文本"))
+    }
+
+    // ============================================================
+    // 10. Vue 项目中的 TSX 文件（Vue 3 + TSX 场景）
+    // ============================================================
+
+    /**
+     * 测试 Vue 项目中 .tsx 文件的模板字面量插值应使用 Vue 的单括号格式 {key}
+     * 而不是 React 的双括号格式 {{key}}
+     */
+    fun testVueProjectTsxTemplateLiteralUsesSingleBrace() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import { defineComponent, ref } from 'vue'
+
+            export default defineComponent({
+                setup() {
+                    const name = ref('World')
+                    const msg = `你好${'$'}{name}`
+                    return () => <div>{msg}</div>
+                }
+            })
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 模板字面量变量插值应使用 Vue 的单括号格式 {0}，而不是 React 的 {{0}}
+        assertTrue(
+            "Vue 项目中 TSX 的模板字面量插值应使用单括号格式 {0}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{0}")
+        )
+        assertFalse(
+            "Vue 项目中 TSX 的模板字面量插值不应使用双括号格式 {{0}}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{{0}}")
+        )
+    }
+
+    /**
+     * 测试 Vue 项目中 isReact 判断应为 false（即使文件是 .tsx 后缀）
+     */
+    fun testVueProjectTsxIsReactShouldBeFalse() {
+        val file = myFixture.configureByText(
+            "Component.tsx",
+            """
+            import { defineComponent } from 'vue'
+
+            export default defineComponent({
+                setup() {
+                    return () => <div>测试组件</div>
+                }
+            })
+            """.trimIndent()
+        )
+
+        val element = file.firstChild
+        val isReact = com.pan.extractor.Util.isReact(element)
+
+        assertFalse(
+            "Vue 项目中的 .tsx 文件 isReact 应为 false，因为 package.json 中包含 vue 依赖",
+            isReact
+        )
     }
 }

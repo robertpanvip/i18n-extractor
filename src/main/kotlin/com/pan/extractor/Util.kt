@@ -83,6 +83,7 @@ object Util {
      * 仅依据 package.json 依赖判断：
      * 1. .vue 文件直接排除（Vue）
      * 2. 依赖 react 且不依赖 vue → React
+     * 注意：Vue 项目中也可能有 .tsx 文件，因此不再通过文件后缀直接判断
      */
     fun isReact(element: PsiElement): Boolean {
         val containingFile = element.containingFile ?: return false
@@ -90,12 +91,6 @@ object Util {
         // .vue 文件肯定是 Vue，不是 React
         if (containingFile.name.endsWith(".vue", ignoreCase = true)) {
             return false
-        }
-
-        // .jsx/.tsx 文件直接判定为 React
-        val name = containingFile.name.lowercase()
-        if (name.endsWith(".jsx") || name.endsWith(".tsx")) {
-            return true
         }
 
         // 项目 package.json 依赖（react 且不依赖 vue）
