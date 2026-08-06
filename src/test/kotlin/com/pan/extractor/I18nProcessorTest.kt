@@ -16,16 +16,13 @@ class I18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
-    val pluginId = PluginId.getId(
-            "org.jetbrains.plugins.vue"
-        )
+     val fileTypeManager = FileTypeManager.getInstance()
 
-
-        val installed =
-            PluginManagerCore.isPluginInstalled(pluginId)
-         println(
-            "vue installed = $installed"
-        )
+    val vueFileType =
+        fileTypeManager.getFileTypeByFileName("Test.vue")
+         println("fileType=$vueFileType")
+    println("name=${vueFileType.name}")
+    
         val file = myFixture.configureByText(
             "Test.vue",
             """
