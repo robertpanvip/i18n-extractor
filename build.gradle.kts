@@ -10,8 +10,6 @@ group = "com.pan"
 version = "1.3.2"
 
 repositories {
-    maven { url = uri("https://maven.aliyun.com/repository/public") }
-    maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
@@ -24,7 +22,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         
-        intellijIdeaUltimate("2026.1") {
+        intellijIdeaUltimate("2025.3") {
             useInstaller = false
         }
 
