@@ -110,6 +110,41 @@ class I18nProcessor(
         if (compactRaw.startsWith("`\${\$t(")) {
             return
         }
+
+        // 1. 先尝试通过注入的 JS 提取字符串字面量
+        // 对于复杂表达式（三目、函数调用等），注入的 JS PSI 能准确找到内部的字符串
+        val injected = InjectedLanguageManager.getInstance(project)
+            .getInjectedPsiFiles(element)
+        if (injected != null && injected.isNotEmpty()) {
+            var foundStrings = false
+            injected.forEach { pair ->
+                pair.first.accept(object : PsiRecursiveElementWalkingVisitor() {
+                    override fun visitElement(e: PsiElement) {
+                        if (e is JSLiteralExpression && !isInComment(e)) {
+                            // 跳过模板字面量内部的字符串（避免重复提取）
+                            if (PsiTreeUtil.getParentOfType(e, JSStringTemplateExpression::class.java) == null) {
+                                // 跳过已在 $t() 调用中的字符串
+                                if (!isTransformedCalled(e)) {
+                                    collectJSStringChange(e, changes)
+                                    foundStrings = true
+                                }
+                            }
+                        }
+                        if (e is JSBinaryExpression && !isInComment(e)) {
+                            collectJSBinaryExpressionChange(e, changes)
+                            foundStrings = true
+                        }
+                        super.visitElement(e)
+                    }
+                })
+            }
+            // 如果注入 JS 中找到了字符串，就不再用模板字符串方式处理
+            if (foundStrings) {
+                return
+            }
+        }
+
+        // 2. 回退方案：用模板字符串方式处理（适用于简单模板字面量场景）
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
@@ -560,7 +595,12 @@ class I18nProcessor(
         }
 
 
-        // 步骤4：保存提取的message（按trim后的value去重）
+        // 步骤4：检查 message 是否包含中文，不含中文则跳过
+        if (!hasChinese(message)) {
+            return
+        }
+
+        // 步骤5：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
