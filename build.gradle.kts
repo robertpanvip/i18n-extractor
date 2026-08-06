@@ -21,9 +21,7 @@ repositories {
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        intellijIdeaUltimate("2025.3") {
-          useInstaller = false
-        }
+        webstorm("2025.3")
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(TestFrameworkType.Plugin.XML)
