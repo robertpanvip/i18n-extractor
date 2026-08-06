@@ -17,13 +17,6 @@ class I18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
-     println(
-    ApplicationManager.getApplication()
-        .getLoadedPlugins()
-        .joinToString("\n") {
-            it.pluginId.id
-        }
-)
     
         val file = myFixture.configureByText(
             "Test.vue",
