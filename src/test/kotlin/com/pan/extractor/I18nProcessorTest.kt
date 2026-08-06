@@ -24,7 +24,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
             </template>
             """.trimIndent()
         )
-
+        
+println(file.language)
+println(file.node.elementType)
+println(file.text)
 
         val processor = I18nProcessor(
             project,
