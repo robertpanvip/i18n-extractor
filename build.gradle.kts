@@ -43,6 +43,17 @@ intellijPlatform {
 }
 
 tasks {
+  test {
+        useJUnit()
+
+        testLogging {
+            events(
+                "passed",
+                "failed",
+                "skipped"
+            )
+        }
+    }
     // Set the JVM compatibility versions
     withType<JavaCompile> {
         sourceCompatibility = "21"
