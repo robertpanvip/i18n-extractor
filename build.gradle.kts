@@ -26,7 +26,7 @@ dependencies {
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
         bundledPlugin("JavaScript") // 让 PSI API 可用
-        bundledPlugin("VueJS")
+        bundledPlugin("org.jetbrains.plugins.vue")
     }
 
     testImplementation(
