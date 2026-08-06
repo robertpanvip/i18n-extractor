@@ -12,6 +12,24 @@ import org.junit.Assert.assertTrue
  */
 class ReactI18nProcessorTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // 创建 React 项目的 package.json（包含 react 依赖，无 vue 依赖）
+        myFixture.addFileToProject(
+            "package.json",
+            """
+            {
+              "name": "react-test-project",
+              "dependencies": {
+                "react": "^18.0.0",
+                "react-dom": "^18.0.0",
+                "react-i18next": "^13.0.0"
+              }
+            }
+            """.trimIndent()
+        )
+    }
+
     // ============================================================
     // 1. JSX 文本提取
     // ============================================================
@@ -367,5 +385,58 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         assertTrue(processor.extractedStrings.containsValue("真实文本"))
         assertFalse(processor.extractedStrings.containsValue("这是 JSX 注释，不应提取"))
+    }
+
+    // ============================================================
+    // 7. 通过 package.json 依赖判断（非 .tsx 后缀文件）
+    // ============================================================
+
+    /**
+     * 测试 React 项目中普通 .ts 文件的模板字面量插值应使用 React 的双括号格式 {{key}}
+     * 因为 package.json 中包含 react 依赖，即使不是 .tsx 后缀也应判定为 React
+     */
+    fun testReactProjectTsFileUsesDoubleBrace() {
+        val file = myFixture.configureByText(
+            "utils.ts",
+            """
+            const name = "World"
+            const msg = `你好${'$'}{name}`
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 模板字面量变量插值应使用 React 的双括号格式 {{0}}
+        assertTrue(
+            "React 项目中 .ts 文件的模板字面量插值应使用双括号格式 {{0}}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{{0}}")
+        )
+        assertFalse(
+            "React 项目中 .ts 文件的模板字面量插值不应使用单括号格式 {0}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{0}")
+        )
+    }
+
+    /**
+     * 测试 React 项目中 isReact 判断应为 true（即使文件是普通 .ts 后缀）
+     */
+    fun testReactProjectTsFileIsReactShouldBeTrue() {
+        val file = myFixture.configureByText(
+            "helper.ts",
+            """
+            export function formatMessage(name: string) {
+                return `你好${'$'}{name}`
+            }
+            """.trimIndent()
+        )
+
+        val element = file.firstChild
+        val isReact = com.pan.extractor.Util.isReact(element)
+
+        assertTrue(
+            "React 项目中的 .ts 文件 isReact 应为 true，因为 package.json 中包含 react 依赖",
+            isReact
+        )
     }
 }
