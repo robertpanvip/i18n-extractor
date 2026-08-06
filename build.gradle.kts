@@ -24,7 +24,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         
-        webstorm("261.24374.151") {
+        intellijIdeaUltimate("261.24374.151") {
             useInstaller = false
         }
 
