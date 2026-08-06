@@ -23,7 +23,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         
-        intellijIdeaUltimate("2025.3") {
+        intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
             useInstaller = false
         }
 
