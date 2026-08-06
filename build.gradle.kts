@@ -32,8 +32,10 @@ dependencies {
     
         bundledPlugins(
             "JavaScript",
-            "org.jetbrains.plugins.vue", 
+            "org.jetbrains.plugins.vue"
         )
+     platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
+     platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
     }
 
     testImplementation(
