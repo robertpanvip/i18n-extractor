@@ -28,9 +28,7 @@ dependencies {
         bundledPlugin("JavaScript") // 让 PSI API 可用
         bundledPlugin("org.jetbrains.plugins.vue")
     }
-    testImplementation(
-        "com.jetbrains.intellij.platform:test-framework:2025.3"
-    )
+
     testImplementation(
         "junit:junit:4.13.2"
     )
