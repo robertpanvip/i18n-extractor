@@ -243,6 +243,114 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
 
     /**
+     * 测试模板字面量中纯字符串插值应内联合并
+     * 如 `插件管理${'这是我的测试'}` -> $t('插件管理这是我的测试')
+     */
+    fun testTemplateLiteralPureStringInterpolation() {
+
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = `插件管理${'$'}{'这是我的测试'}`
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(
+            project,
+            file
+        )
+
+        processor.collect()
+
+        // 纯字符串插值应被内联，整体作为一个字符串提取
+        assertEquals(
+            1,
+            processor.extractedStrings.size
+        )
+        // 合并后的完整文本
+        assertEquals(
+            "插件管理这是我的测试",
+            processor.extractedStrings.values.first()
+        )
+    }
+
+
+    /**
+     * 测试模板字面量中双引号纯字符串插值
+     * 如 `前缀${"中文后缀"}` -> $t('前缀中文后缀')
+     */
+    fun testTemplateLiteralDoubleQuotePureStringInterpolation() {
+
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = `前缀${'$'}{"中文后缀"}`
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(
+            project,
+            file
+        )
+
+        processor.collect()
+
+        assertEquals(1, processor.extractedStrings.size)
+        assertEquals("前缀中文后缀", processor.extractedStrings.values.first())
+    }
+
+
+    /**
+     * 测试模板字面量中变量插值不应被内联
+     * 如 `你好${name}` -> $t('你好{0}', { "0": name })
+     */
+    fun testTemplateLiteralVariableInterpolation() {
+
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = `你好${'$'}{name}`
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(
+            project,
+            file
+        )
+
+        processor.collect()
+
+        assertEquals(1, processor.extractedStrings.size)
+        assertEquals("你好{0}", processor.extractedStrings.values.first())
+    }
+
+
+    /**
+     * 测试模板字面量中混合插值（纯字符串 + 变量）
+     * 如 `前缀${'中间'}${var}后缀` -> $t('前缀中间{0}后缀', { "0": var })
+     */
+    fun testTemplateLiteralMixedInterpolation() {
+
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = `前缀${'$'}{'中间'}${'$'}{var}后缀`
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(
+            project,
+            file
+        )
+
+        processor.collect()
+
+        assertEquals(1, processor.extractedStrings.size)
+        assertEquals("前缀中间{0}后缀", processor.extractedStrings.values.first())
+    }
+
+
+    /**
      * 测试中文判断
      */
     fun testHasChinese() {

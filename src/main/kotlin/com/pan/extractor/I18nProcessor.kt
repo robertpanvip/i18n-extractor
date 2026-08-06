@@ -768,6 +768,12 @@ class I18nProcessor(
             return
         }
 
+        // 跳过模板字面量内部的字符串字面量（如 `${'中文'}` 中的 '中文'），
+        // 因为外层模板字面量的处理逻辑会统一处理
+        if (PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java) != null) {
+            return
+        }
+
         if (isJSTemplateLiteral(raw)) {
             return collectJSStringTemplateFromExpression(ele, changes);
         }
