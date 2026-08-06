@@ -1,4 +1,5 @@
 import org.jetbrains.intellij.platform.gradle.models.Coordinates
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
     id("java")
@@ -26,7 +27,10 @@ dependencies {
             useInstaller = false
         }
 
-       testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.Plugin.XML)
+        testFramework(TestFrameworkType.Plugin.JavaScript)
+        testFramework(TestFrameworkType.Platform)
+
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
     
@@ -34,8 +38,9 @@ dependencies {
             "JavaScript",
             "org.jetbrains.plugins.vue"
         )
-     platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
-     platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
+
+        platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
+        platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
     }
 
     testImplementation(
