@@ -22,7 +22,7 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
         
-        intellijIdeaUltimate("2025.3") {
+        webstorm("2025.3") {
             useInstaller = false
         }
 
