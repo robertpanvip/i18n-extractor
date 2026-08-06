@@ -8,6 +8,7 @@ import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.ide.plugins.PluginManager
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.openapi.application.ApplicationManager
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
@@ -16,12 +17,13 @@ class I18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
-     val fileTypeManager = FileTypeManager.getInstance()
-
-    val vueFileType =
-        fileTypeManager.getFileTypeByFileName("Test.vue")
-         println("fileType=$vueFileType")
-    println("name=${vueFileType.name}")
+     println(
+    ApplicationManager.getApplication()
+        .getLoadedPlugins()
+        .joinToString("\n") {
+            it.pluginId.id
+        }
+)
     
         val file = myFixture.configureByText(
             "Test.vue",
