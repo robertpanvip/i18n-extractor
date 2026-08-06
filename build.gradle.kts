@@ -24,7 +24,6 @@ dependencies {
         webstorm("2025.3")
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
-       testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.XML)
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
