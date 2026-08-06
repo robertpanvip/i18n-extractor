@@ -22,12 +22,14 @@ dependencies {
     intellijPlatform {
         webstorm("2025.3")  // 或 "2025.2"，根据你想测试的版本
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
-
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
-        bundledPlugin("JavaScript") // 让 PSI API 可用
-        bundledPlugin("JavaScriptLanguage") 
-        bundledPlugin("org.jetbrains.plugins.vue")
+    
+        bundledPlugins(
+            "JavaScript",
+            "org.jetbrains.plugins.vue", 
+        )
     }
 
     testImplementation(
