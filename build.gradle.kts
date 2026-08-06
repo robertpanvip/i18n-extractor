@@ -21,7 +21,9 @@ repositories {
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        webstorm("2025.3")
+        intellijIdeaUltimate(ext("platform.version")) {
+         useInstaller = false
+        }
 
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.JavaScript)
