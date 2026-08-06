@@ -20,9 +20,13 @@ repositories {
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
-        webstorm("2025.3")  // 或 "2025.2"，根据你想测试的版本
-        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
-    
+      webstorm("2025.3") {
+       useInstaller = false
+      }
+
+       testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+       testFramework(TestFrameworkType.Plugin.XML)
+       testFramework(TestFrameworkType.Plugin.JavaScript)
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
     
