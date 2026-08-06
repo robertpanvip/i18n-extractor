@@ -636,13 +636,20 @@ class I18nProcessor(
     }
 
     fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean {
-        val parent = stringExpr.parent.parent
-        //print("parent,${parent.text}${parent is JSCallExpression}")
-        if (parent is JSCallExpression) {
-            val callee = parent.methodExpression?.text
+        // 兼容两种 PSI 结构：
+        // 1. JSCallExpression -> JSLiteralExpression（新版 IntelliJ，无 JSArgumentList）
+        // 2. JSCallExpression -> JSArgumentList -> JSLiteralExpression（旧版结构）
+        val parent = stringExpr.parent
+        val callExpr = when {
+            parent is JSCallExpression -> parent
+            parent?.parent is JSCallExpression -> parent?.parent as JSCallExpression
+            else -> null
+        }
+        if (callExpr != null) {
+            val callee = callExpr.methodExpression?.text
             if (callee == "\$t") return true
         }
-        return false;
+        return false
     }
 
     /**
@@ -763,11 +770,12 @@ class I18nProcessor(
         if (text.isEmpty()) return
         //print("$text,contains${raw.contains("\$t(")}\n")
 
-        val key = collectExtractedStrings(ele)
-
+        // 先检查是否已在 $t() 调用中，避免误添加到 extractedStrings
         if (isTransformedCalled(ele)) {
             return
         }
+
+        val key = collectExtractedStrings(ele)
 
         val quote = if (ele.text.startsWith('"')) "\"" else "'"
         val newText = "\$t($quote$key$quote)"
