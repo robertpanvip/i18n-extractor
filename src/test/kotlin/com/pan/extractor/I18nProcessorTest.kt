@@ -5,18 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import com.intellij.openapi.fileTypes.FileTypeManager
-
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.ide.plugins.PluginManager
 
-
-val vuePlugin = PluginManager
-    .getLoadedPlugins()
-    .any {
-        it.pluginId == PluginId.getId("org.jetbrains.plugins.vue")
-    }
-
-println("vue loaded = $vuePlugin")
 
 class I18nProcessorTest : BasePlatformTestCase() {
 
@@ -25,7 +16,21 @@ class I18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
+ PluginManagerCore
+            .getLoadedPlugins()
+            .forEach {
+                println(it.pluginId.id)
+            }
 
+
+        val vue =
+            PluginManagerCore.isPluginInstalled(
+                PluginId.getId("org.jetbrains.plugins.vue")
+            )
+
+
+        println("vue installed = $vue")
+        
         val file = myFixture.configureByText(
             "Test.vue",
             """
