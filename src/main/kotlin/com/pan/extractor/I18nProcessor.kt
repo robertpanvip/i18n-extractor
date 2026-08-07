@@ -848,23 +848,57 @@ class I18nProcessor(
     /**
      * 处理同一个 XmlText 中 {{ }} 表达式之间的普通文本。
      * 例如：{{ "a" }}-测试 {{ "b" }} 中的 "-测试" 部分。
-     * 通过遍历子节点中的 XmlToken(XML_DATA_CHARACTERS) 逐个处理。
+     * 通过计算文本偏移量，精确判断哪些 XML_DATA_CHARACTERS 在 mustache 外部。
      */
     private fun processPlainTextBetweenMustaches(element: PsiElement, changes: MutableList<() -> Unit>) {
+        val fullText = element.text
+        val elementStart = element.textRange.startOffset
+
+        // 找出所有 {{ }} 表达式在 element 文本中的相对偏移范围
+        val mustacheRanges = mutableListOf<IntRange>()
+        val regex = Regex("\\{\\{.*?\\}\\}")
+        regex.findAll(fullText).forEach { match ->
+            mustacheRanges.add(match.range.first until match.range.last + 1)
+        }
+
+        // 判断一个偏移量是否在 mustache 内部
+        fun isInsideMustache(relOffset: Int): Boolean {
+            return mustacheRanges.any { range -> relOffset >= range.first && relOffset < range.last }
+        }
+
         val children = element.children
         for (child in children) {
             if (child is XmlToken && child.tokenType == XmlTokenType.XML_DATA_CHARACTERS) {
                 val text = child.text
-                if (text.isNotBlank() && hasChinese(text)) {
-                    // 排除 mustache 语法本身（理论上 XML_DATA_CHARACTERS 不包含 {{ }}，但保险起见）
-                    if (!isMustache(text)) {
-                        val key = collectExtractedStrings(child)
-                        changes.add {
-                            if (!child.isValid) return@add
-                            val newContent = "{{ \$t(`$key`) }}"
-                            val newElement = createStringExpressionNode(newContent, child)
-                            child.replace(newElement)
-                        }
+                if (text.isBlank() || !hasChinese(text)) continue
+
+                // 计算这个 token 在 element 文本中的相对偏移量
+                val relStart = child.textRange.startOffset - elementStart
+                val relEnd = relStart + text.length
+
+                // 如果整个 token 都在 mustache 内部，跳过
+                if (isInsideMustache(relStart) && isInsideMustache(relEnd - 1)) continue
+
+                // 如果 token 部分在 mustache 内部，需要提取纯文本部分
+                var plainText = text
+                // 先去掉完整的 {{...}}
+                plainText = plainText.replace(Regex("\\{\\{.*?\\}\\}"), "")
+                // 去掉以 {{ 开头的部分
+                plainText = plainText.replace(Regex("^\\{\\{.*"), "")
+                // 去掉以 }} 结尾的部分
+                plainText = plainText.replace(Regex(".*\\}\\}"), "")
+                // 去掉残留的 {{ 或 }}
+                plainText = plainText.replace("{{", "").replace("}}", "")
+
+                if (plainText.isNotBlank() && hasChinese(plainText)) {
+                    val trimmed = plainText.trim()
+                    val key = generateKey(trimmed, child)
+                    extractedStrings.putIfAbsent(key, trimmed)
+                    changes.add {
+                        if (!child.isValid) return@add
+                        val newContent = "{{ \$t(`$key`) }}"
+                        val newElement = createStringExpressionNode(newContent, child)
+                        child.replace(newElement)
                     }
                 }
             }
