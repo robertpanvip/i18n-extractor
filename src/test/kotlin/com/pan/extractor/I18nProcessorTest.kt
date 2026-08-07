@@ -15,6 +15,22 @@ import org.junit.Assert.assertTrue
  */
 class I18nProcessorTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // 创建通用 JS 项目的 package.json（既无 react 也无 vue 依赖，isReact 返回 false，使用 Vue 单括号格式）
+        myFixture.addFileToProject(
+            "package.json",
+            """
+            {
+              "name": "generic-test-project",
+              "dependencies": {
+                "typescript": "^5.0.0"
+              }
+            }
+            """.trimIndent()
+        )
+    }
+
     // ============================================================
     // 1. 普通字符串字面量
     // ============================================================
