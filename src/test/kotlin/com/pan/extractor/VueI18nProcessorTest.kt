@@ -656,6 +656,109 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
+    // ============================================================
+    // 12. Bug 复现 - 混合引号三目 + 多表达式混合文本
+    // ============================================================
+
+    /**
+     * Bug1: 三目表达式混合引号（反引号 + 双引号）应都能提取
+     * {{ visibleToggle ? `点击展开` : "点击收起" }}
+     */
+    fun testVueTernaryMixedQuotes() {
+        val file = myFixture.configureByText(
+            "Test.vue",
+            """
+            <template>
+                <div>{{ visibleToggle ? `点击展开` : "点击收起" }}</div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertEquals(
+            "Should extract 2 strings from mixed-quote ternary, but got: ${processor.extractedStrings}",
+            2,
+            processor.extractedStrings.size
+        )
+        assertTrue(
+            "Should contain '点击展开', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("点击展开")
+        )
+        assertTrue(
+            "Should contain '点击收起', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("点击收起")
+        )
+    }
+
+    /**
+     * Bug2: 同一个 XmlText 中多个 {{ }} + 中间普通文本应都能提取
+     * <div>{{ "点击收起" }}-测试 {{ "点击收起" }}</div>
+     */
+    fun testVueMixedMustacheAndPlainText() {
+        val file = myFixture.configureByText(
+            "Test.vue",
+            """
+            <template>
+                <div>{{ "点击收起" }}-测试 {{ "点击收起" }}</div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // "点击收起" 来自两个 {{ }} 表达式（去重后1个）+ "-测试" 来自中间普通文本
+        assertTrue(
+            "Should contain '点击收起', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("点击收起")
+        )
+        assertTrue(
+            "Should contain '-测试' plain text between mustaches, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("-测试")
+        )
+    }
+
+    /**
+     * Bug3: 已有双引号 import 时不应重复添加 import
+     * import { useI18n } from "vue-i18n"; （双引号）不应再新增一个单引号版本
+     */
+    fun testVueExistingDoubleQuoteImportShouldNotDuplicate() {
+        val file = myFixture.configureByText(
+            "Test.vue",
+            """
+            <script setup lang="ts">
+            import { useI18n } from "vue-i18n";
+            import { ref } from "vue";
+            const { t: ${'$'}t } = useI18n();
+            const visibleToggle = ref();
+            </script>
+
+            <template>
+              <div>
+                {{ visibleToggle ? "点击展开" : "点击收起" }}
+              </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        // 统计 vue-i18n import 出现次数，应该只有 1 个
+        val importCount = Regex("import\\s*\\{[^}]*useI18n[^}]*\\}\\s*from\\s*['\"]vue-i18n['\"]")
+            .findAll(resultText).count()
+
+        assertEquals(
+            "Should have exactly 1 vue-i18n import, got $importCount. Result:\n$resultText",
+            1,
+            importCount
+        )
+    }
+
     /**
      * 测试 Vue 项目中 isReact 判断应为 false（即使文件是 .tsx 后缀）
      */
