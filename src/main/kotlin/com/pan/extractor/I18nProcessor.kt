@@ -245,8 +245,31 @@ class I18nProcessor(
     private fun collectTKeysFromRawText(text: String) {
         // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
         // 使用反向引用确保引号配对（如开闭都是反引号）
-        // 使用 raw string 避免复杂的转义，$ 用 ${'$'} 表示
-        val pattern = Regex("""${'$'}(?:t|tc)\(\s*([`"'])([^`"'\n]+)\1\s*[,)]""")
+        // 使用 char 拼接构建正则字符串，完全避免 Kotlin 转义序列问题
+        val bs = '\\'.toString()       // 单个反斜杠字符
+        val dollar = '$'.toString()     // $ 字符
+        val bt = '`'.toString()         // 反引号
+        val dq = '"'.toString()         // 双引号
+        val sq = '\''.toString()        // 单引号
+        val quotes = bt + dq + sq       // 三种引号字符组
+        
+        // 正则: \$(?:t|tc)\(\s*([`"'])([^`"'\n]+)\1\s*[,)]
+        val patternStr = buildString {
+            append(bs).append(dollar)   // \$
+            append("(?:t|tc)")          // t 或 tc
+            append(bs).append("(")      // \(
+            append(bs).append("s")      // \s
+            append("*([")               // *(
+            append(quotes)              // [`"']
+            append("])([^")             // "])([^
+            append(quotes)              // [`"']
+            append(bs).append("n")      // \n
+            append("]+)")               // ]+
+            append(bs).append("1")      // \1
+            append(bs).append("s")      // \s
+            append("*[,)]")             // *[,)]
+        }
+        val pattern = Regex(patternStr)
         pattern.findAll(text).forEach { match ->
             val content = match.groupValues[2]
             val key = generateKey(content.trim(), psiFile)
