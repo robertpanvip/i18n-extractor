@@ -245,8 +245,8 @@ class I18nProcessor(
     private fun collectTKeysFromRawText(text: String) {
         // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
         // 使用反向引用确保引号配对（如开闭都是反引号）
-        // 注意：必须用普通字符串（非 raw string）才能正确转义 $ 为 \$
-        val pattern = Regex("\\$(?:t|tc)\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+        // 使用 raw string 避免复杂的转义，$ 用 ${'$'} 表示
+        val pattern = Regex("""${'$'}(?:t|tc)\(\s*([`"'])([^`"'\n]+)\1\s*[,)]""")
         pattern.findAll(text).forEach { match ->
             val content = match.groupValues[2]
             val key = generateKey(content.trim(), psiFile)
