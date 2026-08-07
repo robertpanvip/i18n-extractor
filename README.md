@@ -22,8 +22,7 @@
 | 类型 | 扩展名 |
 |------|--------|
 | Vue 单文件组件 | `.vue` |
-| React 组件 | `.jsx` `.tsx` |
-| JavaScript | `.js` |
+| React 组件 |  `.tsx` |
 | TypeScript | `.ts` |
 
 ## 安装
@@ -42,7 +41,7 @@
 
 ### 单文件提取
 
-1. 打开 `.vue` / `.jsx` / `.tsx` / `.js` / `.ts` 文件
+1. 打开 `.vue` / `.tsx` / `.ts` 文件
 2. 在编辑器中右键 → **中文国际化提取**
 3. 预览提取结果 JSON，确认后点击 OK
 4. 代码自动替换为 `$t()` 调用，JSON 自动复制到剪贴板
@@ -95,7 +94,7 @@ export default function App() {
 
 ### 模板字符串插值
 
-```js
+```ts
 // 转换前
 const msg = `欢迎，${userName}！`
 
