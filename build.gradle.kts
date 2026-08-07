@@ -22,7 +22,7 @@ repositories {
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        
+
         intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
             useInstaller = false
         }
@@ -33,19 +33,19 @@ dependencies {
 
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
-    
+
         bundledPlugins(
             "JavaScript",
             "org.jetbrains.plugins.vue",
- "org.intellij.plugins.postcss",
-      "com.intellij.css",
-      "org.jetbrains.plugins.sass",
-      "org.jetbrains.plugins.less",
-      "HtmlTools",
-      "com.intellij.copyright",
-      "intellij.webpack",
-      "JSIntentionPowerPack",
-      "JavaScriptDebugger",
+            "org.intellij.plugins.postcss",
+            "com.intellij.css",
+            "org.jetbrains.plugins.sass",
+            "org.jetbrains.plugins.less",
+            "HtmlTools",
+            "com.intellij.copyright",
+            "intellij.webpack",
+            "JSIntentionPowerPack",
+            "JavaScriptDebugger",
         )
 
         platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
@@ -71,12 +71,12 @@ intellijPlatform {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(26))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
 tasks {
-  test {
+    test {
         useJUnit()
 
         testLogging {
@@ -92,7 +92,7 @@ tasks {
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_26)
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
     }
 }
