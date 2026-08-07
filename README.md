@@ -3,7 +3,7 @@
 > IntelliJ IDEA 插件，一键提取 Vue / React 项目中的中文字符串，自动替换为 i18n 国际化调用。
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.3.2-blue)
+![GitHub release](https://img.shields.io/github/v/release/robertpanvip/i18n-extractor?color=blue)
 ![Tests](https://github.com/robertpanvip/i18n-extractor/actions/workflows/test.yml/badge.svg)
 
 ## 功能特性
