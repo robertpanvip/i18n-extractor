@@ -44,7 +44,7 @@ jobs:
 
       # 编译 Kotlin
       - name: Build
-        run: gradle build
+        run: gradle buildPlugin
 
 
       # 获取 tag
@@ -61,7 +61,7 @@ jobs:
 
       # 创建 Release 并上传产物
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
