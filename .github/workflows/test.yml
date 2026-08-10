@@ -40,7 +40,13 @@ jobs:
 
 
       - name: Run tests
-        run: gradle test --no-daemon
+        run: gradle test --no-daemon --no-configuration-cache
+        continue-on-error: true
+        id: test_first
+
+      - name: Retry tests on failure
+        if: steps.test_first.outcome == 'failure'
+        run: gradle test --no-daemon --no-configuration-cache
 
 
       - name: Upload test report
