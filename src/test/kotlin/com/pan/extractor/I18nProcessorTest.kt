@@ -675,6 +675,20 @@ class I18nProcessorTest : BasePlatformTestCase() {
         // 含单引号的文本应转义
         val result = processor.buildTFunctionExpr("它's", "{}")
         assertTrue("Should escape single quote, got: $result", result.contains("\\'"))
+
+        // 含换行符的文本应使用反引号模板字符串（修复：普通字符串跨行导致的解析截断 bug）
+        val newlineMsg = "1. 隔离库存\n2. 在线筛选\n3. 客户沟通"
+        val newlineResult = processor.buildTFunctionExpr(newlineMsg, "{}")
+        assertTrue(
+            "含换行符应使用反引号，got: $newlineResult",
+            newlineResult.startsWith("\$t(`") && newlineResult.endsWith("`)")
+        )
+        assertTrue(
+            "含换行符的结果应保留所有换行内容，got: $newlineResult",
+            newlineResult.contains("1. 隔离库存") &&
+                    newlineResult.contains("2. 在线筛选") &&
+                    newlineResult.contains("3. 客户沟通")
+        )
     }
 
     /**
@@ -698,5 +712,100 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("未提取"))
         // 已有的应在 existingStrings 中
         assertTrue(processor.existingStrings.containsValue("已提取"))
+    }
+
+    // ============================================================
+    // 9. 含 \n 转义换行的字符串字面量（修复截断 bug）
+    // ============================================================
+
+    /**
+     * 测试对象属性中含 \n 转义的多行字符串被完整提取（不应截断）
+     */
+    fun testObjectPropertyMultilineStringWithEscapedNewline() {
+        val file = myFixture.configureByText(
+            "data.ts",
+            """
+            const config = {
+                answer: "1. 隔离库存：冻结同批次2000片面板出货\n2. 在线筛选：增加AOI检测工位（阈值调整至CD≥0.8）\n3. 客户沟通：向重点客户提供替代批次",
+                keywords: ["AOI", "缺陷"]
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+
+        // answer 的长字符串应被完整提取为一个 $t 调用（使用反引号模板字符串），所有 3 条内容都应在 key 中
+        val extracted = processor.extractedStrings.values.firstOrNull {
+            it.contains("1. 隔离库存") && it.contains("2. 在线筛选") && it.contains("3. 客户沟通")
+        }
+        assertTrue(
+            "含 \\n 的多行字符串应作为整体被提取，got: ${processor.extractedStrings.values}",
+            extracted != null
+        )
+
+        // keywords 中 "缺陷"（中文）应被提取，"AOI"（英文）不应提取
+        assertTrue(
+            "keywords 中的 '缺陷' 应被提取，got: ${processor.extractedStrings.values}",
+            processor.extractedStrings.containsValue("缺陷")
+        )
+        assertFalse(
+            "keywords 中的 'AOI' 纯英文不应提取，got: ${processor.extractedStrings.values}",
+            processor.extractedStrings.containsValue("AOI")
+        )
+
+        // 替换后结果中应包含完整的 $t(...)，没有被截断
+        assertTrue(
+            "替换后 answer 应为 \$t(`...`) 完整模板字符串，got:\n$resultText",
+            resultText.contains("\$t(`1. 隔离库存")
+        )
+        assertTrue(
+            "替换后 answer 中应包含 2. 部分，不应截断，got:\n$resultText",
+            resultText.contains("2. 在线筛选")
+        )
+        assertTrue(
+            "替换后 answer 中应包含 3. 部分，不应截断，got:\n$resultText",
+            resultText.contains("3. 客户沟通")
+        )
+        // 反引号闭合检查：应只有一个 $t(`  配对 `) 完整闭合
+        assertTrue(
+            "替换后 answer 的 \$t 调用应使用反引号闭合，不应残留截断的双引号，got:\n$resultText",
+            !resultText.contains("\$t(\"1. 隔离库存")
+        )
+    }
+
+    /**
+     * 测试数组中已有的 \$t("缺陷") 调用 + 纯英文 "AOI" 共存时，相邻纯英文不应被误替换
+     */
+    fun testArrayMixExistingTAndEnglishStringNotAffected() {
+        val file = myFixture.configureByText(
+            "data.ts",
+            """
+            const data = {
+                keywords: ["AOI", ${'$'}t("缺陷")]
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // "AOI" 纯英文不应被提取
+        assertFalse(
+            "'AOI' 纯英文不应提取，got: ${processor.extractedStrings.values}",
+            processor.extractedStrings.containsValue("AOI")
+        )
+        // "缺陷" 已有 \$t()，应在 existingStrings 中而非 extractedStrings
+        assertFalse(
+            "'缺陷' 已有 \$t()，不应重复提取到 extractedStrings，got: ${processor.extractedStrings.values}",
+            processor.extractedStrings.containsValue("缺陷")
+        )
+        assertTrue(
+            "'缺陷' 应在 existingStrings 中，got: ${processor.existingStrings.values}",
+            processor.existingStrings.containsValue("缺陷")
+        )
     }
 }

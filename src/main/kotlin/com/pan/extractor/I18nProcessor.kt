@@ -891,15 +891,14 @@ class I18nProcessor(
 
         val key = collectExtractedStrings(ele)
 
-        val quote = if (ele.text.startsWith('"')) "\"" else "'"
-        val newText = "\$t($quote$key$quote)"
-        if (newText == text) return
+        // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
+        val newExprText = buildTFunctionExpr(key, "{}")
+        if (ele.text == newExprText) return
 
         changes.add {
-            val newExprText = newText
             val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
             if (newExpr != null) {
-                val newElement = newExpr.psi  // 或者 newAstNode.psi
+                val newElement = newExpr.psi
                 ele.replace(newElement)
             }
         }
