@@ -61,6 +61,10 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
                     group-id="EditorPopupMenu"
                     anchor="first"
             />
+            <add-to-group
+                    group-id="ProjectViewPopupMenu"
+                    anchor="first"
+            />
         </action>
     </actions>
 </idea-plugin>
