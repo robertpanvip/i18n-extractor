@@ -15,13 +15,6 @@ repositories {
     intellijPlatform {
         defaultRepositories()
     }
-    // Fallback: direct IntelliJ repositories (bypass cache-redirector on 502)
-    maven {
-        url = uri("https://www.jetbrains.com/intellij-repository/releases")
-    }
-    maven {
-        url = uri("https://www.jetbrains.com/intellij-repository/snapshots")
-    }
 }
 
 // Configure Gradle IntelliJ Plugin
