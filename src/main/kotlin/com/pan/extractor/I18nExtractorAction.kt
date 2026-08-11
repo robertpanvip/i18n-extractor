@@ -7,6 +7,8 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -96,14 +98,25 @@ class I18nExtractorAction : AnAction() {
         val processors = mutableListOf<I18nProcessor>()
         val extracted = mutableMapOf<String, String>()
 
-        for (file in files) {
-            val psiFile = psiManager.findFile(file) ?: continue
-            val processor = I18nProcessor(project, psiFile)
-            processor.collect()
-            extracted.putAll(processor.existingStrings)
-            extracted.putAll(processor.extractedStrings)
-            processors.add(processor)
-        }
+        // 使用进度对话框，避免文件过多时 UI 冻结
+        ProgressManager.getInstance().runProcessWithProgressSynchronously({
+            val indicator = ProgressManager.getInstance().progressIndicator
+            indicator.text = "Extracting i18n strings..."
+            indicator.isIndeterminate = false
+            for ((index, file) in files.withIndex()) {
+                if (indicator.isCanceled) break
+                indicator.fraction = (index + 1).toDouble() / files.size
+                indicator.text2 = file.name
+                val psiFile = psiManager.findFile(file) ?: continue
+                val processor = I18nProcessor(project, psiFile)
+                processor.collect()
+                extracted.putAll(processor.existingStrings)
+                extracted.putAll(processor.extractedStrings)
+                processors.add(processor)
+            }
+        }, "I18n Extraction", true, project)
+
+        if (processors.isEmpty()) return
 
         val dialog = ExtractedStringsDialog(project, extracted)
         if (dialog.showAndGet()) {

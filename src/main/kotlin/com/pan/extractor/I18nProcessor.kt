@@ -45,6 +45,9 @@ class I18nProcessor(
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
+    /** 检测到的翻译函数名（如 $t、i18n.global.t），默认 $t */
+    private var tFunctionName: String = "\$t"
+
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
     }
@@ -86,8 +89,8 @@ class I18nProcessor(
         }
 
         val quote = "`"
-        // 过滤掉 PsiWhiteSpace 子节点，避免首尾空白干扰 raw 字符串构建
-        val children = element.children.filter { it !is PsiWhiteSpace }
+        // 过滤掉 PsiWhiteSpace 和注释子节点，避免首尾空白和注释内容干扰 raw 字符串构建
+        val children = element.children.filter { it !is PsiWhiteSpace && !isComment(it) && it !is PsiComment }
         if (children.isEmpty()) return
 
         val sb = StringBuilder()
@@ -130,34 +133,30 @@ class I18nProcessor(
                                 }
                             }
                         }
-                        // 处理纯模板字面量（反引号字符串，无插值）
-                        // 例如三目表达式中 `点击展开` : "点击收起" 的反引号部分
-                        if (e is JSStringTemplateExpression && !isInComment(e)) {
-                            val text = e.text
-                            // 纯文本模板字面量（不含 ${} 插值）才提取
-                            if (text.startsWith("`") && text.endsWith("`") && !text.contains("\${")) {
-                                val content = text.substring(1, text.length - 1)
-                                if (hasChinese(content) && !isTransformedCalledTemplate(e)) {
-                                    collectTemplateLiteralChange(e, content, changes)
-                                    foundStrings = true
-                                }
-                            }
-                        }
                         if (e is JSBinaryExpression && !isInComment(e)) {
+                            // 只有实际产生变更时才标记 foundStrings，避免无条件跳过 $t() 检查
+                            val sizeBefore = changes.size
                             collectJSBinaryExpressionChange(e, changes)
-                            foundStrings = true
+                            if (changes.size > sizeBefore) {
+                                foundStrings = true
+                            }
                         }
                         super.visitElement(e)
                     }
                 })
             }
-
-            // 2. 同时处理 {{ }} 表达式之间的普通文本（含中文的部分）
-            // 例如：{{ "a" }}-测试 {{ "b" }} 中的 "-测试"
-            processPlainTextBetweenMustaches(element, changes)
-
             // 如果注入 JS 中找到了字符串，就不再用模板字符串方式处理
             if (foundStrings) {
+                return
+            }
+            // 如果 raw 中已包含 $t() 调用，说明所有字符串已在 $t() 中，跳过回退方案
+            if (raw.contains("\$t(") || raw.contains("i18n.global.t(") || raw.contains("i18n.t(")) {
+                return
+            }
+            // 如果 raw 去除 ${} 后只剩 JS 注释（如 {{ //新增按钮 }}），跳过
+            val contentOnly = raw.substring(1, raw.length - 1).trim()
+            val strippedContent = contentOnly.replace(Regex("\\$\\{[^}]*\\}"), "").trim()
+            if (strippedContent.startsWith("//") || (strippedContent.startsWith("/*") && strippedContent.endsWith("*/"))) {
                 return
             }
         }
@@ -210,10 +209,34 @@ class I18nProcessor(
     }
 
     /**
-     * 扫描文件中已有的 $t() / t() 调用，收集其 key 到 existingStrings。
+     * 扫描文件中已有的 $t() / t() / i18n.global.t() / i18n.t() 调用，收集其 key 到 existingStrings。
      * 覆盖模板注入 JS 和 script/JS/TS 两种来源。
+     * 同时检测文件使用的翻译函数名：
+     * - Vue: i18n.global.t（vue-i18n 全局实例）
+     * - React: i18n.t（i18next 全局实例）
+     * - 默认: $t（useI18n / useTranslation 解构）
+     * 注意：i18n.global.t 和 $t 可以在同一文件中共存，两者都识别为已翻译。
      */
     private fun collectExistingTKeys() {
+        // 0. 检测翻译函数名：扫描已有 JSCallExpression
+        // 优先级：i18n.global.t > i18n.t > $t（默认）
+        PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
+            val method = call.methodExpression
+            if (method is JSReferenceExpression) {
+                val text = method.text
+                // Vue: i18n.global.t / i18n.global.tc
+                if (text == "i18n.global.t" || text == "i18n.global.tc") {
+                    tFunctionName = "i18n.global.t"
+                }
+                // React: i18n.t / i18n.tc（i18next 全局实例）
+                else if (text == "i18n.t" || text == "i18n.tc") {
+                    if (tFunctionName == "\$t") {
+                        tFunctionName = "i18n.t"
+                    }
+                }
+            }
+        }
+
         // 1. 模板 {{ }} 中的注入 JS
         PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
             if (isMustache(xmlText.text)) {
@@ -239,37 +262,13 @@ class I18nProcessor(
     }
 
     /**
-     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本') 调用，
+     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本')、i18n.global.t(`文本`) 等调用，
      * 用于 Vue 模板中 backtick 等无法被 JS 注入解析的情况。
      */
     private fun collectTKeysFromRawText(text: String) {
-        // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
+        // 匹配 $t / $tc / i18n.global.t / i18n.global.tc / i18n.t / i18n.tc 调用
         // 使用反向引用确保引号配对（如开闭都是反引号）
-        // 使用 char 拼接构建正则字符串，完全避免 Kotlin 转义序列问题
-        val bs = '\\'.toString()       // 单个反斜杠字符
-        val dollar = '$'.toString()     // $ 字符
-        val bt = '`'.toString()         // 反引号
-        val dq = '"'.toString()         // 双引号
-        val sq = '\''.toString()        // 单引号
-        val quotes = bt + dq + sq       // 三种引号字符组
-        
-        // 正则: \$(?:t|tc)\(\s*([`"'])([^`"'\n]+)\1\s*[,)]
-        val patternStr = buildString {
-            append(bs).append(dollar)   // \$
-            append("(?:t|tc)")          // t 或 tc
-            append(bs).append("(")      // \(
-            append(bs).append("s")      // \s
-            append("*([")               // *(
-            append(quotes)              // [`"']
-            append("])([^")             // "])([^
-            append(quotes)              // [`"']
-            append(bs).append("n")      // \n
-            append("]+)")               // ]+
-            append(bs).append("1")      // \1
-            append(bs).append("s")      // \s
-            append("*[,)]")             // *[,)]
-        }
-        val pattern = Regex(patternStr)
+        val pattern = Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
         pattern.findAll(text).forEach { match ->
             val content = match.groupValues[2]
             val key = generateKey(content.trim(), psiFile)
@@ -292,7 +291,7 @@ class I18nProcessor(
         val method = call.methodExpression
         if (method is JSReferenceExpression) {
             val name = method.referenceName
-            if (name == "\$t" || name == "t") {
+            if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") {
                 val firstArg = call.arguments.firstOrNull() ?: return
                 val text = extractStringArgText(firstArg) ?: return
                 val key = generateKey(text.trim(), call)
@@ -320,9 +319,16 @@ class I18nProcessor(
         this.effects.forEach { it() }
         if (extractedStrings.isNotEmpty()) {
             if (isVueFile(psiFile.containingFile)) {
-                ensureVueI18nImported(psiFile)
+                // 使用 i18n.global.t 时不需要注入 useI18n 导入（全局实例已可用）
+                // i18n.global.t 和 $t 可以共存：只有 $t 时才需要注入 useI18n
+                if (tFunctionName != "i18n.global.t") {
+                    ensureVueI18nImported(psiFile)
+                }
             } else if (Util.isReact(psiFile)) {
-                ensureReactI18nImported(psiFile)
+                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation
+                if (tFunctionName != "i18n.t") {
+                    ensureReactI18nImported(psiFile)
+                }
             }
         }
     }
@@ -371,24 +377,22 @@ class I18nProcessor(
             val whiteSpace = scriptContent.addAfter(createStringExpressionNode("\n", psiFile), importUseI18n)
             scriptContent.addAfter(constUseI18n, whiteSpace)
         } else {
-            // 用模块名包含判断，兼容单引号/双引号差异
-            val alreadyHasI18nImport = importStatements.any { s ->
-                s.text.contains("vue-i18n") && s.text.contains("useI18n")
-            }
+            val alreadyExists = importStatements.find({ s ->
+                s.text == importUseI18n.text
+            })
 
-            if (!alreadyHasI18nImport) {
+            if (alreadyExists === null) {
                 // 有 import → 新 import 加到第一个 import 前面
                 val firstImport = importStatements.first()
                 firstImport.parent.addBefore(importUseI18n, firstImport)
             }
 
             val jsVars = PsiTreeUtil.findChildrenOfType(scriptContent, JSVarStatement::class.java)
-            // 用内容包含判断，避免格式差异导致重复
-            val alreadyUseI18Exists = jsVars.any { s ->
-                s.text.contains("useI18n()") && s.text.contains("\$t")
-            }
+            val alreadyUseI18Exists = jsVars.find({ s ->
+                s.text == constUseI18n.text
+            })
 
-            if (!alreadyUseI18Exists) {
+            if (alreadyUseI18Exists === null) {
                 // const 加到最后一个 import 后面
                 val lastImport = importStatements.last()
                 lastImport.parent.addAfter(constUseI18n, lastImport)
@@ -472,21 +476,21 @@ class I18nProcessor(
             return;
         }
 
-        if (trimmed.startsWith("<!--") && trimmed.endsWith("-->")) {
-            val startTagCount = trimmed.split("<!--").size - 1 // 得到 Int（次数）
-            val endTagCount = trimmed.split("-->").size - 1     // 得到 Int（次数）
-
-            if (startTagCount == 1 && endTagCount == 1) { // 同上，布尔条件
-                return
-            }
+        // 去除所有 HTML 注释后检查是否有实际内容
+        val withoutComments = trimmed.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "").trim()
+        if (withoutComments.isEmpty()) {
+            return
         }
-        if (!hasChinese(trimmed)) {
+
+        // 使用纯文本（过滤注释）检查是否包含中文，避免注释中的中文被误提取
+        val pureText = if (textNode is XmlText) getPureXmlText(textNode) else withoutComments
+        if (!hasChinese(pureText)) {
             return
         }
 
         val isJSX = Util.isJSX(textNode);
 
-        if (trimmed.contains("\$t(")) return
+        if (trimmed.contains("\$t(") || trimmed.contains("i18n.global.t(") || trimmed.contains("i18n.t(")) return
 
         val key = collectExtractedStrings(textNode)
 
@@ -495,7 +499,7 @@ class I18nProcessor(
             val textChild = getCharactersText(textNode)
             val textNodes = textChild.ifEmpty { listOf(textNode) }
             val newContent =
-                if (!isJSX) "{{ \$t(`$key`) }}" else "{ \$t(`$key`) }"
+                if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
 
             textNodes.forEachIndexed { index, node ->
                 if (!node.isValid) return@forEachIndexed
@@ -587,7 +591,7 @@ class I18nProcessor(
         if (!hasChinese(originalText)) {
             return
         }
-        if (originalText.contains("\$t(")) {
+        if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(") || originalText.contains("i18n.t(")) {
             return
         }
         if (isJSTemplateLiteral(originalText)) {
@@ -605,7 +609,7 @@ class I18nProcessor(
                     && !attr.text.startsWith("`"))
         ) {
             val key = collectExtractedStrings(attrValue);
-            newText = "\$t('$key')"
+            newText = "${tFunctionName}('$key')"
         }
 
         if (newText == originalText) return
@@ -704,11 +708,12 @@ class I18nProcessor(
         // 步骤3：判断是否包含换行符，选择引号类型
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
 
-        // 步骤4：拼接最终的 $t 函数调用表达式（空参数对象时省略第二个参数）
+        // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
+        val fn = tFunctionName
         return if (paramsObject.replace(" ", "") == "{}") {
-            "\$t($quote$escapedMsg$quote)"
+            "$fn($quote$escapedMsg$quote)"
         } else {
-            "\$t($quote$escapedMsg$quote, $paramsObject)"
+            "$fn($quote$escapedMsg$quote, $paramsObject)"
         }
     }
 
@@ -797,112 +802,17 @@ class I18nProcessor(
             else -> null
         }
         if (callExpr != null) {
-            val callee = callExpr.methodExpression?.text
-            if (callee == "\$t") return true
+            val method = callExpr.methodExpression
+            if (method is JSReferenceExpression) {
+                val name = method.referenceName
+                // $t / t / $tc / tc 调用
+                if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
+            }
+            // 支持 i18n.global.t / i18n.t 等链式调用
+            val calleeText = method?.text
+            if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
         }
         return false
-    }
-
-    /**
-     * 判断模板字面量（反引号字符串）是否已在 $t() 调用中。
-     * 对应 $t(`文本`) 这种用法。
-     */
-    private fun isTransformedCalledTemplate(templateExpr: JSStringTemplateExpression): Boolean {
-        val parent = templateExpr.parent
-        val callExpr = when {
-            parent is JSCallExpression -> parent
-            parent.parent is JSCallExpression -> parent.parent as JSCallExpression
-            else -> null
-        }
-        if (callExpr != null) {
-            val callee = callExpr.methodExpression?.text
-            if (callee == "\$t" || callee == "t") return true
-        }
-        return false
-    }
-
-    /**
-     * 处理纯模板字面量（反引号字符串，无插值）的提取和替换。
-     * 将 `中文` 替换为 $t('中文')
-     */
-    private fun collectTemplateLiteralChange(
-        templateExpr: JSStringTemplateExpression,
-        content: String,
-        changes: MutableList<() -> Unit>
-    ) {
-        val trimmed = content.trim()
-        if (trimmed.isEmpty()) return
-
-        val key = generateKey(trimmed, templateExpr)
-        extractedStrings.putIfAbsent(key, trimmed)
-
-        changes.add {
-            val newExprText = "\$t('$key')"
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
-            if (newExpr != null) {
-                templateExpr.replace(newExpr.psi)
-            }
-        }
-    }
-
-    /**
-     * 处理同一个 XmlText 中 {{ }} 表达式之间的普通文本。
-     * 例如：{{ "a" }}-测试 {{ "b" }} 中的 "-测试" 部分。
-     * 通过计算文本偏移量，精确判断哪些 XML_DATA_CHARACTERS 在 mustache 外部。
-     */
-    private fun processPlainTextBetweenMustaches(element: PsiElement, changes: MutableList<() -> Unit>) {
-        val fullText = element.text
-        val elementStart = element.textRange.startOffset
-
-        // 找出所有 {{ }} 表达式在 element 文本中的相对偏移范围
-        val mustacheRanges = mutableListOf<IntRange>()
-        val regex = Regex("\\{\\{.*?\\}\\}")
-        regex.findAll(fullText).forEach { match ->
-            mustacheRanges.add(match.range.first until match.range.last + 1)
-        }
-
-        // 判断一个偏移量是否在 mustache 内部
-        fun isInsideMustache(relOffset: Int): Boolean {
-            return mustacheRanges.any { range -> relOffset >= range.first && relOffset < range.last }
-        }
-
-        val children = element.children
-        for (child in children) {
-            if (child is XmlToken && child.tokenType == XmlTokenType.XML_DATA_CHARACTERS) {
-                val text = child.text
-                if (text.isBlank() || !hasChinese(text)) continue
-
-                // 计算这个 token 在 element 文本中的相对偏移量
-                val relStart = child.textRange.startOffset - elementStart
-                val relEnd = relStart + text.length
-
-                // 如果整个 token 都在 mustache 内部，跳过
-                if (isInsideMustache(relStart) && isInsideMustache(relEnd - 1)) continue
-
-                // 如果 token 部分在 mustache 内部，需要提取纯文本部分
-                var plainText = text
-                // 先去掉完整的 {{...}}
-                plainText = plainText.replace(Regex("\\{\\{.*?\\}\\}"), "")
-                // 去掉以 {{ 开头的部分
-                plainText = plainText.replace(Regex("^\\{\\{.*"), "")
-                // 去掉以 }} 结尾的部分
-                plainText = plainText.replace(Regex(".*\\}\\}"), "")
-                // 去掉残留的 {{ 或 }}
-                plainText = plainText.replace("{{", "").replace("}}", "")
-
-                if (plainText.isNotBlank() && hasChinese(plainText)) {
-                    val trimmed = plainText.trim()
-                    val key = generateKey(trimmed, child)
-                    extractedStrings.putIfAbsent(key, trimmed)
-                    changes.add {
-                        if (!child.isValid) return@add
-                        val newContent = "{{ \$t(`$key`) }}"
-                        val newElement = createStringExpressionNode(newContent, child)
-                        child.replace(newElement)
-                    }
-                }
-            }
-        }
     }
 
     /**
