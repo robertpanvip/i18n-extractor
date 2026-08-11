@@ -35,6 +35,11 @@ class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
+    companion object {
+        /** 全局 i18n 实例的默认导入路径（可被系统属性 `i18n.extractor.import.path` 覆盖） */
+        const val DEFAULT_I18N_INSTANCE_IMPORT_PATH = "@/i18n"
+    }
+
     var effects = mutableListOf<() -> Unit>()
 
     /** 新提取的 key -> 原文本 */
@@ -319,14 +324,20 @@ class I18nProcessor(
         this.effects.forEach { it() }
         if (extractedStrings.isNotEmpty()) {
             if (isVueFile(psiFile.containingFile)) {
-                // 使用 i18n.global.t 时不需要注入 useI18n 导入（全局实例已可用）
+                // 使用 i18n.global.t 时不需要注入 useI18n（全局实例已可用），
+                // 但需要确保 i18n 实例已导入，否则补默认导入。
                 // i18n.global.t 和 $t 可以共存：只有 $t 时才需要注入 useI18n
-                if (tFunctionName != "i18n.global.t") {
+                if (tFunctionName == "i18n.global.t") {
+                    ensureI18nInstanceImported(psiFile, isVue = true)
+                } else {
                     ensureVueI18nImported(psiFile)
                 }
             } else if (Util.isReact(psiFile)) {
-                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation
-                if (tFunctionName != "i18n.t") {
+                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation，
+                // 但需要确保 i18n 实例已导入，否则补默认导入。
+                if (tFunctionName == "i18n.t") {
+                    ensureI18nInstanceImported(psiFile, isVue = false)
+                } else {
                     ensureReactI18nImported(psiFile)
                 }
             }
@@ -445,6 +456,91 @@ class I18nProcessor(
                     body.addAfter(hookStmt, openingBrace)
                 }
             }
+        }
+    }
+
+    /**
+     * 当文件使用 i18n.global.t / i18n.t 但缺少 i18n 实例导入时，注入默认导入。
+     * 默认路径为 [DEFAULT_I18N_INSTANCE_IMPORT_PATH]（@/i18n），可被系统属性
+     * `i18n.extractor.import.path` 覆盖。
+     *
+     * - Vue:   `import { i18n } from '@/i18n'`  （命名导入，vue-i18n 通用写法）
+     * - React: `import i18n from '@/i18n'`      （默认导入，i18next 通用写法）
+     *
+     * 注意：i18n 实例是用户自定义并 export 的（如 src/i18n/index.ts），
+     * 路径因项目而异，这里只做兜底，已有任意形式的 i18n 导入时不重复注入。
+     */
+    private fun ensureI18nInstanceImported(psiFile: PsiElement, isVue: Boolean) {
+        if (hasI18nInstanceImported(psiFile)) return
+
+        val importPath = System.getProperty("i18n.extractor.import.path")
+            ?: DEFAULT_I18N_INSTANCE_IMPORT_PATH
+        val importText = if (isVue) {
+            "import { i18n } from '$importPath';\n"
+        } else {
+            "import i18n from '$importPath';\n"
+        }
+
+        if (isVue) {
+            // Vue: 注入到 <script> 标签内
+            val scriptTag = getScriptTag() ?: run {
+                val script = factory.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
+                psiFile.add(script)
+                getScriptTag()
+            } ?: return
+            val scriptContent = PsiTreeUtil.findChildOfType(scriptTag, JSEmbeddedContent::class.java)
+                ?: return
+            // 与 ensureVueI18nImported 保持一致：用 createStringExpressionNode 创建 LeafPsiElement，
+            // 避免 Vue 文件 language 上下文与 JS 不匹配导致 createJSStatementFromText 失败
+            val importStmt = createStringExpressionNode(importText, scriptContent)
+            val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
+            if (importStatements.isNotEmpty()) {
+                val firstImport = importStatements.first()
+                firstImport.parent.addBefore(importStmt, firstImport)
+            } else {
+                val firstStatement = findFirstNonWhitespaceChild(scriptContent)
+                if (firstStatement != null) {
+                    scriptContent.addBefore(importStmt, firstStatement)
+                } else {
+                    scriptContent.add(importStmt)
+                }
+            }
+        } else {
+            // React: 注入到文件顶部
+            val containingFile = psiFile.containingFile ?: return
+            val importStmt = createJSStatementFromText(importText, containingFile)
+            val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+            if (imports.isNotEmpty()) {
+                val firstImport = imports.first()
+                firstImport.parent.addBefore(importStmt, firstImport)
+            } else {
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
+                } else {
+                    containingFile.add(importStmt)
+                }
+            }
+        }
+    }
+
+    /**
+     * 检查文件是否已导入 i18n 实例（命名导入、默认导入、namespace 导入均可）。
+     * 匹配形式：
+     * - `import { i18n } from '...'`            （命名导入）
+     * - `import i18n from '...'`                （默认导入）
+     * - `import * as i18n from '...'`           （namespace 导入）
+     * - `import i18n, { other } from '...'`     （混合导入）
+     */
+    private fun hasI18nInstanceImported(root: PsiElement): Boolean {
+        val imports = PsiTreeUtil.findChildrenOfType(root, ES6ImportDeclaration::class.java)
+        val namedImport = Regex("""import\s*\{[^}]*\bi18n\b[^}]*\}""")
+        val defaultImport = Regex("""import\s+i18n\s+(?:,|from)""")
+        val namespaceImport = Regex("""import\s+\*\s+as\s+i18n\s+from""")
+        return imports.any { imp ->
+            namedImport.containsMatchIn(imp.text) ||
+                defaultImport.containsMatchIn(imp.text) ||
+                namespaceImport.containsMatchIn(imp.text)
         }
     }
 
