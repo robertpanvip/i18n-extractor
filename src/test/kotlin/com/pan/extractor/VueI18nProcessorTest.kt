@@ -681,4 +681,239 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             isReact
         )
     }
+
+    // ============================================================
+    // 11. HTML 注释跳过（Bug 修复）
+    // ============================================================
+
+    /**
+     * 测试 div 中全部是 HTML 注释时不应提取任何内容
+     * 场景：<div><!-- 注释1 --><!-- 注释2 --></div>
+     */
+    fun testDivWithOnlyHtmlCommentsShouldNotExtract() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    <!--    <FormList-->
+                    <!--      label="输出变量"-->
+                    <!--    />-->
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "全是 HTML 注释的 div 不应提取任何内容, got: ${processor.extractedStrings}",
+            processor.extractedStrings.isEmpty()
+        )
+    }
+
+    /**
+     * 测试 div 中 HTML 注释和实际文本混合时，只提取实际文本
+     */
+    fun testDivWithHtmlCommentsAndTextExtractsOnlyText() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    <!-- 这是注释 -->
+                    这是实际文本
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "应提取实际文本 '这是实际文本', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("这是实际文本")
+        )
+        assertFalse(
+            "不应提取注释内容 '这是注释', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("这是注释")
+        )
+    }
+
+    // ============================================================
+    // 12. Mustache 中 JS 注释跳过（Bug 修复）
+    // ============================================================
+
+    /**
+     * 测试 {{ }} 中只有 JS 注释时不应提取
+     * 场景：<div>{{ //新增按钮 }}</div>
+     */
+    fun testMustacheWithOnlyJsCommentShouldNotExtract() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>{{
+                    //新增按钮
+                }}</div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertFalse(
+            "{{ //新增按钮 }} 中的 JS 注释不应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("//新增按钮")
+        )
+    }
+
+    // ============================================================
+    // 13. 模板字符串中已有 $t() 调用不应重复提取（Bug 修复）
+    // ============================================================
+
+    /**
+     * 测试 {{ }} 中三目表达式已有 $t() 调用时不应修改
+     * 场景：record.x ? `${$t("已于")}${record.x}${$t("发布")}` : $t("未发布")
+     */
+    fun testMustacheWithExistingTCallsShouldNotExtract() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    {{
+                        record.releaseTime
+                            ? `${'$'}t("已于")`${'$'}{record.releaseTime}${'$'}t("发布")`
+                            : $t("未发布")
+                    }}
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 所有字符串已在 $t() 中，不应被重复提取
+        assertFalse(
+            "'已于' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("已于")
+        )
+        assertFalse(
+            "'发布' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("发布")
+        )
+        assertFalse(
+            "'未发布' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("未发布")
+        )
+        // 应在 existingStrings 中
+        assertTrue(
+            "'已于' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已于")
+        )
+        assertTrue(
+            "'未发布' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("未发布")
+        )
+    }
+
+    // ============================================================
+    // 14. i18n.global.t 全局调用支持
+    // ============================================================
+
+    /**
+     * 测试文件中使用 i18n.global.t 时，新提取的字符串应使用 i18n.global.t
+     */
+    fun testI18nGlobalTDetectionForNewExtraction() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            import { i18n } from './i18n'
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+
+        // "已有文本" 应在 existingStrings 中
+        assertTrue(
+            "'已有文本' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已有文本")
+        )
+        // "新提取文本" 应被提取
+        assertTrue(
+            "'新提取文本' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("新提取文本")
+        )
+        // 新提取的应使用 i18n.global.t
+        assertTrue(
+            "新提取的字符串应使用 i18n.global.t, got:\n$resultText",
+            resultText.contains("i18n.global.t('新提取文本')")
+        )
+    }
+
+    /**
+     * 测试 i18n.global.t 和 $t 可以在同一文件中共存
+     * 两者都应被识别为已翻译，新提取使用 i18n.global.t
+     */
+    fun testI18nGlobalTCoexistWithUseI18n() {
+        val file = myFixture.configureByText(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    <span>{{ $t("vue文本") }}</span>
+                    <span>{{ i18n.global.t("全局文本") }}</span>
+                </div>
+            </template>
+            <script setup lang="ts">
+            import { useI18n } from 'vue-i18n'
+            import { i18n } from './i18n'
+            const { t: $t } = useI18n()
+            const newMsg = "待提取"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 两种形式都应识别为已翻译
+        assertTrue(
+            "'vue文本' (via $t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("vue文本")
+        )
+        assertTrue(
+            "'全局文本' (via i18n.global.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("全局文本")
+        )
+        // 新提取的应存在
+        assertTrue(
+            "'待提取' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("待提取")
+        )
+        // 不应重复提取已有文本
+        assertFalse(
+            "'vue文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("vue文本")
+        )
+        assertFalse(
+            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("全局文本")
+        )
+    }
 }

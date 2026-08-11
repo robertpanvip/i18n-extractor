@@ -439,4 +439,96 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             isReact
         )
     }
+
+    // ============================================================
+    // 8. i18n.t 全局调用支持（React i18next）
+    // ============================================================
+
+    /**
+     * 测试 React 文件中使用 i18n.t 时，新提取的字符串应使用 i18n.t
+     * 且不应注入 useTranslation hook
+     */
+    fun testReactI18nTGlobalDetection() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import i18n from './i18n'
+
+            export default function App() {
+                const handleClick = () => {
+                    alert(i18n.t("已存在"))
+                }
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                        <button onClick={handleClick}>{i18n.t("按钮")}</button>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // "已存在" 和 "按钮" 应在 existingStrings 中
+        assertTrue(
+            "'已存在' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已存在")
+        )
+        assertTrue(
+            "'按钮' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("按钮")
+        )
+        // "新标题" 应被提取
+        assertTrue(
+            "'新标题' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("新标题")
+        )
+    }
+
+    /**
+     * 测试 React 中 i18n.t 和 $t 共存
+     */
+    fun testReactI18nTCoexistWithUseTranslation() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import { useTranslation } from 'react-i18next'
+            import i18n from './i18n'
+
+            export default function App() {
+                const { t: $t } = useTranslation()
+                return (
+                    <div>
+                        <span>{$t("hook文本")}</span>
+                        <span>{i18n.t("全局文本")}</span>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 两种形式都应识别为已翻译
+        assertTrue(
+            "'hook文本' (via $t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("hook文本")
+        )
+        assertTrue(
+            "'全局文本' (via i18n.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("全局文本")
+        )
+        // 不应重复提取
+        assertFalse(
+            "'hook文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("hook文本")
+        )
+        assertFalse(
+            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("全局文本")
+        )
+    }
 }

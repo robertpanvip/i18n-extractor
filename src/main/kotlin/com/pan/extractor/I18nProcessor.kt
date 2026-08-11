@@ -134,8 +134,12 @@ class I18nProcessor(
                             }
                         }
                         if (e is JSBinaryExpression && !isInComment(e)) {
+                            // 只有实际产生变更时才标记 foundStrings，避免无条件跳过 $t() 检查
+                            val sizeBefore = changes.size
                             collectJSBinaryExpressionChange(e, changes)
-                            foundStrings = true
+                            if (changes.size > sizeBefore) {
+                                foundStrings = true
+                            }
                         }
                         super.visitElement(e)
                     }
@@ -146,7 +150,13 @@ class I18nProcessor(
                 return
             }
             // 如果 raw 中已包含 $t() 调用，说明所有字符串已在 $t() 中，跳过回退方案
-            if (raw.contains("\$t(")) {
+            if (raw.contains("\$t(") || raw.contains("i18n.global.t(") || raw.contains("i18n.t(")) {
+                return
+            }
+            // 如果 raw 去除 ${} 后只剩 JS 注释（如 {{ //新增按钮 }}），跳过
+            val contentOnly = raw.substring(1, raw.length - 1).trim()
+            val strippedContent = contentOnly.replace(Regex("\\$\\{[^}]*\\}"), "").trim()
+            if (strippedContent.startsWith("//") || (strippedContent.startsWith("/*") && strippedContent.endsWith("*/"))) {
                 return
             }
         }
@@ -199,18 +209,30 @@ class I18nProcessor(
     }
 
     /**
-     * 扫描文件中已有的 $t() / t() / i18n.global.t() 调用，收集其 key 到 existingStrings。
+     * 扫描文件中已有的 $t() / t() / i18n.global.t() / i18n.t() 调用，收集其 key 到 existingStrings。
      * 覆盖模板注入 JS 和 script/JS/TS 两种来源。
-     * 同时检测文件使用的翻译函数名（优先 i18n.global.t）。
+     * 同时检测文件使用的翻译函数名：
+     * - Vue: i18n.global.t（vue-i18n 全局实例）
+     * - React: i18n.t（i18next 全局实例）
+     * - 默认: $t（useI18n / useTranslation 解构）
+     * 注意：i18n.global.t 和 $t 可以在同一文件中共存，两者都识别为已翻译。
      */
     private fun collectExistingTKeys() {
-        // 0. 检测翻译函数名：扫描已有 JSCallExpression，优先匹配 i18n.global.t
+        // 0. 检测翻译函数名：扫描已有 JSCallExpression
+        // 优先级：i18n.global.t > i18n.t > $t（默认）
         PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
             val method = call.methodExpression
             if (method is JSReferenceExpression) {
                 val text = method.text
+                // Vue: i18n.global.t / i18n.global.tc
                 if (text == "i18n.global.t" || text == "i18n.global.tc") {
                     tFunctionName = "i18n.global.t"
+                }
+                // React: i18n.t / i18n.tc（i18next 全局实例）
+                else if (text == "i18n.t" || text == "i18n.tc") {
+                    if (tFunctionName == "\$t") {
+                        tFunctionName = "i18n.t"
+                    }
                 }
             }
         }
@@ -297,12 +319,16 @@ class I18nProcessor(
         this.effects.forEach { it() }
         if (extractedStrings.isNotEmpty()) {
             if (isVueFile(psiFile.containingFile)) {
-                // 使用 i18n.global.t 时不需要注入 useI18n 导入
+                // 使用 i18n.global.t 时不需要注入 useI18n 导入（全局实例已可用）
+                // i18n.global.t 和 $t 可以共存：只有 $t 时才需要注入 useI18n
                 if (tFunctionName != "i18n.global.t") {
                     ensureVueI18nImported(psiFile)
                 }
             } else if (Util.isReact(psiFile)) {
-                ensureReactI18nImported(psiFile)
+                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation
+                if (tFunctionName != "i18n.t") {
+                    ensureReactI18nImported(psiFile)
+                }
             }
         }
     }
@@ -450,21 +476,21 @@ class I18nProcessor(
             return;
         }
 
-        if (trimmed.startsWith("<!--") && trimmed.endsWith("-->")) {
-            val startTagCount = trimmed.split("<!--").size - 1 // 得到 Int（次数）
-            val endTagCount = trimmed.split("-->").size - 1     // 得到 Int（次数）
-
-            if (startTagCount == 1 && endTagCount == 1) { // 同上，布尔条件
-                return
-            }
+        // 去除所有 HTML 注释后检查是否有实际内容
+        val withoutComments = trimmed.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "").trim()
+        if (withoutComments.isEmpty()) {
+            return
         }
-        if (!hasChinese(trimmed)) {
+
+        // 使用纯文本（过滤注释）检查是否包含中文，避免注释中的中文被误提取
+        val pureText = if (textNode is XmlText) getPureXmlText(textNode) else withoutComments
+        if (!hasChinese(pureText)) {
             return
         }
 
         val isJSX = Util.isJSX(textNode);
 
-        if (trimmed.contains("\$t(") || trimmed.contains("i18n.global.t(")) return
+        if (trimmed.contains("\$t(") || trimmed.contains("i18n.global.t(") || trimmed.contains("i18n.t(")) return
 
         val key = collectExtractedStrings(textNode)
 
@@ -565,7 +591,7 @@ class I18nProcessor(
         if (!hasChinese(originalText)) {
             return
         }
-        if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(")) {
+        if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(") || originalText.contains("i18n.t(")) {
             return
         }
         if (isJSTemplateLiteral(originalText)) {
