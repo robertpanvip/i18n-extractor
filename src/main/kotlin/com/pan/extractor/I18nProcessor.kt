@@ -45,6 +45,9 @@ class I18nProcessor(
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
+    /** 检测到的翻译函数名（如 $t、i18n.global.t），默认 $t */
+    private var tFunctionName: String = "\$t"
+
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
     }
@@ -86,8 +89,8 @@ class I18nProcessor(
         }
 
         val quote = "`"
-        // 过滤掉 PsiWhiteSpace 子节点，避免首尾空白干扰 raw 字符串构建
-        val children = element.children.filter { it !is PsiWhiteSpace }
+        // 过滤掉 PsiWhiteSpace 和注释子节点，避免首尾空白和注释内容干扰 raw 字符串构建
+        val children = element.children.filter { it !is PsiWhiteSpace && !isComment(it) && it !is PsiComment }
         if (children.isEmpty()) return
 
         val sb = StringBuilder()
@@ -142,6 +145,10 @@ class I18nProcessor(
             if (foundStrings) {
                 return
             }
+            // 如果 raw 中已包含 $t() 调用，说明所有字符串已在 $t() 中，跳过回退方案
+            if (raw.contains("\$t(")) {
+                return
+            }
         }
 
         // 2. 回退方案：用模板字符串方式处理（适用于简单模板字面量场景）
@@ -192,10 +199,22 @@ class I18nProcessor(
     }
 
     /**
-     * 扫描文件中已有的 $t() / t() 调用，收集其 key 到 existingStrings。
+     * 扫描文件中已有的 $t() / t() / i18n.global.t() 调用，收集其 key 到 existingStrings。
      * 覆盖模板注入 JS 和 script/JS/TS 两种来源。
+     * 同时检测文件使用的翻译函数名（优先 i18n.global.t）。
      */
     private fun collectExistingTKeys() {
+        // 0. 检测翻译函数名：扫描已有 JSCallExpression，优先匹配 i18n.global.t
+        PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
+            val method = call.methodExpression
+            if (method is JSReferenceExpression) {
+                val text = method.text
+                if (text == "i18n.global.t" || text == "i18n.global.tc") {
+                    tFunctionName = "i18n.global.t"
+                }
+            }
+        }
+
         // 1. 模板 {{ }} 中的注入 JS
         PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
             if (isMustache(xmlText.text)) {
@@ -221,14 +240,13 @@ class I18nProcessor(
     }
 
     /**
-     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本') 调用，
+     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本')、i18n.global.t(`文本`) 等调用，
      * 用于 Vue 模板中 backtick 等无法被 JS 注入解析的情况。
      */
     private fun collectTKeysFromRawText(text: String) {
-        // 匹配 $t(`文本`)、$t("文本")、$t('文本')，支持可选的第二个参数
+        // 匹配 $t / $tc / i18n.global.t / i18n.global.tc / i18n.t / i18n.tc 调用
         // 使用反向引用确保引号配对（如开闭都是反引号）
-        // 注意：必须用普通字符串（非 raw string）才能正确转义 $ 为 \$
-        val pattern = Regex("\\$(?:t|tc)\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+        val pattern = Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
         pattern.findAll(text).forEach { match ->
             val content = match.groupValues[2]
             val key = generateKey(content.trim(), psiFile)
@@ -251,7 +269,7 @@ class I18nProcessor(
         val method = call.methodExpression
         if (method is JSReferenceExpression) {
             val name = method.referenceName
-            if (name == "\$t" || name == "t") {
+            if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") {
                 val firstArg = call.arguments.firstOrNull() ?: return
                 val text = extractStringArgText(firstArg) ?: return
                 val key = generateKey(text.trim(), call)
@@ -279,7 +297,10 @@ class I18nProcessor(
         this.effects.forEach { it() }
         if (extractedStrings.isNotEmpty()) {
             if (isVueFile(psiFile.containingFile)) {
-                ensureVueI18nImported(psiFile)
+                // 使用 i18n.global.t 时不需要注入 useI18n 导入
+                if (tFunctionName != "i18n.global.t") {
+                    ensureVueI18nImported(psiFile)
+                }
             } else if (Util.isReact(psiFile)) {
                 ensureReactI18nImported(psiFile)
             }
@@ -443,7 +464,7 @@ class I18nProcessor(
 
         val isJSX = Util.isJSX(textNode);
 
-        if (trimmed.contains("\$t(")) return
+        if (trimmed.contains("\$t(") || trimmed.contains("i18n.global.t(")) return
 
         val key = collectExtractedStrings(textNode)
 
@@ -452,7 +473,7 @@ class I18nProcessor(
             val textChild = getCharactersText(textNode)
             val textNodes = textChild.ifEmpty { listOf(textNode) }
             val newContent =
-                if (!isJSX) "{{ \$t(`$key`) }}" else "{ \$t(`$key`) }"
+                if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
 
             textNodes.forEachIndexed { index, node ->
                 if (!node.isValid) return@forEachIndexed
@@ -544,7 +565,7 @@ class I18nProcessor(
         if (!hasChinese(originalText)) {
             return
         }
-        if (originalText.contains("\$t(")) {
+        if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(")) {
             return
         }
         if (isJSTemplateLiteral(originalText)) {
@@ -562,7 +583,7 @@ class I18nProcessor(
                     && !attr.text.startsWith("`"))
         ) {
             val key = collectExtractedStrings(attrValue);
-            newText = "\$t('$key')"
+            newText = "${tFunctionName}('$key')"
         }
 
         if (newText == originalText) return
@@ -661,11 +682,12 @@ class I18nProcessor(
         // 步骤3：判断是否包含换行符，选择引号类型
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
 
-        // 步骤4：拼接最终的 $t 函数调用表达式（空参数对象时省略第二个参数）
+        // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
+        val fn = tFunctionName
         return if (paramsObject.replace(" ", "") == "{}") {
-            "\$t($quote$escapedMsg$quote)"
+            "$fn($quote$escapedMsg$quote)"
         } else {
-            "\$t($quote$escapedMsg$quote, $paramsObject)"
+            "$fn($quote$escapedMsg$quote, $paramsObject)"
         }
     }
 
@@ -754,8 +776,15 @@ class I18nProcessor(
             else -> null
         }
         if (callExpr != null) {
-            val callee = callExpr.methodExpression?.text
-            if (callee == "\$t") return true
+            val method = callExpr.methodExpression
+            if (method is JSReferenceExpression) {
+                val name = method.referenceName
+                // $t / t / $tc / tc 调用
+                if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
+            }
+            // 支持 i18n.global.t / i18n.t 等链式调用
+            val calleeText = method?.text
+            if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
         }
         return false
     }
