@@ -1069,6 +1069,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
+        println("DEBUG useCounter: extracted=${processor.extractedStrings}")
+        println("DEBUG useCounter: hooks=${com.pan.extractor.Util.findHookFunctions(file).map { it.text.take(40) }}")
+        println("DEBUG useCounter: resultText=\n$resultText")
         assertTrue(
             "应注入 import { useI18n } from 'vue-i18n', got:\n$resultText",
             resultText.contains("import { useI18n } from 'vue-i18n'")
