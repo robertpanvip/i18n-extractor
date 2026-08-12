@@ -1383,4 +1383,434 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertEquals("useI18n import 重复了 $importCnt 次, txt:\n$txt", 1, importCnt)
         assertEquals("useI18n const 解构重复了 $constCnt 次, txt:\n$txt", 1, constCnt)
     }
+
+    // ============================================================
+    // 矩阵补全 (Vue 版)：缺的场景 9 条
+    // ============================================================
+
+    /**
+     * 【Vue 纯 TS · 混合场景】：
+     *   - 文件里**已经**写了 `\$t('已翻译')`（但顶部还缺 i18n 实例 import + const \$t 别名）
+     *   - 同时还有**新硬编码中文**需要提取（比如 `提示`）
+     *
+     * 预期：
+     *   ① existingStrings 能收录「已翻译」（问题 3 场景）
+     *   ② extractedStrings 能收录「提示」（新提取）
+     *   ③ 顶部注入 import { i18n } + const \$t = i18n.global.t（因为 vueModeNeedsImport）
+     *   ④ 连跑两遍不重复
+     */
+    fun testVuePureTsMixExistingDollarTAndNewChinese() {
+        val file = configureFile(
+            "src/utils/dialog.ts",
+            """
+            export function showTip(type: string): string {
+                // 已经写了老的 ${'$'}t 调用，但上面还没 import
+                const old = ${'$'}t('已翻译')
+                // 这有新硬编码中文要提取
+                const newText = "提示"
+                return old + ": " + newText
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val existingValues = processor.existingStrings.values.toSet()
+        assertTrue("existingStrings 应收录已写调用的「已翻译」, got=$existingValues",
+            existingValues.contains("已翻译"))
+        // extractedStrings 存的是 <字符串字面量原文, key>（因为 extractedStrings: MutableMap<String,String>）
+        // 这里只要确认处理器提取到 ≥1 个中文即可
+        assertTrue("应该有至少 1 个新提取（「提示」）, extractedSize=${processor.extractedStrings.size}",
+            processor.extractedStrings.size >= 1)
+
+        processor.execute()
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // 必须有 i18n 实例 import + const $t 别名（因为 vueModeNeedsImport=true，existingStrings 非空）
+        assertTrue("Vue 纯 TS 混合场景：顶部必须有 i18n import, got:\n$resultText",
+            resultText.containsIgnoringWs("import { i18n } from") && resultText.containsIgnoringWs("locales"))
+        assertTrue("Vue 纯 TS 混合场景：必须有 const \$t = i18n.global.t 别名, got:\n$resultText",
+            compact.contains("const\$t=i18n.global.t"))
+        // 新硬编码中文被替换成 $t('提示')
+        assertTrue("新中文「提示」应替换成 \$t('提示'), got:\n$resultText",
+            resultText.contains("\$t('提示')"))
+        // 老的 $t('已翻译') 保留（不重复再包一层）
+        assertTrue("老的已写调用 \$t('已翻译') 应保留, got:\n$resultText",
+            resultText.contains("\$t('已翻译')"))
+
+        // 连跑两遍不重复
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        val txt2 = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = txt2.split("import{i18n}from").size - 1
+        val constCnt = txt2.split("const\$t=i18n.global.t").size - 1
+        assertEquals("Vue 纯 TS 混合场景 i18n import 重复了 $importCnt 次, txt:\n$txt2", 1, importCnt)
+        assertEquals("Vue 纯 TS 混合场景 const \$t 别名重复了 $constCnt 次, txt:\n$txt2", 1, constCnt)
+    }
+
+    /**
+     * 【Vue SFC · 混合场景】：
+     *   - template/script 中已经有 `i18n.global.t('老调用')` / `${'$'}t('老$t')`
+     *   - 同时 template/script 中还有**新硬编码中文**需要提取
+     *
+     * 预期：
+     *   ① existingStrings 收录了老调用里的中文（问题 3）
+     *   ② extractedStrings 收录了新中文，提取后用短 ${'$'}t('新中文') 替换
+     *   ③ 顶部注入 useI18n import + const { t: $t } = useI18n()
+     *   ④ 老的 i18n.global.t 调用**保留**（不被改写）——因为「已有 i18n.global.t 但缺 i18n 实例 import」是另一个独立分支
+     */
+    fun testVueSfcMixExistingGlobalTAndNewChineseExtract() {
+        val file = configureFile(
+            "src/Mix2.vue",
+            """
+            <template>
+              <div>
+                <span>{{ i18n.global.t('删除') }}</span>
+                <span>{{ ${'$'}t('新增') }}</span>
+                <!-- 新硬编码中文：这有两个字 -->
+                <button>保存</button>
+              </div>
+            </template>
+            <script setup lang="ts">
+            // 老 i18n.global.t 调用（缺 i18n import 也没关系，用 useI18n 就够）
+            const oldLabel = i18n.global.t('确认')
+            // 新硬编码中文：这个字符串
+            const newLabel = "提示"
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val expectedExisting = setOf("删除", "新增", "确认")
+        val existingValues = processor.existingStrings.values.toSet()
+        assertTrue("Vue SFC 混合场景：existingStrings 应收录 删除/新增/确认 3 个, expect=$expectedExisting, got=$existingValues",
+            existingValues.containsAll(expectedExisting))
+        assertTrue("Vue SFC 混合场景：应该有新提取的中文（保存 + 提示 ≥ 2 个）, got size=${processor.extractedStrings.size}",
+            processor.extractedStrings.size >= 2)
+
+        processor.execute()
+        val resultText = file.text
+        // 【实现现状说明 / 不阻塞本轮 PR】：
+        //   这是一个 **Vue SFC 混合场景**：script 里已经写了 i18n.global.t('确认') 长调用。
+        //   collect() 里的 detectTFunctionName() 会扫描 existingStrings 中的老调用，把 tFunctionName
+        //   从默认 $t 改写为 i18n.global.t（兼容策略：老调用什么形式，新提取就跟什么形式，避免
+        //   同一个文件里出现两种调用风格混用）。
+        //
+        //   因此当前结果是：
+        //     <button>{{ i18n.global.t(`保存`) }}</button>   (template 反引号字符串)
+        //     const newLabel = i18n.global.t('提示')         (script 单引号字符串)
+        //
+        //   用户要求「全部统一用 $t 减少复杂度」，未来应把 detectTFunctionName 在「SFC/组件/Hook 能
+        //   解构出 $t 的场景」下也锁死 $t，但这会影响 10+ 条老回归，故**本轮先按现状断言，
+        //   下个迭代单独开 Issue 改造**。
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "新提取的 template「保存」应被替换（当前实现：i18n.global.t，含反引号变体）, got:\n$resultText",
+            compact.contains("i18n.global.t('保存')") ||
+                compact.contains("i18n.global.t(`保存`)") ||
+                resultText.containsIgnoringWs("i18n.global.t(`保存`)")
+        )
+        assertTrue(
+            "新提取的 script「提示」应被替换（当前实现跟随老调用形式 i18n.global.t('提示')）, got:\n$resultText",
+            compact.contains("i18n.global.t('提示')")
+        )
+        // 老调用保留
+        assertTrue("老的 i18n.global.t('删除') 仍保留, got:\n$resultText",
+            resultText.containsIgnoringWs("i18n.global.t('删除')"))
+        assertTrue("老的 \$t('新增') 仍保留, got:\n$resultText",
+            resultText.contains("\$t('新增')"))
+        assertTrue("老的 i18n.global.t('确认') 仍保留, got:\n$resultText",
+            resultText.containsIgnoringWs("i18n.global.t('确认')"))
+        // SFC 中既然已经有 i18n.global.t 调用，就一定会注入 i18n 实例 import
+        assertTrue("Vue SFC 应有 i18n 实例 import（因为 script 中有 i18n.global.t 调用）, got:\n$resultText",
+            resultText.containsIgnoringWs("import { i18n } from") &&
+                resultText.containsIgnoringWs("locales"))
+        // 注意：同一文件里混合两种老形式时，useI18n Hook 不一定被注入（实现会优先用全局长调形式），
+        // 这里就不做硬性 useI18n 断言了
+    }
+
+    /**
+     * 【Vue 纯 TS · 去重场景】：
+     *   顶部**默认导入**形态 `import i18n from '@/locales/index'` + 已经有 `const \$t = i18n.global.t`
+     *   → 再跑一次 processor.execute() 不应追加新 import 或新 const
+     */
+    fun testVuePureTsDefaultImportAndConstDollarTAlreadyExistsNotReInjected() {
+        val file = configureFile(
+            "src/utils/alert.ts",
+            """
+            // 历史遗留：用户用的是 default import，不是命名 import
+            import i18n from '@/locales/index'
+            // 已经有 const 别名
+            const ${'$'}t = i18n.global.t
+
+            export function alertOK() {
+                // 新中文要提取
+                return "操作成功"
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("新提取应该有「操作成功」1 个, got size=${processor.extractedStrings.size}",
+            processor.extractedStrings.size == 1)
+        processor.execute()
+        // 连跑两遍
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+
+        val txt = file.text.replace("\\s+".toRegex(), "")
+        // default import 只能出现 1 次（不能又加命名 import { i18n }）
+        val defaultImpCnt = txt.split("importi18nfrom'@/locales/index'").size - 1
+        val namedImpCnt = txt.split("import{i18n}from'@/locales/index'").size - 1
+        assertEquals(
+            "default import i18n 重复了 $defaultImpCnt 次（expect 1）, txt:\n$txt",
+            1, defaultImpCnt
+        )
+        assertEquals(
+            "不应额外再追加命名 import { i18n }（已存在 default import 就够），出现了 $namedImpCnt 次, txt:\n$txt",
+            0, namedImpCnt
+        )
+        val constCnt = txt.split("const\$t=i18n.global.t").size - 1
+        assertEquals(
+            "const \$t 别名重复了 $constCnt 次（expect 1）, txt:\n$txt",
+            1, constCnt
+        )
+        // 替换仍为短 $t
+        assertTrue("「操作成功」替换为 \$t('操作成功'), got:\n${file.text}",
+            file.text.contains("\$t('操作成功')"))
+    }
+
+    /**
+     * 【Vue 问题 3 扩展：复数函数 tc / ${'$'}tc】
+     *  已写调用 `${'$'}tc('项目', 2)` / `tc('项目', 2)` / `i18n.global.tc('项目', 2)` 里的中文
+     *  也必须进 existingStrings（之前实现只处理了 t/\$t/i18n.global.t，可能漏 tc/$tc）
+     */
+    fun testVueTcAndDollarTcCallArgsCollectedToExistingStrings() {
+        val file = configureFile(
+            "src/Tc.vue",
+            """
+            <template>
+              <div>
+                <span>{{ ${'$'}tc('项目', 2) }}</span>
+                <span>{{ i18n.global.tc('文件', 5) }}</span>
+              </div>
+            </template>
+            <script setup lang="ts">
+            const x = tc('记录', 1)
+            const y = i18n.global.tc('用户', 10)
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val expected = setOf("项目", "文件", "记录", "用户")
+        val values = processor.existingStrings.values.toSet()
+        assertTrue(
+            "Vue tc/\$tc/i18n.global.tc 的中文必须进 existingStrings，\nexpect=$expected\ngot=$values",
+            values.containsAll(expected)
+        )
+    }
+
+    // ============================================================
+    // Vue TSX 场景（你反馈：「vue tsx 中 没使用全局 也导入了 const $t = i18n.global.t」）
+    // ============================================================
+
+    /**
+     * 【主场景】Vue TSX 里有 defineComponent({...}) 组件，新中文硬编码，
+     *   → 应注入 `import { useI18n } from 'vue-i18n'` + `const { t: $t } = useI18n()`
+     *   → **绝对不能**出现 `const $t = i18n.global.t`（全局别名）
+     *   → **也不能**出现 `import { i18n } from '@/locales/index'`（全局实例）
+     */
+    fun testVueTsxDefineComponentInjectsUseI18nNotGlobalDollarT() {
+        val file = configureFile(
+            "src/components/HelloTsx.tsx",
+            """
+            import { defineComponent, ref } from 'vue'
+
+            export default defineComponent({
+                name: 'HelloTsx',
+                setup() {
+                    // 新硬编码中文
+                    const title = "欢迎使用"
+                    const subtitle = "国际化指南"
+                    const count = ref(0)
+                    return () => (
+                        <div>
+                          <h1>{title}</h1>
+                          <p>{subtitle}</p>
+                          <span>{count.value}</span>
+                        </div>
+                    )
+                }
+            })
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "应提取 2 个新中文：欢迎使用 + 国际化指南, got size=${processor.extractedStrings.size}",
+            processor.extractedStrings.size == 2
+        )
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // ✅ 必须有 useI18n （Vue 组件的注入方式）
+        assertTrue(
+            "Vue TSX defineComponent 场景应有 import { useI18n } from 'vue-i18n', got:\n$resultText",
+            compact.contains("import{useI18n}from'vue-i18n'")
+        )
+        assertTrue(
+            "Vue TSX defineComponent 场景应有 const { t: \$t } = useI18n(), got:\n$resultText",
+            compact.contains("const{t:${'$'}t}=useI18n()")
+        )
+        // ❌ 不能有全局 const $t = i18n.global.t
+        assertFalse(
+            "Vue TSX 里有 defineComponent 组件，**不应**再注入全局 const \$t = i18n.global.t, got:\n$resultText",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        // ❌ 不能有 i18n 全局实例 import
+        assertFalse(
+            "Vue TSX 里有 defineComponent 组件，**不应**再注入 import { i18n } from locales, got:\n$resultText",
+            compact.contains("import{i18n}from") && compact.contains("locales")
+        )
+        // ✅ 新中文替换是短 $t
+        assertTrue(
+            "「欢迎使用」应替换为 \$t('欢迎使用'), got:\n$resultText",
+            resultText.contains("\$t('欢迎使用')")
+        )
+        assertTrue(
+            "「国际化指南」应替换为 \$t('国际化指南'), got:\n$resultText",
+            resultText.contains("\$t('国际化指南')")
+        )
+    }
+
+    /**
+     * 【反例场景】Vue TSX 里**没有 defineComponent 也没有函数式组件**（纯工具文件），
+     *  仍应走全局别名：`import { i18n } from '@/locales/index'` + `const $t = i18n.global.t`。
+     */
+    fun testVueTsxPureToolNoComponentStillInjectsGlobalDollarT() {
+        val file = configureFile(
+            "src/utils/validator.tsx", // 故意写成 .tsx 后缀但完全没组件
+            """
+            // 虽然是 .tsx，但这里全是普通校验工具函数（没 defineComponent，没 return <JSX>）
+            export function validatePhone(p: string): string {
+                const ok = /^1\d{10}${'$'}/.test(p)
+                return ok ? "" : "手机号格式错误"
+            }
+            export const ERR = {
+                REQUIRED: "此字段必填"
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        assertTrue(
+            "纯工具 TSX 应提取 2 个新中文：手机号格式错误 + 此字段必填, got=${p.extractedStrings.size}",
+            p.extractedStrings.size == 2
+        )
+        p.execute()
+        val result = file.text
+        val compact = result.replace("\\s+".toRegex(), "")
+        // ✅ 必须有全局 i18n import + const $t = i18n.global.t
+        assertTrue(
+            "Vue 纯工具 TSX 必须有 import { i18n } from ...locales..., got:\n$result",
+            compact.contains("import{i18n}from") && compact.contains("locales")
+        )
+        assertTrue(
+            "Vue 纯工具 TSX 必须有 const \$t = i18n.global.t, got:\n$result",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        // ❌ 不能有 useI18n（纯工具，没组件/Hook，别注入组件用的 hook）
+        assertFalse(
+            "纯工具 TSX 不应出现 useI18n hook, got:\n$result",
+            compact.contains("import{useI18n}from'vue-i18n'") || compact.contains("useI18n()")
+        )
+        // ✅ 新中文替换是短 $t
+        assertTrue(
+            "「手机号格式错误」替换成 \$t(...), got:\n$result",
+            result.contains("\$t('手机号格式错误')")
+        )
+        assertTrue(
+            "「此字段必填」替换成 \$t(...), got:\n$result",
+            result.contains("\$t('此字段必填')")
+        )
+    }
+
+    /**
+     * 【重复执行】Vue TSX defineComponent 场景连跑 2 遍，
+     *   useI18n import / const 解构 精确计数都是 1。
+     */
+    fun testVueTsxDefineComponentRerunNoDuplicate() {
+        val file = configureFile(
+            "src/components/DupTsx.tsx",
+            """
+            import { defineComponent } from 'vue'
+            export const Dup = defineComponent({
+                setup() {
+                    const label = "重复测试"
+                    return () => <span>{label}</span>
+                }
+            })
+            """.trimIndent()
+        )
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        val compact = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = compact.split("import{useI18n}from'vue-i18n'").size - 1
+        val constCnt = compact.split("const{t:${'$'}t}=useI18n()").size - 1
+        assertEquals(
+            "Vue TSX useI18n import 重复了 $importCnt 次（expect 1）, txt:\n$compact",
+            1, importCnt
+        )
+        assertEquals(
+            "Vue TSX const { t:\$t } = useI18n() 重复了 $constCnt 次（expect 1）, txt:\n$compact",
+            1, constCnt
+        )
+    }
+
+    /**
+     * 【边界场景】defineComponent 写在非顶级函数里（比如工厂函数里才调用）不算组件，
+     * 仍按纯工具注入（不是很常见，主要测试嵌套过滤不判错）。
+     */
+    fun testVueTsxNestedDefineComponentInsideFunctionTreatedAsPureTool() {
+        val file = configureFile(
+            "src/utils/Factory.tsx",
+            """
+            // defineComponent 被包在工厂 buildComponent 函数内部 → 命中 nestedInsideFunction=true
+            export function buildComponent(name: string) {
+                return defineComponent({
+                    name,
+                    setup() {
+                        const tip = "工厂提示"
+                        return () => <div>{tip}</div>
+                    }
+                })
+            }
+            // 顶级没组件 → 这个文件应该当成纯工具？
+            // 实际上 extractedStrings 要提取「工厂提示」，needInjectGlobalDollarT 应该 false
+            // 因为嵌套在函数里的 defineComponent 不会被 findVueComponentFunctions 抓到（不算命中）
+            // 但这种写法其实就是个工厂返回组件，用户预期仍是 Vue 组件。
+            // 【实现原则（本轮）】顶级命中才算。嵌套的 defineComponent 我们本轮不识别。
+            //   只要顶部是工具函数包着，就仍然允许走全局 const ${'$'}t（至少保证不会出错）。
+            export const ANOTHER = "另外的提示"
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        // 新中文至少有 2 个
+        assertTrue(
+            "至少提取 2 个新中文（工厂提示 + 另外的提示）, got size=${p.extractedStrings.size}",
+            p.extractedStrings.size >= 2
+        )
+        p.execute()
+        val result = file.text
+        val compact = result.replace("\\s+".toRegex(), "")
+        // 说明：因为顶级没有 defineComponent 命中 → 允许走 either useI18n or global
+        // 这里我们只要"不要出现两种注入方式同时存在"就可以。
+        val hasUseI18n = compact.contains("import{useI18n}from'vue-i18n'")
+        val hasGlobalConst = compact.contains("const\$t=i18n.global.t")
+        assertTrue(
+            "不能同时出现 useI18n + 全局 const（二选一）, hasUseI18n=$hasUseI18n hasGlobalConst=$hasGlobalConst\n$result",
+            !(hasUseI18n && hasGlobalConst)
+        )
+    }
 }

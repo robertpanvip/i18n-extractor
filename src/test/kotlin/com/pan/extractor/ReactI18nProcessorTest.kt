@@ -1076,4 +1076,230 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             values.containsAll(expected)
         )
     }
+
+    // ============================================================
+    // 矩阵补全 (React 版)：5 条
+    // ============================================================
+
+    /**
+     * 【React 纯 TS · 混合场景】：
+     *   - 顶部已老 `import i18n from 'i18next'` + 文件里已写 `i18n.t('老调用中文')`
+     *   - 同时还有**新硬编码中文**需要提取（比如 `新提示`）
+     *
+     * 预期：
+     *   ① existingStrings 收录「老调用中文」（问题 3 语义）
+     *   ② extractedStrings 收录「新提示」≥ 1 个
+     *   ③ 因为有新提取 → 命中 React 新模式 getI18n：
+     *        - 老 import i18n from i18next 保留（不破坏）
+     *        - 额外追加 import { getI18n } from 'react-i18next'
+     *        - 追加 const $t = getI18n().t
+     *   ④ 新中文替换是短 $t('新提示')；老 i18n.t('老调用中文') 保留
+     */
+    fun testReactPureTsMixExistingI18nTAndNewChineseInjectsBothImports() {
+        val file = configureFile(
+            "src/utils/legacy-mix.ts",
+            """
+            import i18n from 'i18next'
+
+            export function mixLabel(type: string): string {
+                // 已写老 i18n.t 调用
+                const base = i18n.t('老调用中文')
+                // 新硬编码中文
+                const suffix = "新提示"
+                return base + " | " + suffix
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "existingStrings 应收录「老调用中文」, got=${processor.existingStrings.values}",
+            processor.existingStrings.values.contains("老调用中文")
+        )
+        assertTrue(
+            "应该有 ≥ 1 个新提取（至少包含「新提示」）, got size=${processor.extractedStrings.size}",
+            processor.extractedStrings.size >= 1
+        )
+        processor.execute()
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // ① 老 import 保留
+        assertTrue(
+            "老 import i18n from 'i18next' 应保留, got:\n$resultText",
+            compact.contains("importi18nfrom'i18next'")
+        )
+        // ② 新模式必须额外追加 getI18n import
+        assertTrue(
+            "新模式必须追加 import { getI18n } from 'react-i18next', got:\n$resultText",
+            compact.contains("import{getI18n}from'react-i18next'")
+        )
+        // ③ 追加 const $t = getI18n().t
+        assertTrue(
+            "新模式必须追加 const \$t = getI18n().t, got:\n$resultText",
+            compact.contains("const\$t=getI18n().t")
+        )
+        // ④ 新中文替换是短 $t
+        assertTrue(
+            "新中文「新提示」应替换为 \$t('新提示'), got:\n$resultText",
+            resultText.contains("\$t('新提示')")
+        )
+        // ⑤ 老 i18n.t('老调用中文') 保留
+        assertTrue(
+            "老 i18n.t('老调用中文') 仍保留, got:\n$resultText",
+            resultText.contains("i18n.t(")
+        )
+    }
+
+    /**
+     * 【React 纯 TS · 去重场景】：
+     *   顶部已经是完整的 `import { getI18n } from 'react-i18next'` + `const $t = getI18n().t`
+     *   → 再跑 1 次 processor 不应重复追加任何 import / const。
+     */
+    fun testReactPureTsGetI18nAndConstAlreadyExistsNoDuplicate() {
+        val file = configureFile(
+            "src/utils/brand-new.ts",
+            """
+            import { getI18n } from 'react-i18next'
+            const ${'$'}t = getI18n().t
+
+            export function brandTip() {
+                // 新硬编码中文，要走已有别名
+                return "品牌好"
+            }
+            """.trimIndent()
+        )
+        val p1 = I18nProcessor(project, file)
+        p1.collect()
+        assertEquals("应提取 1 个新中文（品牌好）, got=${p1.extractedStrings.size}", 1, p1.extractedStrings.size)
+        p1.execute()
+        // 再跑一遍：模拟用户第二次点 Extract
+        val p2 = I18nProcessor(project, file)
+        p2.collect()
+        p2.execute()
+
+        val txt = file.text.replace("\\s+".toRegex(), "")
+        val getI18nImportCnt = txt.split("import{getI18n}from'react-i18next'").size - 1
+        val constCnt = txt.split("const\$t=getI18n().t").size - 1
+        assertEquals(
+            "import { getI18n } from 'react-i18next' 重复了 $getI18nImportCnt 次（expect 1）, txt:\n$txt",
+            1, getI18nImportCnt
+        )
+        assertEquals(
+            "const \$t = getI18n().t 重复了 $constCnt 次（expect 1）, txt:\n$txt",
+            1, constCnt
+        )
+        // 新提取替换仍为短 $t
+        assertTrue(
+            "「品牌好」应替换为 \$t('品牌好'), got:\n${file.text}",
+            file.text.contains("\$t('品牌好')")
+        )
+    }
+
+    /**
+     * 【React useTranslation · 重复执行计数升级】
+     *   已有 testReactExistingUseTranslationNotDuplicated 只断言「不要出现重复字符串」，
+     *   这里补上精确计数：import / 解构 分别只能出现 1 次。
+     */
+    fun testReactUseTranslationReRunCountExactlyOnce() {
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            export function Hello() {
+                return <h1>欢迎你</h1>
+            }
+            """.trimIndent()
+        )
+        // 连续跑 2 遍
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+
+        val txt = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = txt.split("import{useTranslation}from'react-i18next'").size - 1
+        val constCnt = txt.split("const{t:\$t}=useTranslation()").size - 1
+        assertEquals(
+            "useTranslation import 重复了 $importCnt 次（expect 1）, txt:\n$txt",
+            1, importCnt
+        )
+        assertEquals(
+            "const { t: \$t } = useTranslation() 重复了 $constCnt 次（expect 1）, txt:\n$txt",
+            1, constCnt
+        )
+    }
+
+    /**
+     * 【React 纯 TS · 部分残缺场景】：
+     *   顶部用户手删了 const 别名，只剩 `import { getI18n } from 'react-i18next'`；
+     *   文件里既有新硬编码中文要提取。
+     *
+     * 预期：只补 `const $t = getI18n().t`，**不能**再重复追加 import { getI18n }。
+     */
+    fun testReactPureTsGetI18nImportedButConstMissingOnlyInjectsConst() {
+        val file = configureFile(
+            "src/utils/partial.ts",
+            """
+            // 用户写了 getI18n import 但手删了 const 别名（只剩一半）
+            import { getI18n } from 'react-i18next'
+
+            export function showTip() {
+                // 新硬编码中文：需要提取 → 应该发现 const 缺失，只补 const，不再补 import
+                return "残缺提示"
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        assertEquals("应提取 1 个新中文（残缺提示）, got=${p.extractedStrings.size}", 1, p.extractedStrings.size)
+        p.execute()
+
+        val txt = file.text
+        val compact = txt.replace("\\s+".toRegex(), "")
+        val getI18nImportCnt = compact.split("import{getI18n}from'react-i18next'").size - 1
+        assertEquals(
+            "import { getI18n } from 'react-i18next' 已经有了，不应重复追加；实际出现 $getI18nImportCnt 次, txt:\n$compact",
+            1, getI18nImportCnt
+        )
+        val constCnt = compact.split("const\$t=getI18n().t").size - 1
+        assertEquals(
+            "必须补齐 const \$t = getI18n().t 别名（expect 1）, 实际 $constCnt 次, txt:\n$compact",
+            1, constCnt
+        )
+        assertTrue(
+            "「残缺提示」替换成短 \$t('残缺提示'), got:\n$txt",
+            txt.contains("\$t('残缺提示')")
+        )
+    }
+
+    /**
+     * 【React 问题 3 扩展：复数函数 tc / ${'$'}tc / i18n.tc】
+     *  已写调用 `${'$'}tc('项目', 2)` / `tc('项目', 2)` / `i18n.tc('项目', 2)` 里的中文
+     *  也必须进 existingStrings。
+     */
+    fun testReactTcAndDollarTcCallArgsCollectedToExistingStrings() {
+        val file = configureFile(
+            "src/tc-mix.tsx",
+            """
+            import { useTranslation } from 'react-i18next'
+            import i18n from 'i18next'
+
+            export function Report() {
+                const { t, tc } = useTranslation()
+                return (
+                    <div>
+                      {tc('记录', 3)}
+                      {${'$'}tc('文件', 5)}
+                      {i18n.tc('用户', 10)}
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        val expected = setOf("记录", "文件", "用户")
+        val values = p.existingStrings.values.toSet()
+        assertTrue(
+            "React tc/\$tc/i18n.tc 内中文必须进 existingStrings,\nexpect=$expected\ngot=$values",
+            values.containsAll(expected)
+        )
+    }
 }
