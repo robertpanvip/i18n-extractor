@@ -225,21 +225,10 @@ class I18nProcessor(
     private fun collectExistingTKeys() {
         // 0. 检测翻译函数名：扫描已有 JSCallExpression
         // 优先级：i18n.global.t > i18n.t > $t（默认）
+        // 注意：Vue 模板 {{ }} 中的 JS 调用是注入到 XmlText 的注入 PSI，
+        // 不在主 PSI 树中，需要单独扫描（见下方 mustache 处理）。
         PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
-            val method = call.methodExpression
-            if (method is JSReferenceExpression) {
-                val text = method.text
-                // Vue: i18n.global.t / i18n.global.tc
-                if (text == "i18n.global.t" || text == "i18n.global.tc") {
-                    tFunctionName = "i18n.global.t"
-                }
-                // React: i18n.t / i18n.tc（i18next 全局实例）
-                else if (text == "i18n.t" || text == "i18n.tc") {
-                    if (tFunctionName == "\$t") {
-                        tFunctionName = "i18n.t"
-                    }
-                }
-            }
+            detectTFunctionName(call)
         }
 
         // 1. 模板 {{ }} 中的注入 JS
@@ -286,6 +275,9 @@ class I18nProcessor(
             override fun visitElement(element: PsiElement) {
                 if (element is JSCallExpression) {
                     collectTKeyFromCall(element)
+                    // 同步检测翻译函数名：mustache 注入的 i18n.global.t / i18n.t
+                    // 不在主 PSI 树中，需在此补充检测
+                    detectTFunctionName(element)
                 }
                 super.visitElement(element)
             }
@@ -301,6 +293,27 @@ class I18nProcessor(
                 val text = extractStringArgText(firstArg) ?: return
                 val key = generateKey(text.trim(), call)
                 existingStrings.putIfAbsent(key, text.trim())
+            }
+        }
+    }
+
+    /**
+     * 检测翻译函数名并更新 [tFunctionName]。优先级：i18n.global.t > i18n.t > $t（默认）。
+     * 在主 PSI 树和 mustache 注入 PSI 中均需调用，以覆盖 Vue 模板内的调用。
+     */
+    private fun detectTFunctionName(call: JSCallExpression) {
+        val method = call.methodExpression
+        if (method is JSReferenceExpression) {
+            val text = method.text
+            // Vue: i18n.global.t / i18n.global.tc
+            if (text == "i18n.global.t" || text == "i18n.global.tc") {
+                tFunctionName = "i18n.global.t"
+            }
+            // React: i18n.t / i18n.tc（i18next 全局实例）
+            else if (text == "i18n.t" || text == "i18n.tc") {
+                if (tFunctionName == "\$t") {
+                    tFunctionName = "i18n.t"
+                }
             }
         }
     }
@@ -322,22 +335,25 @@ class I18nProcessor(
 
     fun run() {
         this.effects.forEach { it() }
+        val isVue = isVueFile(psiFile.containingFile)
+        val isReact = Util.isReact(psiFile)
+        // 使用全局 i18n 实例（i18n.global.t / i18n.t）时，无论是否有新提取，
+        // 只要文件缺少 i18n 实例导入就补默认导入——否则既有的 i18n.global.t / i18n.t
+        // 调用会因未导入而失效。useI18n / useTranslation 的注入仅在出现新提取时才需要。
+        if (isVue && tFunctionName == "i18n.global.t") {
+            ensureI18nInstanceImported(psiFile, isVue = true)
+        } else if (isReact && tFunctionName == "i18n.t") {
+            ensureI18nInstanceImported(psiFile, isVue = false)
+        }
         if (extractedStrings.isNotEmpty()) {
-            if (isVueFile(psiFile.containingFile)) {
-                // 使用 i18n.global.t 时不需要注入 useI18n（全局实例已可用），
-                // 但需要确保 i18n 实例已导入，否则补默认导入。
+            if (isVue) {
                 // i18n.global.t 和 $t 可以共存：只有 $t 时才需要注入 useI18n
-                if (tFunctionName == "i18n.global.t") {
-                    ensureI18nInstanceImported(psiFile, isVue = true)
-                } else {
+                if (tFunctionName != "i18n.global.t") {
                     ensureVueI18nImported(psiFile)
                 }
-            } else if (Util.isReact(psiFile)) {
-                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation，
-                // 但需要确保 i18n 实例已导入，否则补默认导入。
-                if (tFunctionName == "i18n.t") {
-                    ensureI18nInstanceImported(psiFile, isVue = false)
-                } else {
+            } else if (isReact) {
+                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation
+                if (tFunctionName != "i18n.t") {
                     ensureReactI18nImported(psiFile)
                 }
             }
