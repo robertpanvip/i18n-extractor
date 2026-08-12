@@ -12,6 +12,8 @@ import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVarStatement
+import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.lang.javascript.psi.JSProperty
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnum
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
@@ -35,6 +37,9 @@ class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
+    /** 公开只读访问器，供进度条 UI 显示文件名（progress 线程里调用） */
+    val targetPsiFile: PsiElement get() = psiFile
+
     var effects = mutableListOf<() -> Unit>()
 
     /** 新提取的 key -> 原文本 */
@@ -267,14 +272,19 @@ class I18nProcessor(
                 //   const \$t = i18n.global.t
                 // 全局文件仍然用 \$t('xxx') 短写法，与 Vue SFC 内的写法保持一致。
                 //
-                // 触发条件：已知脚本后缀 + 没有自定义 hook（自定义 hook 会由
-                // ensureVueHookI18nImported 注入局部 useI18n 解构出的 \$t）。
+                // 触发条件：已知脚本后缀 + 「既没有 Vue 组件也没有自定义 hook」。
+                // 【★ 你刚才反馈的 Bug 修复】：Vue TSX (.tsx) 文件里经常有
+                // defineComponent({...}) 或 PascalCase 函数式组件，这些是 Vue 组件，
+                // **不能**按"纯工具"注入顶部 const $t = i18n.global.t——
+                //   有 Vue 组件 → 走 ensureVueComponentI18nDeclared() 的 useI18n hook。
+                //   纯工具（Vue TS/TSX 里没有组件和 Hook）→ 才能打 needInjectGlobalDollarT=true。
                 val ext = f.name.substringAfterLast('.', "")
                 val known = ext.equals("ts", ignoreCase = true) || ext.equals("tsx", ignoreCase = true) ||
                     ext.equals("js", ignoreCase = true) || ext.equals("jsx", ignoreCase = true)
                 if (known) {
                     val hooks = Util.findHookFunctions(f)
-                    if (hooks.isEmpty()) {
+                    val vueComponents = Util.findVueComponentFunctions(f)
+                    if (hooks.isEmpty() && vueComponents.isEmpty()) {
                         needInjectGlobalDollarT = true
                     }
                 }
@@ -439,7 +449,7 @@ class I18nProcessor(
         if (containingFile != null && Util.isTranslationResourceFile(containingFile)) return
 
         this.effects.forEach { it() }
-        val isVue = isVueFile(psiFile.containingFile)
+        val isVue = isVueFile(psiFile.containingFile) || Util.isVue(psiFile)
         val isReact = Util.isReact(psiFile)
         // 需要全局 i18n 实例 import 的场景：
         // 【问题 1 修复（用户报告：没有中文的文件也导入了全局导入）】
@@ -518,9 +528,34 @@ class I18nProcessor(
         }
         if (extractedStrings.isNotEmpty()) {
             if (isVue) {
-                // i18n.global.t 和 $t 可以共存：只有 $t 时才需要注入 useI18n
-                if (tFunctionName != "i18n.global.t") {
-                    ensureVueI18nImported(psiFile)
+                val f = containingFile ?: (psiFile as PsiFile)
+                // 区分：
+                //   .vue SFC → 走 ensureVueI18nImported（在 <script> 顶部加 import / 解构）
+                //   .ts/.tsx 纯脚本：
+                //     · 有 Vue 组件 → 调 ensureVueComponentI18nInjected，
+                //                     在每个组件 setup() 体首行注入 const { t: $t } = useI18n()
+                //                     不要全局 const $t
+                //     · 只有自定义 hook → ensureVueHookI18nImported
+                //     · 纯工具（无组件无 hook）→ 需要"全局别名"的，needInjectGlobalDollarT=true
+                //                              在 needGlobalI18nImport 分支已调
+                //                              ensureI18nInstanceImported(injectGlobalDollarT=true)
+                //                              注入了 i18n.global.t 别名，这里不用再调
+                val isSfc = f.name.endsWith(".vue", ignoreCase = true)
+                val components = if (isSfc) emptyList() else Util.findVueComponentFunctions(f)
+                val hooks = if (isSfc) emptyList() else Util.findHookFunctions(f)
+                when {
+                    !isSfc && components.isNotEmpty() -> ensureVueComponentI18nInjected(psiFile)
+                    !isSfc && hooks.isNotEmpty() -> ensureVueHookI18nImported(psiFile)
+                    isSfc -> {
+                        // .vue SFC：只有 $t 时才注入
+                        if (tFunctionName != "i18n.global.t") {
+                            ensureVueI18nImported(psiFile)
+                        }
+                    }
+                    // else: 非 SFC、无组件无 hook 的纯工具文件 → 什么都不做。
+                    //       因为 needInjectGlobalDollarT=true 时，needGlobalI18nImport 分支
+                    //       已经调过 ensureI18nInstanceImported(injectGlobalDollarT=true)
+                    //       注入了 import { i18n } + const $t = i18n.global.t。
                 }
             } else if (isReact) {
                 // 新规则：React 纯工具 TS 场景用 react-i18next getI18n + const $t=getI18n().t，
@@ -531,16 +566,8 @@ class I18nProcessor(
                     ensureReactI18nImported(psiFile)
                 }
             } else {
-                // 非 SFC、非 React 的纯 .ts 文件（典型：Vue 项目中的脚本）：
-                //   A. 有自定义 hook → ensureVueHookI18nImported 注入局部 useI18n，用 $t
-                //   B. 没自定义 hook → collect() 预判已把 tFunctionName 切成 i18n.global.t，
-                //                       这里只需要（在 needGlobalI18nImport 已判通过时也已经）
-                //                       调过 ensureI18nInstanceImported 注入全局实例 import，
-                //                       不再重复做。如果用户场景中仍要"确保"全局实例，再走一次：
-                val hooks = (containingFile ?: psiFile as? PsiFile)?.let { Util.findHookFunctions(it) }
-                if (!hooks.isNullOrEmpty()) {
-                    ensureVueHookI18nImported(psiFile)
-                }
+                // 兜底：isVue=false 且 isReact=false 的普通 .ts 文件（极少见，兼容旧逻辑）。
+                // Vue TSX / Vue 项目纯脚本现在都在上面的 isVue 分支处理了。
             }
         }
     }
@@ -804,6 +831,94 @@ class I18nProcessor(
                     body.addAfter(hookStmt, openingBrace)
                 }
             }
+        }
+    }
+
+    /**
+     * 【Vue TSX 组件的 useI18n 注入】（对应 ensureVueHookI18nImported 的"组件版"）
+     *
+     * 场景：Vue 项目中的 .tsx / .jsx 文件写了 defineComponent({...}) 或 PascalCase
+     *       函数式组件，内部有硬编码中文需要替换为 $t('key')，此时需要：
+     *       1) 顶部存在 `import { useI18n } from 'vue-i18n'`；
+     *       2) defineComponent 的 setup() 函数体开头，或函数式组件函数体开头，
+     *          注入 `const { t: $t } = useI18n()`；
+     *       这样 $t 在组件作用域可用，不需要"全局 i18n 实例 + const $t = i18n.global.t"。
+     *
+     * 注入目标集合（allTargets，每一个都要在函数体开头插 const 解构）：
+     *   A. defineComponent({ setup() { ... } }) 中找到的 setup() 函数体
+     *   B. findVueComponentFunctions 返回的函数式组件（PascalCase + return JSX）
+     *   C. findVueComponentFunctions 返回的 defineComponent 调用 → 定位 setup 属性
+     *
+     * 注意：和 ensureVueHookI18nImported 对称——如果文件里找不到任何组件函数，直接 return。
+     */
+    private fun ensureVueComponentI18nInjected(psiFile: PsiElement) {
+        val containingFile = psiFile.containingFile ?: return
+        val vueComponents = Util.findVueComponentFunctions(containingFile)
+        if (vueComponents.isEmpty()) return
+
+        // —— 阶段 1：先确认要注入 const 解构的"函数体列表"
+        val targetBodies = mutableListOf<JSBlockStatement>()
+
+        for (cand in vueComponents) {
+            when {
+                // 类型 1：cand 就是一个函数式组件（defineComponent 场景 2 返回的 JSFunction）
+                cand is JSFunction -> {
+                    val body = PsiTreeUtil.findChildOfType(cand, JSBlockStatement::class.java)
+                    if (body != null) targetBodies.add(body)
+                }
+                // 类型 2：cand 是 defineComponent({ setup(){...} }) 的调用（JSCallExpression）
+                cand is JSCallExpression -> {
+                    // 在 cand 的整个子树里找 setup: 属性
+                    // （defineComponent 的第一个参数就是 { setup: ... } 对象字面量）
+                    // 直接用 findChildrenOfType(JSProperty) 搜索，避免 SDK 版本差异
+                    // （arguments 类型在不同 SDK 版本不一致，但属性一定是 JSProperty 的后代）。
+                    val setupProp = PsiTreeUtil.findChildrenOfType(cand, JSProperty::class.java)
+                        .firstOrNull { it.name == "setup" } ?: continue
+                    // setup 可能是三种形态，且不同 IntelliJ 版本解析结构不一致：
+                    //   · 简写方法 setup() {}        → 直接在 setupProp 下展开 PARAMETER_LIST + JSBlockStatement
+                    //     （JSFunction 也能 find 到，但其下的 block 可能是空 → 需要在 setupProp 直接找）
+                    //   · setup: function(){}        → JSFunction + block
+                    //   · setup: () => {}            → JSFunction(箭头类型，SDK 内 JSFunction 可识别) + block
+                    // 兼容所有结构：**先在 setupFunc（JSFunction）内找 block，找不到就退到 setupProp 内找**
+                    val setupFunc = PsiTreeUtil.findChildOfType(setupProp, JSFunction::class.java)
+                    val body: JSBlockStatement =
+                        ((if (setupFunc != null) PsiTreeUtil.findChildOfType(setupFunc, JSBlockStatement::class.java) else null)
+                            ?: PsiTreeUtil.findChildOfType(setupProp, JSBlockStatement::class.java))
+                            ?: continue
+                    targetBodies.add(body)
+                }
+            }
+        }
+        // 没找到任何组件函数体 → 不注入 import（避免无意义的 vue-i18n 注入）
+        if (targetBodies.isEmpty()) return
+
+        // —— 阶段 2：保证 vue-i18n import 存在（复用 ensureVueHookI18nImported 的同一段逻辑）
+        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+        if (imports.none { it.text.contains("vue-i18n") }) {
+            val importText = "import { useI18n } from 'vue-i18n';\n"
+            val importStmt = createJSStatementFromText(importText, containingFile)
+            if (imports.isNotEmpty()) {
+                imports.first().parent.addBefore(importStmt, imports.first())
+            } else {
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
+                } else {
+                    containingFile.add(importStmt)
+                }
+            }
+        }
+
+        // —— 阶段 3：从后往前，在每个组件函数体首行插 `const { t: $t } = useI18n();`（去重）
+        for (body in targetBodies.asReversed()) {
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.any { it.text.contains("useI18n") }) continue
+            val hookStmt = createJSStatementFromText(
+                "\n    const { t: \$t } = useI18n();",
+                body
+            )
+            val openingBrace = body.firstChild ?: continue
+            body.addAfter(hookStmt, openingBrace)
         }
     }
 

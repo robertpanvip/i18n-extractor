@@ -13,6 +13,7 @@ import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -143,19 +144,62 @@ class I18nExtractorAction : AnAction() {
 
         val dialog = ExtractedStringsDialog(project, allStrings)
         if (dialog.showAndGet()) {
-            // WriteCommandAction.execute() 内部会自行持有 Read+Write 锁，无需再包
-            processor.execute()
-            if (dialog.json !== null) {
-                val content = getJsonContent(dialog.json!!)
-                CopyPasteManager.getInstance().setContents(StringSelection(content))
-            }
-            // 问题 6：用户点击 OK 后提示"提取成功"
-            notifyExtractSuccess(
-                project,
-                title = "单文件国际化提取完成",
-                extractedCount = allStrings.size,
-                processedFiles = 1,
-                jsonWritten = dialog.json !== null
+            // 【问题 1 修复：写入过程加进度提示，避免点确定后"卡住没反馈"】
+            //   单文件可能有几十上百处替换 + import/const 注入，之前直接在 EDT 同步调
+            //   processor.execute()，表现就是"点了 OK 后对话框消失，但 UI 完全没变化几秒"。
+            //   改用 Task.Backgroundable（非模态后台任务）+ 进度条 + 阶段文本：
+            //     "阶段 1/2：写入 PSI 替换" → 2/2：复制 JSON / 发通知
+            ProgressManager.getInstance().run(
+                object : Task.Backgroundable(
+                    project,
+                    "i18n 提取单文件写入中…",
+                    true
+                ) {
+                    private var jsonCopied = false
+                    override fun run(indicator: ProgressIndicator) {
+                        indicator.isIndeterminate = false
+                        val totalSteps = 2
+                        // —— 阶段 1：写入 PSI 替换（processor.execute 内部会走 writeCommand）
+                        indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
+                        indicator.fraction = 0.1
+                        // processor.execute 内部需要 Write 锁，但它内部并没有自建
+                        // WriteCommandAction.execute()——实际看 processor.execute()：
+                        //   effects.forEach { it.run() }，里面的 effect.run 有
+                        //   WriteCommandAction 包裹。保险起见，这里再包一层
+                        //   runWriteAction 保证线程合规（进度线程不是 EDT）。
+                        ApplicationManager.getApplication().invokeAndWait {
+                            WriteCommandAction.runWriteCommandAction(
+                                project,
+                                "I18n Extract Single",  // command name (显示在 Undo 里)
+                                null,                   // group id
+                                { processor.execute() } // Runnable
+                            )
+                        }
+                        indicator.fraction = 0.8
+                        indicator.text2 = psiFile.name
+
+                        // —— 阶段 2：复制 JSON 到剪贴板
+                        if (dialog.json !== null) {
+                            indicator.text = "复制 JSON 到剪贴板"
+                            indicator.fraction = 0.9
+                            val content = getJsonContent(dialog.json!!)
+                            CopyPasteManager.getInstance().setContents(StringSelection(content))
+                            jsonCopied = true
+                        }
+                        indicator.fraction = 1.0
+                    }
+
+                    override fun onSuccess() {
+                        // 问题 6：成功提取后的用户回馈（写回到 EDT 发通知）
+                        notifyExtractSuccess(
+                            project,
+                            title = "单文件国际化提取完成",
+                            extractedCount = allStrings.size,
+                            processedFiles = 1,
+                            jsonWritten = jsonCopied
+                        )
+                    }
+                }
             )
         } else if (allStrings.isEmpty()) {
             notifyNothingExtracted(project, "当前文件")
@@ -214,29 +258,64 @@ class I18nExtractorAction : AnAction() {
 
         val dialog = ExtractedStringsDialog(project, extracted)
         if (dialog.showAndGet()) {
-            CommandProcessor.getInstance().executeCommand(
-                project,
-                {
-                    WriteCommandAction.runWriteCommandAction(project) {
-                        processors.forEach { it.run() }
+            // 【问题 1 修复：目录写入阶段加进度条 + 逐文件反馈】
+            // 之前 processDirectory OK 之后是同步串行 processors.forEach{it.run()}，
+            // 目录文件多时 UI 冻结没任何进度反馈。
+            // 改用 Task.Backgroundable + 进度 0.0~0.9 逐文件写、0.9~1.0 复制 JSON。
+            ProgressManager.getInstance().run(
+                object : Task.Backgroundable(
+                    project,
+                    "i18n 目录批量写入中…",
+                    true
+                ) {
+                    private var jsonCopied = false
+                    override fun run(indicator: ProgressIndicator) {
+                        indicator.isIndeterminate = false
+                        indicator.text = "批量写入中：处理 $processors.size 个文件"
+                        indicator.fraction = 0.0
+                        // —— 阶段 1：processors 逐文件执行 Write（写锁必须拿在 EDT 上）
+                        ApplicationManager.getApplication().invokeAndWait {
+                            CommandProcessor.getInstance().executeCommand(
+                                project,
+                                {
+                                    WriteCommandAction.runWriteCommandAction(project) {
+                                        for ((idx, processor) in processors.withIndex()) {
+                                            indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.9
+                                            val pf = (processor.targetPsiFile as? PsiFile)
+                                            indicator.text2 = pf?.name
+                                                ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
+                                            if (indicator.isCanceled) break
+                                            processor.run()
+                                        }
+                                    }
+                                },
+                                "I18n Extract Batch",
+                                null
+                            )
+                        }
+                        indicator.fraction = 0.9
+                        indicator.text2 = ""
+                        // —— 阶段 2：复制 JSON 到剪贴板
+                        if (dialog.json !== null) {
+                            indicator.text = "复制 JSON 到剪贴板"
+                            indicator.fraction = 0.95
+                            val content = getJsonContent(dialog.json!!)
+                            CopyPasteManager.getInstance().setContents(StringSelection(content))
+                            jsonCopied = true
+                        }
+                        indicator.fraction = 1.0
                     }
-                },
-                "I18n Extract",
-                null
-            )
 
-            if (dialog.json !== null) {
-                val content = getJsonContent(dialog.json!!)
-                CopyPasteManager.getInstance().setContents(StringSelection(content))
-            }
-
-            // 问题 6：用户点击 OK 后提示"批量提取成功"
-            notifyExtractSuccess(
-                project,
-                title = "目录批量国际化提取完成",
-                extractedCount = extracted.size,
-                processedFiles = files.size,
-                jsonWritten = dialog.json !== null
+                    override fun onSuccess() {
+                        notifyExtractSuccess(
+                            project,
+                            title = "目录批量国际化提取完成",
+                            extractedCount = extracted.size,
+                            processedFiles = files.size,
+                            jsonWritten = jsonCopied
+                        )
+                    }
+                }
             )
         } else if (extracted.isEmpty()) {
             notifyNothingExtracted(project, "目录 ${dir.presentableUrl}")

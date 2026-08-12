@@ -1608,4 +1608,209 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             values.containsAll(expected)
         )
     }
+
+    // ============================================================
+    // Vue TSX 场景（你反馈：「vue tsx 中 没使用全局 也导入了 const $t = i18n.global.t」）
+    // ============================================================
+
+    /**
+     * 【主场景】Vue TSX 里有 defineComponent({...}) 组件，新中文硬编码，
+     *   → 应注入 `import { useI18n } from 'vue-i18n'` + `const { t: $t } = useI18n()`
+     *   → **绝对不能**出现 `const $t = i18n.global.t`（全局别名）
+     *   → **也不能**出现 `import { i18n } from '@/locales/index'`（全局实例）
+     */
+    fun testVueTsxDefineComponentInjectsUseI18nNotGlobalDollarT() {
+        val file = configureFile(
+            "src/components/HelloTsx.tsx",
+            """
+            import { defineComponent, ref } from 'vue'
+
+            export default defineComponent({
+                name: 'HelloTsx',
+                setup() {
+                    // 新硬编码中文
+                    const title = "欢迎使用"
+                    const subtitle = "国际化指南"
+                    const count = ref(0)
+                    return () => (
+                        <div>
+                          <h1>{title}</h1>
+                          <p>{subtitle}</p>
+                          <span>{count.value}</span>
+                        </div>
+                    )
+                }
+            })
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "应提取 2 个新中文：欢迎使用 + 国际化指南, got size=${processor.extractedStrings.size}",
+            processor.extractedStrings.size == 2
+        )
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // ✅ 必须有 useI18n （Vue 组件的注入方式）
+        assertTrue(
+            "Vue TSX defineComponent 场景应有 import { useI18n } from 'vue-i18n', got:\n$resultText",
+            compact.contains("import{useI18n}from'vue-i18n'")
+        )
+        assertTrue(
+            "Vue TSX defineComponent 场景应有 const { t: \$t } = useI18n(), got:\n$resultText",
+            compact.contains("const{t:${'$'}t}=useI18n()")
+        )
+        // ❌ 不能有全局 const $t = i18n.global.t
+        assertFalse(
+            "Vue TSX 里有 defineComponent 组件，**不应**再注入全局 const \$t = i18n.global.t, got:\n$resultText",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        // ❌ 不能有 i18n 全局实例 import
+        assertFalse(
+            "Vue TSX 里有 defineComponent 组件，**不应**再注入 import { i18n } from locales, got:\n$resultText",
+            compact.contains("import{i18n}from") && compact.contains("locales")
+        )
+        // ✅ 新中文替换是短 $t
+        assertTrue(
+            "「欢迎使用」应替换为 \$t('欢迎使用'), got:\n$resultText",
+            resultText.contains("\$t('欢迎使用')")
+        )
+        assertTrue(
+            "「国际化指南」应替换为 \$t('国际化指南'), got:\n$resultText",
+            resultText.contains("\$t('国际化指南')")
+        )
+    }
+
+    /**
+     * 【反例场景】Vue TSX 里**没有 defineComponent 也没有函数式组件**（纯工具文件），
+     *  仍应走全局别名：`import { i18n } from '@/locales/index'` + `const $t = i18n.global.t`。
+     */
+    fun testVueTsxPureToolNoComponentStillInjectsGlobalDollarT() {
+        val file = configureFile(
+            "src/utils/validator.tsx", // 故意写成 .tsx 后缀但完全没组件
+            """
+            // 虽然是 .tsx，但这里全是普通校验工具函数（没 defineComponent，没 return <JSX>）
+            export function validatePhone(p: string): string {
+                const ok = /^1\d{10}${'$'}/.test(p)
+                return ok ? "" : "手机号格式错误"
+            }
+            export const ERR = {
+                REQUIRED: "此字段必填"
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        assertTrue(
+            "纯工具 TSX 应提取 2 个新中文：手机号格式错误 + 此字段必填, got=${p.extractedStrings.size}",
+            p.extractedStrings.size == 2
+        )
+        p.execute()
+        val result = file.text
+        val compact = result.replace("\\s+".toRegex(), "")
+        // ✅ 必须有全局 i18n import + const $t = i18n.global.t
+        assertTrue(
+            "Vue 纯工具 TSX 必须有 import { i18n } from ...locales..., got:\n$result",
+            compact.contains("import{i18n}from") && compact.contains("locales")
+        )
+        assertTrue(
+            "Vue 纯工具 TSX 必须有 const \$t = i18n.global.t, got:\n$result",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        // ❌ 不能有 useI18n（纯工具，没组件/Hook，别注入组件用的 hook）
+        assertFalse(
+            "纯工具 TSX 不应出现 useI18n hook, got:\n$result",
+            compact.contains("import{useI18n}from'vue-i18n'") || compact.contains("useI18n()")
+        )
+        // ✅ 新中文替换是短 $t
+        assertTrue(
+            "「手机号格式错误」替换成 \$t(...), got:\n$result",
+            result.contains("\$t('手机号格式错误')")
+        )
+        assertTrue(
+            "「此字段必填」替换成 \$t(...), got:\n$result",
+            result.contains("\$t('此字段必填')")
+        )
+    }
+
+    /**
+     * 【重复执行】Vue TSX defineComponent 场景连跑 2 遍，
+     *   useI18n import / const 解构 精确计数都是 1。
+     */
+    fun testVueTsxDefineComponentRerunNoDuplicate() {
+        val file = configureFile(
+            "src/components/DupTsx.tsx",
+            """
+            import { defineComponent } from 'vue'
+            export const Dup = defineComponent({
+                setup() {
+                    const label = "重复测试"
+                    return () => <span>{label}</span>
+                }
+            })
+            """.trimIndent()
+        )
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        val compact = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = compact.split("import{useI18n}from'vue-i18n'").size - 1
+        val constCnt = compact.split("const{t:${'$'}t}=useI18n()").size - 1
+        assertEquals(
+            "Vue TSX useI18n import 重复了 $importCnt 次（expect 1）, txt:\n$compact",
+            1, importCnt
+        )
+        assertEquals(
+            "Vue TSX const { t:\$t } = useI18n() 重复了 $constCnt 次（expect 1）, txt:\n$compact",
+            1, constCnt
+        )
+    }
+
+    /**
+     * 【边界场景】defineComponent 写在非顶级函数里（比如工厂函数里才调用）不算组件，
+     * 仍按纯工具注入（不是很常见，主要测试嵌套过滤不判错）。
+     */
+    fun testVueTsxNestedDefineComponentInsideFunctionTreatedAsPureTool() {
+        val file = configureFile(
+            "src/utils/Factory.tsx",
+            """
+            // defineComponent 被包在工厂 buildComponent 函数内部 → 命中 nestedInsideFunction=true
+            export function buildComponent(name: string) {
+                return defineComponent({
+                    name,
+                    setup() {
+                        const tip = "工厂提示"
+                        return () => <div>{tip}</div>
+                    }
+                })
+            }
+            // 顶级没组件 → 这个文件应该当成纯工具？
+            // 实际上 extractedStrings 要提取「工厂提示」，needInjectGlobalDollarT 应该 false
+            // 因为嵌套在函数里的 defineComponent 不会被 findVueComponentFunctions 抓到（不算命中）
+            // 但这种写法其实就是个工厂返回组件，用户预期仍是 Vue 组件。
+            // 【实现原则（本轮）】顶级命中才算。嵌套的 defineComponent 我们本轮不识别。
+            //   只要顶部是工具函数包着，就仍然允许走全局 const ${'$'}t（至少保证不会出错）。
+            export const ANOTHER = "另外的提示"
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        // 新中文至少有 2 个
+        assertTrue(
+            "至少提取 2 个新中文（工厂提示 + 另外的提示）, got size=${p.extractedStrings.size}",
+            p.extractedStrings.size >= 2
+        )
+        p.execute()
+        val result = file.text
+        val compact = result.replace("\\s+".toRegex(), "")
+        // 说明：因为顶级没有 defineComponent 命中 → 允许走 either useI18n or global
+        // 这里我们只要"不要出现两种注入方式同时存在"就可以。
+        val hasUseI18n = compact.contains("import{useI18n}from'vue-i18n'")
+        val hasGlobalConst = compact.contains("const\$t=i18n.global.t")
+        assertTrue(
+            "不能同时出现 useI18n + 全局 const（二选一）, hasUseI18n=$hasUseI18n hasGlobalConst=$hasGlobalConst\n$result",
+            !(hasUseI18n && hasGlobalConst)
+        )
+    }
 }

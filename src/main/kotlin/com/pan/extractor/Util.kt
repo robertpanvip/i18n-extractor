@@ -352,6 +352,102 @@ object Util {
         return result
     }
 
+    /**
+     * 查找 .tsx / .jsx 文件中的「Vue 组件」（用于 Vue TSX 场景，对应 React 组件识别的对称实现）。
+     *
+     * 判断标准（满足任一即可判为"这个文件里有 Vue 组件"，因此不能把它当纯工具文件，
+     * 不能用 needInjectGlobalDollarT=true 的全局 const $t 别名，必须走 useI18n hook）：
+     *
+     *  1. 顶级作用域存在对 defineComponent({ ... }) / Vue.defineComponent({ ... }) 的
+     *     直接调用或赋值（const Xxx = defineComponent({}) / export default defineComponent({})）
+     *  2. 顶级函数名 PascalCase 且函数体里有 return <JSX>（Vue 3 函数式组件写法，语法形态
+     *     与 React 一致但属于 Vue 项目，此时依然用 useI18n 注入）
+     *  3. 顶级存在 h('div', ...) / createVNode(...) 调用且外层包裹在 PascalCase 函数里
+     *     （Vue 渲染函数组件）——可选，先不做，1+2 覆盖主流。
+     */
+    fun findVueComponentFunctions(file: PsiFile): List<PsiElement> {
+        val result = mutableListOf<PsiElement>()
+
+        // --- 场景 1：defineComponent 调用 -----------------------------------------------
+        val defineComponentCalls = PsiTreeUtil.findChildrenOfType(file, JSCallExpression::class.java)
+        for (call in defineComponentCalls) {
+            val method = call.methodExpression
+            val methodText = method?.text ?: continue
+            if (methodText != "defineComponent" &&
+                methodText != "Vue.defineComponent" &&
+                methodText != "h") {
+                continue
+            }
+            // defineComponent / h 必须在顶级作用域（或赋给顶级常量 / export default）
+            var p: PsiElement? = call.parent
+            var isTopLevel = false
+            var depth = 0
+            while (p != null && p !== file && depth < 10) {
+                if (p is JSVarStatement || p is JSAssignmentExpression ||
+                    p is JSReturnStatement /* export default defineComponent({}) 的 return 会先经过 export */) {
+                    // 再看这个 var/assign 是否在顶层
+                    var p2: PsiElement? = p!!.parent
+                    var depth2 = 0
+                    while (p2 != null && p2 !== file && depth2 < 10) {
+                        if (p2 is JSFunction) {
+                            isTopLevel = false
+                            break
+                        }
+                        isTopLevel = true
+                        p2 = p2.parent
+                        depth2++
+                    }
+                    break
+                }
+                p = p.parent
+                depth++
+            }
+            // 简化：只要 defineComponent/h 不被嵌套在 JSFunction 内部就算命中（避免误判在深层工具函数里）
+            var pp: PsiElement? = call.parent
+            var nestedInsideFunction = false
+            var d2 = 0
+            while (pp != null && pp !== file && d2 < 20) {
+                if (pp is JSFunction) {
+                    nestedInsideFunction = true
+                    break
+                }
+                pp = pp.parent
+                d2++
+            }
+            if (!nestedInsideFunction) {
+                result.add(call)
+            }
+        }
+
+        // --- 场景 2：Vue 3 函数式组件（PascalCase 顶级函数 + return JSX） -------------
+        //   和 React 组件识别形态一致，只是语义上 Vue/React 混用。这里直接复用 findReactComponentFunctions
+        //   的"函数组件"形态识别：函数名 PascalCase 且 return JSX，就认为"这里有组件"，不要走全局长别名。
+        val functions = PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java)
+        for (func in functions) {
+            if (!isTopLevelFunction(func, file)) continue
+            val name = getFunctionName(func) ?: continue
+            if (name.isEmpty() || !name[0].isUpperCase()) continue
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            if (hasReturnJSX(body)) {
+                result.add(func)
+            }
+        }
+        // 回退 const Xxx = () => <JSX>
+        val varStmts = PsiTreeUtil.findChildrenOfType(file, JSVarStatement::class.java)
+        for (varStmt in varStmts) {
+            if (!isTopLevelFunction(varStmt, file)) continue
+            val func = PsiTreeUtil.findChildOfType(varStmt, JSFunction::class.java) ?: continue
+            val name = getFunctionName(func) ?: continue
+            if (!name[0].isUpperCase()) continue
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            if (hasReturnJSX(body)) {
+                result.add(func)
+            }
+        }
+
+        return result.distinct()
+    }
+
     /** 函数是否在顶级作用域（不被其他函数嵌套） */
     private fun isTopLevelFunction(func: PsiElement, file: PsiFile): Boolean {
         var p = func.parent
