@@ -1273,6 +1273,54 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * 【问题 1 对称回归】Vue 纯工具 TS 文件，**完全没有中文 / 没有任何 i18n 调用** →
+     * 绝不应该注入任何全局 import + const \$t 别名。
+     *
+     * 前一版 bug：needInjectGlobalDollarT 作为 OR 独立项，导致"只要预判命中纯工具文件，
+     * 不管有没有中文都往顶部塞两行"。修复后只有 extractedStrings/existingStrings
+     * 有内容才会触发注入。
+     */
+    fun testVueEmptyToolTsFileNoChineseShouldNotInjectAnything() {
+        val file = configureFile(
+            "src/utils/number.ts",
+            """
+            // 完全没有中文，也没有任何 i18n 调用
+            export function formatNumber(n: number): string {
+                return Intl.NumberFormat("en-US").format(n)
+            }
+            export const MATH = {
+                PI: 3.14159,
+                E: 2.71828
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        assertEquals(
+            "无中文 Vue 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.extractedStrings}",
+            0, processor.extractedStrings.size
+        )
+        assertFalse(
+            "无中文 Vue 文件不应出现任何全局 i18n import（i18n from locales / vue-i18n 都不行）, got:\n$resultText",
+            resultText.containsIgnoringWs("import i18n from") ||
+                resultText.containsIgnoringWs("import { i18n } from")
+        )
+        assertFalse(
+            "无中文 Vue 文件不应出现 const \$t = i18n.global.t 别名, got:\n$resultText",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        assertFalse(
+            "无中文 Vue 文件不应出现 useI18n Hook 导入/调用, got:\n$resultText",
+            compact.contains("useI18n")
+        )
+    }
+
     // ============================================================
     // 问题 3：已写在 t() 内的中文没被提取到 existingStrings
     // ============================================================
