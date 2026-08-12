@@ -1264,7 +1264,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             """
             <template>
               <div>
-                <span>{{ \$t('新增') }}</span>
+                <span>{{ ${'$'}t('新增') }}</span>
                 <span>{{ i18n.global.t('删除') }}</span>
               </div>
             </template>
@@ -1307,7 +1307,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         val importCnt = txt.split("import{useI18n}from'vue-i18n'").size - 1
-        val constCnt = txt.split("const{t:\$t}=useI18n()").size - 1
+        val constCnt = txt.split("const{t:${'$'}t}=useI18n()").size - 1
         assertEquals("useI18n import 重复了 $importCnt 次, txt:\n$txt", 1, importCnt)
         assertEquals("useI18n const 解构重复了 $constCnt 次, txt:\n$txt", 1, constCnt)
     }

@@ -409,6 +409,11 @@ class I18nProcessor(
                 ensureI18nInstanceImported(psiFile, isVue = true)
             } else if (isReact && tFunctionName == "i18n.t") {
                 ensureI18nInstanceImported(psiFile, isVue = false)
+            } else if (tFunctionName == "i18n.global.t" && extractedStrings.isNotEmpty()) {
+                // 问题 5 兜底分支：isVue=false（不是 .vue SFC，是普通 .ts）、
+                // 也不是 React（Util.isReact=false），但我们预判它是 Vue 项目脚本、切到了
+                // i18n.global.t → 这里必须补"全局 i18n 实例 import"（从 @/locales 找 createI18n 文件）。
+                ensureI18nInstanceImported(psiFile, isVue = true)
             }
         }
         if (extractedStrings.isNotEmpty()) {
@@ -462,57 +467,60 @@ class I18nProcessor(
     /**
      * 判断 [decl]（一个 ES6ImportDeclaration）是否已经从 [moduleName] 导入了 [wantedName]。
      *
-     * 不再用整行文本精确比较（会被分号/单双引号/换行/其他specifier/别名骗过），
-     * 而是基于 PSI 语义层：
-     * - from 的模块名文本（去掉引号）匹配 moduleName（忽略大小写路径）
-     * - named imports 里包含 wantedName（忽略别名 as）
-     *   或者是 default import + wantedName == "default"
-     * - namespace import（import * as X from "..."）统一认为"已经处理过"，不再重复
+     * 改用"文本级宽松匹配"而不是 IntelliJ PSI 内部 API：
+     * 不同版本的 IntelliJ（2024/2025 EAP）对 ES6ImportDeclaration 的内部属性
+     * 名字变化很大（importedModule / importedNamespaceBinding / importedName 等都不存在），
+     * 但 `decl.text` 即源代码字符串是稳定的。
+     *
+     * 匹配规则：
+     * - decl.text 必须包含 `from "...moduleName..."` 或 `from '...moduleName...'`
+     *   （相对路径还允许 `/index` 尾缀）
+     * - 然后看整个 import 里是否包含 wantedName：
+     *     1) 命名导入：`{ useI18n }` / `{ useI18n as i18n }` / `{ foo, useI18n }`
+     *     2) 命名空间导入：`import * as X from` → 视为"已经处理过"
+     *     3) 默认导入：默认变量名 == wantedName 或 wantedName == "default"
      */
     private fun hasImportedSpecifier(decl: ES6ImportDeclaration, moduleName: String, wantedName: String): Boolean {
-        val importedModule = decl.importedModule?.resolve() as? PsiFile
-        val fromTextRaw = decl.fromClause?.referenceText?.trim(' ', '\t', '"', '\'')
-            ?: (decl as? com.intellij.lang.javascript.ecmascript6.psi.impl.ES6ImportDeclarationImpl)
-                ?.let {
-                    // PSI 版本兼容：有些版本叫 importPath / importPathRef
-                    PsiTreeUtil.findChildrenOfType(it, com.intellij.lang.javascript.psi.JSLiteralExpression::class.java)
-                        .firstOrNull()?.stringValue
-                }
-        val fromText = (fromTextRaw ?: "").trim().lowercase()
-        if (fromText.isEmpty()) return false
-        // 模块精确匹配（尾缀 /index 也视为命中）
+        val text = decl.text.replace("\\s+".toRegex(), " ")
+        // 1. from 路径检查（单双引号 / 分号 / 末尾空白 / index 尾缀 都容忍）
         val want = moduleName.lowercase()
-        if (fromText != want && fromText.removeSuffix("/index") != want) return false
+        val fromMatch = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
+        val from = fromMatch?.groupValues?.get(1)?.trim()?.lowercase()?.removeSuffix("/index")
+        if (from != want) return false
 
-        val bindings = decl.importedBindings
-        // namespace import：import * as X from 'vue-i18n' 视为"已经有了"
-        if (decl.importedNamespaceBinding != null) return true
-        // named + default bindings
-        for (binding in bindings) {
-            val sourceName = when (binding) {
-                is com.intellij.lang.javascript.ecmascript6.psi.ES6ImportedBinding -> {
-                    // 别名 import { foo as bar }：importedName == foo；name == bar
-                    binding.importedName.takeIf { it != null && it.isNotEmpty() } ?: binding.name
-                }
-                else -> binding.name
-            }
-            if (sourceName == wantedName) return true
-            // default import 命中 wantedName == "default" 的兜底情况
-            if (binding.text.trim().takeWhile { it != ' ' }.takeWhile { it != '\n' } == wantedName) return true
+        val cleaned = text
+
+        // 2. namespace import: `import * as X from` 视为"已处理过"
+        if (Regex("""import\s+\*\s+as\s+""").containsMatchIn(cleaned)) return true
+
+        // 3. named import: `{ ... , useI18n , ... }` 或 `{ useI18n as xxx }`
+        val curlyIdxS = cleaned.indexOf('{')
+        val curlyIdxE = cleaned.lastIndexOf('}')
+        if (curlyIdxS in 0 until curlyIdxE) {
+            val inner = cleaned.substring(curlyIdxS + 1, curlyIdxE)
+            // 匹配 `useI18n` 本身，或 `useI18n as`（别名）
+            val re = Regex("""(^|[,\s])\Q$wantedName\E(\s+as\b|$|[,\s])""")
+            if (re.containsMatchIn(inner)) return true
         }
+
+        // 4. default import：import useI18n from 'vue-i18n'
+        //    import 关键字后 到 from / { / * 之间的首个标识符
+        val defaultMatch = Regex("""import\s+([A-Za-z_][\w\$]*)""").find(cleaned)
+        if (defaultMatch != null && defaultMatch.groupValues[1] == wantedName) return true
+
         return false
     }
 
     /**
-     * 判断 [scope] 范围内是否已经存在"某函数的调用 + 指定的解构赋值"。
-     * 用于避免 const { t: $t } = useI18n(); 在 ensureVueI18nImported 里重复插入。
+     * 判断 [scope] 范围内是否已经存在"[callee]() 函数调用 + 指定解构"。
+     * 用于避免 `const { t: \$t } = useI18n();` 在 ensureVueI18nImported 里重复插入。
      *
-     * 匹配逻辑：
-     * 1) 是否存在 JSCallExpression，callee referenceName == [callee]
-     * 2) 或存在 JSVarStatement 的 destructuring 声明中：
-     *    每对 entry：左侧 propertyName (或标识符) == [destructureNameFrom]
-     *    右侧别名 == [destructureAlias]
-     *    且 初始值表达式中 存在 callee([callee])() 调用
+     * 文本级宽松匹配：
+     * 1) scope 文本里出现 `useI18n(`（即调用过），
+     * 2) 并且要么
+     *    - const/let/var 解构文本中包含 `{ $destructureNameFrom: $destructureAlias }`
+     *    - 或者 `useI18n(` 附近存在 `{$destructureNameFrom`（比如用户自己写 const { t, n } = useI18n()）
+     *       就认为"已经处理过"，不重复塞。
      */
     private fun scopeHasDestructuredCall(
         scope: PsiElement,
@@ -520,30 +528,21 @@ class I18nProcessor(
         destructureNameFrom: String,
         destructureAlias: String,
     ): Boolean {
-        val calls = PsiTreeUtil.findChildrenOfType(scope, JSCallExpression::class.java)
-        for (call in calls) {
-            val m = call.methodExpression as? JSReferenceExpression ?: continue
-            if (m.referenceName == callee) {
-                // 只要出现 useI18n() 调用（不管理解构形式），就视为"已经处理过"
-                // 避免用户自己手写了 const { t } = useI18n(); 后我们仍然硬塞
-                if (destructureNameFrom == destructureAlias) return true
-                // 解构变量：在 varStmt / destructuring declaration 中查
-                val vars = PsiTreeUtil.findChildrenOfType(scope, JSVarStatement::class.java)
-                for (v in vars) {
-                    val text = v.text
-                    // 文本级宽松匹配：含 useI18n( 、含 "t" 作为字段 、含 "$t" 作为别名（或仅含 t 取决于写法）
-                    if (text.contains("$callee(") &&
-                        (text.contains("$destructureNameFrom: $destructureAlias") ||
-                            // 用户也可能写 const { t, n } = useI18n()，此时我们别再重复塞一条，
-                            // 因为 $t 不一定存在，但 t 已可用于"如果用户本来就写 $t 就会被 detectTFunctionName 识别"。
-                            // 为了保守起见：含 "{ $destructureNameFrom " 就当作已存在（t 字段已解构，用户可用）
-                            text.contains("{ $destructureNameFrom") ||
-                            text.contains("{$destructureNameFrom"))) {
-                        return true
-                    }
-                }
-            }
-        }
+        val text = scope.text.replace("\\s+".toRegex(), " ")
+        if (!text.contains("$callee(")) return false
+
+        // 精确形式（我们注入的代码）
+        val canonical = "{$destructureNameFrom: $destructureAlias}"
+        if (text.contains(canonical)) return true
+
+        // 近似形式（用户自己手写了 const { t } = useI18n() 或 const { t, n } = useI18n()
+        // 或 const { t: $t, n: $n } = useI18n()）
+        // 正则：`{ <任意> destructureNameFrom <任意> } <任意> = <任意> callee(`
+        val re = Regex("""\{\s*[^\}]*\b\Q$destructureNameFrom\E\b[^\}]*\}\s*=\s*[A-Za-z_][\w\$]*\s*\.\s*\Q$callee\E\(""")
+        if (re.containsMatchIn(text)) return true
+        val re2 = Regex("""\{\s*[^\}]*\b\Q$destructureNameFrom\E\b[^\}]*\}\s*=\s*\Q$callee\E\(""")
+        if (re2.containsMatchIn(text)) return true
+
         return false
     }
 
