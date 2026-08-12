@@ -1103,9 +1103,9 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
             export function mixLabel(type: string): string {
                 // 已写老 i18n.t 调用
-                val base = i18n.t('老调用中文')
+                const base = i18n.t('老调用中文')
                 // 新硬编码中文
-                val suffix = "新提示"
+                const suffix = "新提示"
                 return base + " | " + suffix
             }
             """.trimIndent()

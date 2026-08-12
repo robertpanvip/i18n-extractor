@@ -386,10 +386,22 @@ class I18nProcessor(
     }
 
     /**
-     * 检测翻译函数名并更新 [tFunctionName]。优先级：i18n.global.t > i18n.t > $t（默认）。
+     * 检测翻译函数名并更新 [tFunctionName]。优先级（默认 \$t 不变的前提下）：i18n.global.t > i18n.t。
      * 在主 PSI 树和 mustache 注入 PSI 中均需调用，以覆盖 Vue 模板内的调用。
+     *
+     * 【Bug 修复：needInject*GlobalDollarT 时绝不切长调用】
+     * 用户要求「全部统一用 \$t 减少复杂度」，所以一旦 collect() 预判命中
+     * needInjectGlobalDollarT / needInjectReactGlobalDollarT=true（即这个文件被判定为
+     * 「Vue 纯 TS 工具」或「React 纯 TS 工具」），即便该文件里有历史遗留的
+     * i18n.global.t / i18n.t 长调用，也不允许把 tFunctionName 从 \$t 改写成长调；
+     * 老调用只作"兼容保留"，**新提取一律写短 $t('xxx')**。
      */
     private fun detectTFunctionName(call: JSCallExpression) {
+        // 预判为「统一 $t 别名模式」时：锁死 tFunctionName=$t，老调用只兼容不影响新提取形式
+        if (needInjectGlobalDollarT || needInjectReactGlobalDollarT) {
+            tFunctionName = "\$t"
+            return
+        }
         val method = call.methodExpression
         if (method is JSReferenceExpression) {
             val text = method.text
