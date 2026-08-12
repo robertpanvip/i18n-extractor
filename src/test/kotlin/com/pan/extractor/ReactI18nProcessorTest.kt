@@ -498,10 +498,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             import i18n from './i18n'
 
             export default function App() {
-                const { t: $t } = useTranslation()
+                const { t: ${'$'}t } = useTranslation()
                 return (
                     <div>
-                        <span>{$t("hook文本")}</span>
+                        <span>{${'$'}t("hook文本")}</span>
                         <span>{i18n.t("全局文本")}</span>
                     </div>
                 )
@@ -514,7 +514,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         // 两种形式都应识别为已翻译
         assertTrue(
-            "'hook文本' (via $t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            "'hook文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
             processor.existingStrings.containsValue("hook文本")
         )
         assertTrue(

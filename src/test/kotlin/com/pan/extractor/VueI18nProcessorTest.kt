@@ -788,7 +788,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
                     {{
                         record.releaseTime
                             ? `${'$'}t("已于")`${'$'}{record.releaseTime}${'$'}t("发布")`
-                            : $t("未发布")
+                            : ${'$'}t("未发布")
                     }}
                 </div>
             </template>
@@ -800,15 +800,15 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // 所有字符串已在 $t() 中，不应被重复提取
         assertFalse(
-            "'已于' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            "'已于' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("已于")
         )
         assertFalse(
-            "'发布' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            "'发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("发布")
         )
         assertFalse(
-            "'未发布' 已在 $t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            "'未发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("未发布")
         )
         // 应在 existingStrings 中
@@ -876,14 +876,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             """
             <template>
                 <div>
-                    <span>{{ $t("vue文本") }}</span>
+                    <span>{{ ${'$'}t("vue文本") }}</span>
                     <span>{{ i18n.global.t("全局文本") }}</span>
                 </div>
             </template>
             <script setup lang="ts">
             import { useI18n } from 'vue-i18n'
             import { i18n } from './i18n'
-            const { t: $t } = useI18n()
+            const { t: ${'$'}t } = useI18n()
             const newMsg = "待提取"
             </script>
             """.trimIndent()
@@ -894,7 +894,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // 两种形式都应识别为已翻译
         assertTrue(
-            "'vue文本' (via $t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            "'vue文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
             processor.existingStrings.containsValue("vue文本")
         )
         assertTrue(
