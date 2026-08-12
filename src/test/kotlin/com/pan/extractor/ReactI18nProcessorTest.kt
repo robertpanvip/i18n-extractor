@@ -538,7 +538,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
     /**
      * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入默认导入。
-     * React 默认注入默认导入：import i18n from '@/i18n'
+     * React 默认注入默认导入：import i18n from 'i18next'
      */
     fun testReactI18nTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -565,8 +565,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         // 应注入 i18n 实例的默认导入
         assertTrue(
-            "应注入 import i18n from '@/i18n', got:\n$resultText",
-            resultText.contains("import i18n from '@/i18n'")
+            "应注入 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("import i18n from 'i18next'")
         )
         // 不应注入 useTranslation（已使用全局 i18n）
         assertFalse(
@@ -604,7 +604,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         assertFalse(
             "已有默认导入时不应再注入, got:\n$resultText",
-            resultText.contains("@/i18n")
+            resultText.contains("from 'i18next'")
         )
         assertTrue(
             "原有 import i18n from './i18n' 应保留, got:\n$resultText",
@@ -634,7 +634,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         assertFalse(
             "已有命名导入时不应再注入默认导入, got:\n$resultText",
-            resultText.contains("@/i18n")
+            resultText.contains("from 'i18next'")
         )
         assertTrue(
             "原有 import { i18n } from './i18n' 应保留, got:\n$resultText",
@@ -664,45 +664,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         assertFalse(
             "已有 namespace 导入时不应再注入, got:\n$resultText",
-            resultText.contains("@/i18n")
+            resultText.contains("from 'i18next'")
         )
-    }
-
-    /**
-     * 测试自定义导入路径（通过系统属性覆盖默认路径）
-     */
-    fun testReactI18nTCustomImportPath() {
-        val previous = System.getProperty("i18n.extractor.import.path")
-        System.setProperty("i18n.extractor.import.path", "@/locales/i18n")
-        try {
-            val file = myFixture.configureByText(
-                "App.tsx",
-                """
-                export default function App() {
-                    return <h1>{i18n.t("标题")}</h1>
-                }
-                """.trimIndent()
-            )
-
-            val processor = I18nProcessor(project, file)
-            processor.collect()
-            processor.execute()
-
-            val resultText = file.text
-            assertTrue(
-                "应使用自定义路径注入 import, got:\n$resultText",
-                resultText.contains("import i18n from '@/locales/i18n'")
-            )
-            assertFalse(
-                "不应使用默认路径, got:\n$resultText",
-                resultText.contains("from '@/i18n'")
-            )
-        } finally {
-            if (previous == null) {
-                System.clearProperty("i18n.extractor.import.path")
-            } else {
-                System.setProperty("i18n.extractor.import.path", previous)
-            }
-        }
     }
 }

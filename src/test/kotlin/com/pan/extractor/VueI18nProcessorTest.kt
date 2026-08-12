@@ -923,7 +923,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
     /**
      * 测试使用 i18n.global.t 但缺少 i18n 实例导入时，应自动注入默认导入。
-     * Vue 默认注入命名导入：import { i18n } from '@/i18n'
+     * Vue 默认注入命名导入：import { i18n } from 'vue-i18n'
      */
     fun testVueI18nGlobalTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -945,8 +945,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         // 应注入 i18n 实例的命名导入
         assertTrue(
-            "应注入 import { i18n } from '@/i18n', got:\n$resultText",
-            resultText.contains("import { i18n } from '@/i18n'")
+            "应注入 import { i18n } from 'vue-i18n', got:\n$resultText",
+            resultText.contains("import { i18n } from 'vue-i18n'")
         )
         // 不应注入 useI18n（已使用全局 i18n）
         assertFalse(
@@ -979,8 +979,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         // 不应再注入默认路径的 import
         assertFalse(
-            "不应重复注入 import { i18n } from '@/i18n', got:\n$resultText",
-            resultText.contains("@/i18n")
+            "不应重复注入 import { i18n } from 'vue-i18n', got:\n$resultText",
+            resultText.contains("from 'vue-i18n'")
         )
         // 原有的 ./i18n 导入应保留
         assertTrue(
@@ -1013,7 +1013,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         assertFalse(
             "已有默认导入时不应再注入命名导入, got:\n$resultText",
-            resultText.contains("@/i18n")
+            resultText.contains("from 'vue-i18n'")
         )
         assertTrue(
             "原有 import i18n from './i18n' 应保留, got:\n$resultText",
@@ -1045,48 +1045,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         assertFalse(
             "已有 namespace 导入时不应再注入, got:\n$resultText",
-            resultText.contains("@/i18n")
+            resultText.contains("from 'vue-i18n'")
         )
-    }
-
-    /**
-     * 测试自定义导入路径（通过系统属性覆盖默认路径）
-     */
-    fun testVueI18nGlobalTCustomImportPath() {
-        val previous = System.getProperty("i18n.extractor.import.path")
-        System.setProperty("i18n.extractor.import.path", "@/locales/i18n")
-        try {
-            val file = myFixture.configureByText(
-                "Test.vue",
-                """
-                <template>
-                    <div>{{ i18n.global.t("已有文本") }}</div>
-                </template>
-                <script setup lang="ts">
-                const newMsg = "新提取文本"
-                </script>
-                """.trimIndent()
-            )
-
-            val processor = I18nProcessor(project, file)
-            processor.collect()
-            processor.execute()
-
-            val resultText = file.text
-            assertTrue(
-                "应使用自定义路径注入 import, got:\n$resultText",
-                resultText.contains("import { i18n } from '@/locales/i18n'")
-            )
-            assertFalse(
-                "不应使用默认路径, got:\n$resultText",
-                resultText.contains("from '@/i18n'")
-            )
-        } finally {
-            if (previous == null) {
-                System.clearProperty("i18n.extractor.import.path")
-            } else {
-                System.setProperty("i18n.extractor.import.path", previous)
-            }
-        }
     }
 }

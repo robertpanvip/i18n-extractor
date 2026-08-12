@@ -35,11 +35,6 @@ class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
-    companion object {
-        /** 全局 i18n 实例的默认导入路径（可被系统属性 `i18n.extractor.import.path` 覆盖） */
-        const val DEFAULT_I18N_INSTANCE_IMPORT_PATH = "@/i18n"
-    }
-
     var effects = mutableListOf<() -> Unit>()
 
     /** 新提取的 key -> 原文本 */
@@ -477,24 +472,19 @@ class I18nProcessor(
 
     /**
      * 当文件使用 i18n.global.t / i18n.t 但缺少 i18n 实例导入时，注入默认导入。
-     * 默认路径为 [DEFAULT_I18N_INSTANCE_IMPORT_PATH]（@/i18n），可被系统属性
-     * `i18n.extractor.import.path` 覆盖。
      *
-     * - Vue:   `import { i18n } from '@/i18n'`  （命名导入，vue-i18n 通用写法）
-     * - React: `import i18n from '@/i18n'`      （默认导入，i18next 通用写法）
+     * - Vue:   `import { i18n } from 'vue-i18n'`  （命名导入，vue-i18n 全局实例）
+     * - React: `import i18n from 'i18next'`       （默认导入，i18next 全局实例）
      *
-     * 注意：i18n 实例是用户自定义并 export 的（如 src/i18n/index.ts），
-     * 路径因项目而异，这里只做兜底，已有任意形式的 i18n 导入时不重复注入。
+     * 注意：已有任意形式的 i18n 导入时不重复注入。
      */
     private fun ensureI18nInstanceImported(psiFile: PsiElement, isVue: Boolean) {
         if (hasI18nInstanceImported(psiFile)) return
 
-        val importPath = System.getProperty("i18n.extractor.import.path")
-            ?: DEFAULT_I18N_INSTANCE_IMPORT_PATH
         val importText = if (isVue) {
-            "import { i18n } from '$importPath';\n"
+            "import { i18n } from 'vue-i18n';\n"
         } else {
-            "import i18n from '$importPath';\n"
+            "import i18n from 'i18next';\n"
         }
 
         if (isVue) {
