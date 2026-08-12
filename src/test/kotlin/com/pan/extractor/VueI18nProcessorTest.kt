@@ -1202,10 +1202,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     /**
      * 非 use 开头的普通函数（如普通工具函数）不应注入 useI18n；
      *
-     * 【问题 5 修复】但必须切换到全局 i18n.global.t('xxx') 调用，并且顶部注入
-     * `import { i18n } from '@/locales/index'`（vue-i18n createI18n 的实例文件）。
+     * 【Vue 用户指定简化后规则】：全部用 \$t 减少复杂度。
+     *   - 顶部注入 import { i18n } from '@/locales/index'（vue-i18n createI18n 的实例文件）
+     *   - 紧接着追加一行：const \$t = i18n.global.t;
+     *   - 所有字符串仍然用短写法 \$t('日期')，**不要**写长 i18n.global.t('日期')
+     *
      * 因为：这个纯工具 TS 文件即不在 Vue SFC script setup 里，也不是自定义 hook，
-     * 不存在可以把 `$t` 解构出来的作用域 —— 写 `$t('总共')` 会 ReferenceError。
+     * 不存在 useI18n() 解构出 \$t 的作用域。用"全局 const 别名"的方式就可以和
+     * Vue SFC 内部的写法保持 100% 一致，降低心智负担。
      */
     fun testVueNonHookFunctionInTsFileNotInjected() {
         val file = configureFile(
@@ -1223,9 +1227,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
-        // 问题 5：必须切 i18n.global.t（而不是 useI18n 解构出的 \$t）
+        // ★ 用户新规则：全部都用 \$t，替换仍然是 \$t('日期')，不需要写 i18n.global.t('日期')
         assertTrue(
-            "Vue 纯 TS 普通函数必须使用 i18n.global.t 替换中文, got:\n$resultText",
+            "Vue 纯 TS 普通函数替换仍应为短写法 \$t('日期'), got:\n$resultText",
+            resultText.contains("\$t('日期')")
+        )
+        // 也不应该再出现冗长的 i18n.global.t(...) 字面调用（这一版已完全用 const 别名替代）
+        assertFalse(
+            "Vue 纯 TS 普通函数不再直接写 i18n.global.t('日期')，改 const 别名, got:\n$resultText",
             resultText.containsIgnoringWs("i18n.global.t('日期')")
         )
         // 不能用 useI18n（SFC / hook 才用）
@@ -1237,15 +1246,30 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "普通函数不应注入 useI18n 调用, got:\n$resultText",
             resultText.contains("useI18n()")
         )
-        // 不能出现未定义的 \$t
-        assertFalse(
-            "普通函数替换后不应出现未定义的 \$t(), got:\n$resultText",
-            resultText.contains("\$t('日期')")
-        )
-        // 必须注入 i18n 实例 import（来自 @/locales 下的 createI18n 文件）
+        // ★ 必须注入 i18n 实例 import + 必须追加 const \$t = i18n.global.t
         assertTrue(
             "Vue 纯 TS 普通函数必须注入全局 i18n 实例 import, got:\n$resultText",
             resultText.containsIgnoringWs("import { i18n } from") && resultText.containsIgnoringWs("locales")
+        )
+        assertTrue(
+            "Vue 纯 TS 普通函数必须追加 const \$t = i18n.global.t; 全局别名，got:\n$resultText",
+            resultText.containsIgnoringWs("const \$t = i18n.global.t")
+        )
+
+        // —— 重复执行不重复注入（问题 4 Vue 纯 TS 版）——
+        val processor2 = I18nProcessor(project, file)
+        processor2.collect()
+        processor2.execute()
+        val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = textAfterTwice.split("import{i18n}from").size - 1
+        val constCnt = textAfterTwice.split("const\$t=i18n.global.t").size - 1
+        assertEquals(
+            "Vue 纯 TS 全局 i18n 实例 import 重复了 $importCnt 次 (expect 1), txt:\n$textAfterTwice",
+            1, importCnt
+        )
+        assertEquals(
+            "Vue 纯 TS const \$t 别名重复了 $constCnt 次 (expect 1), txt:\n$textAfterTwice",
+            1, constCnt
         )
     }
 

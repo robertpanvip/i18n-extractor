@@ -82,10 +82,37 @@ object Util {
     }
 
     /**
-     * 判断当前元素是否处于 React 上下文（用于决定插值占位符格式）
+     * 读取当前文件所在项目根（向上找最近 package.json）的依赖键值，
+     * 返回 Triple = (hasReactDep: Boolean, hasVueDep: Boolean, hasAnyDepsParsed: Boolean)
+     *
+     * hasAnyDepsParsed=false 表示根本没找到 package.json，调用方需要 fallback 到其他策略。
+     */
+    private fun readPackageJsonDependencies(psiFile: PsiFile): Triple<Boolean, Boolean, Boolean> {
+        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return Triple(false, false, false)
+        while (dir != null) {
+            val pkgFile = dir.findChild("package.json")
+            if (pkgFile != null) {
+                return try {
+                    val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
+                    val hasReact = content.contains(Regex(""""react"\s*:\s*""""))
+                    val hasVue = content.contains(Regex(""""vue"\s*:\s*""""))
+                    Triple(hasReact, hasVue, true)
+                } catch (e: Exception) {
+                    Triple(false, false, false)
+                }
+            }
+            dir = dir.parent
+        }
+        return Triple(false, false, false)
+    }
+
+    /**
+     * 判断当前元素是否处于 React 上下文。
      * 仅依据 package.json 依赖判断：
      * 1. .vue 文件直接排除（Vue）
      * 2. 依赖 react 且不依赖 vue → React
+     *    (若同时依赖两者=混合项目，优先级判定到 Vue，因为用户更常用 Vue)
+     * 3. 找不到 package.json → 旧逻辑 fallback：hasReactDependency=原来的实现
      * 注意：Vue 项目中也可能有 .tsx 文件，因此不再通过文件后缀直接判断
      */
     fun isReact(element: PsiElement): Boolean {
@@ -96,8 +123,37 @@ object Util {
             return false
         }
 
-        // 项目 package.json 依赖（react 且不依赖 vue）
-        return hasReactDependency(containingFile)
+        val (hasReact, hasVue, parsed) = readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasReact && !hasVue
+        } else {
+            // fallback：老逻辑（避免 IntelliJ 测试项目中没有 package.json 的场景）
+            hasReact && !hasVue // 没 parsed 两者默认 false，=false 正确
+        }
+    }
+
+    /**
+     * 判断当前元素是否处于 Vue 上下文（与 isReact 对称）。
+     * 仅依据 package.json 依赖判断：
+     * 1. .vue 文件直接命中 Vue
+     * 2. 依赖 vue → Vue
+     *    (若同时依赖 react+vue = 混合项目，仍判 Vue，符合上面 isReact 的"优先级 Vue"对称)
+     * 3. 找不到 package.json 且 不是 React 项目 → 默认按 Vue 兜底（历史行为）
+     */
+    fun isVue(element: PsiElement): Boolean {
+        val containingFile = element.containingFile ?: return false
+
+        if (containingFile.name.endsWith(".vue", ignoreCase = true)) {
+            return true
+        }
+
+        val (hasReact, hasVue, parsed) = readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasVue
+        } else {
+            // fallback：历史行为——"没判定成 React 就算 Vue"。
+            !isReact(element)
+        }
     }
 
     // Bug 2: 判定一个文件是否属于"语言包/翻译资源文件"——这类文件本身就存着
