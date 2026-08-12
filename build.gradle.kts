@@ -11,22 +11,7 @@ group = "com.pan"
 version = "1.3.7"
 
 repositories {
-    // 1) 本地测试临时：Tencent 镜像代替 Maven Central，普通第三方依赖（jackson /
-    //    commons / kotlin 等）全部走这里加速；仅针对"IntelliJ 平台专属的 artifacts"
-    //    强制不在这里搜索（这些工件腾讯镜像没有，错误 404 → fallback 到 Maven
-    //    Central 触发 429 Too Many Requests）。
-    maven {
-        name = "TencentMirror"
-        url = uri("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
-        content {
-            excludeGroupByRegex("""com\.jetbrains\..*""")
-            excludeGroup("bundledPlugin")
-        }
-    }
-    google()
-    // 2) IntelliJ Platform 默认仓库（cache-redirector.jetbrains.com 系列 + JB Releases /
-    //    Snapshots / Marketplace / JetBrainsRuntime），提供 ideaIU / jetbrainsRuntime /
-    //    bundledPlugins / testFramework / poly-symbols-test-framework 等。
+    mavenCentral()
     intellijPlatform {
         defaultRepositories()
     }
@@ -85,9 +70,6 @@ intellijPlatform {
 }
 
 java {
-    // 本地测试临时：声明期望语言版本，搭配 Gradle property
-    // -Porg.gradle.java.installations.paths=/root/.local/share/mise/installs/java/21.0.2
-    // 显式告知 toolchain JDK 的路径。
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(21))
     }
@@ -107,9 +89,6 @@ tasks {
                 "standardError"
             )
         }
-    }
-    withType<JavaCompile>().configureEach {
-        options.release.set(21)
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
