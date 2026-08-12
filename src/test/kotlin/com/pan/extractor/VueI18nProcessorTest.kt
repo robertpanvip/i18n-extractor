@@ -1121,7 +1121,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             """
             import { useI18n } from 'vue-i18n'
             export function useUser() {
-                const { t: \$t } = useI18n()
+                const { t: ${'$'}t } = useI18n()
                 const label = "用户名"
                 return { label }
             }
