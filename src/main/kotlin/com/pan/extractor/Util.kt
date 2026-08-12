@@ -284,11 +284,13 @@ object Util {
      *    只在这些目录下做文件内文本匹配，避免遍历 whole repo 太慢。
      * 2. 如果这些目录都没有命中（或都不存在），再在项目根做 walk 扫描（限制深度 4）。
      *
+     * 注意：使用 IntelliJ VirtualFile API 遍历（而不是 java.io.File），
+     *       这样既能在真实项目中工作，也能在内存测试 Fixture 中工作。
+     *
      * @return 命中的文件（VirtualFile），未找到返回 null
      */
     fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? {
         val projectRoot = findProjectRoot(currentPsiFile) ?: return null
-        val rootDir = File(projectRoot.path)
 
         val commonDirs = listOf(
             "src/locales",
@@ -297,30 +299,93 @@ object Util {
             "i18n",
             "src/locale",
             "locale"
-        ).map { File(rootDir, it) }
+        )
 
-        // 阶段 1：常见目录内精确匹配 .ts/.tsx/.js/.jsx 文件
-        commonDirs.forEach { dir ->
-            if (!dir.isDirectory) return@forEach
-            dir.walkTopDown()
-                .maxDepth(2)
-                .filter { it.isFile && it.extension.lowercase() in setOf("ts", "tsx", "js", "jsx") }
-                .forEach { file ->
-                    if (fileContainsCreateI18n(file)) return LocalFileSystem.getInstance().findFileByIoFile(file)
-                }
+        // 阶段 1：常见目录内精确匹配 .ts/.tsx/.js/.jsx 文件（最大深度 2）
+        for (relPath in commonDirs) {
+            val dir = findRelativeFile(projectRoot, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val result = walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                    if (vfContainsCreateI18n(vf)) vf else null
+                } else null
+            }
+            if (result != null) return result
         }
 
         // 阶段 2：常见目录未命中，在项目根做 walk（最大深度 4，排除 node_modules）
-        val extSet = setOf("ts", "tsx", "js", "jsx")
-        rootDir.walkTopDown()
-            .maxDepth(4)
-            .onEnter { it.name != "node_modules" && it.name != ".git" && it.name != "dist" && it.name != "build" }
-            .filter { it.isFile && it.extension.lowercase() in extSet }
-            .forEach { file ->
-                if (fileContainsCreateI18n(file)) return LocalFileSystem.getInstance().findFileByIoFile(file)
-            }
+        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
+            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                if (vfContainsCreateI18n(vf)) vf else null
+            } else null
+        }
+    }
 
+    private val TS_JS_EXTS = setOf("ts", "tsx", "js", "jsx")
+
+    /**
+     * 按路径片段查找 [root] 下的子目录/文件，例如 "src/locales"。
+     */
+    private fun findRelativeFile(root: VirtualFile, relPath: String): VirtualFile? {
+        var current = root
+        for (segment in relPath.split('/', '\\').filter { it.isNotEmpty() }) {
+            current = current.findChild(segment) ?: return null
+        }
+        return current
+    }
+
+    /**
+     * 使用 VirtualFile API 进行广度优先遍历（限制最大深度），
+     * 对每个文件应用 [visitor]，返回第一个非 null 结果。
+     *
+     * @param root        起始目录
+     * @param maxDepth    最大遍历深度（相对于 root，root 是深度 0）
+     * @param enterFilter 进入子目录前的过滤器，返回 true 表示进入
+     * @param visitor     文件处理函数，返回 null 表示继续
+     */
+    private fun <T> walkVirtualFile(
+        root: VirtualFile,
+        maxDepth: Int,
+        enterFilter: (VirtualFile) -> Boolean = { true },
+        visitor: (VirtualFile) -> T?
+    ): T? {
+        data class Item(val vf: VirtualFile, val depth: Int)
+        val queue = ArrayDeque<Item>()
+        queue.add(Item(root, 0))
+        while (queue.isNotEmpty()) {
+            val (vf, depth) = queue.removeFirst()
+            if (!vf.isValid) continue
+            // 对非 root 的节点执行 visitor
+            if (depth > 0) {
+                val r = visitor(vf)
+                if (r != null) return r
+            }
+            // 如果还能继续深入（并且是目录并且允许进入）
+            if (vf.isDirectory && depth < maxDepth && (depth == 0 || enterFilter(vf))) {
+                val children = try {
+                    vf.children
+                } catch (_: Exception) {
+                    continue
+                }
+                for (child in children) {
+                    queue.addLast(Item(child, depth + 1))
+                }
+            }
+        }
         return null
+    }
+
+    /**
+     * 读取 VirtualFile 内容并检测是否包含 createI18n( 调用。
+     */
+    private fun vfContainsCreateI18n(vf: VirtualFile): Boolean {
+        val text = try {
+            String(vf.contentsToByteArray(), Charsets.UTF_8)
+        } catch (_: Exception) {
+            return false
+        }
+        return text.contains("createI18n(") || text.contains("createI18n (")
     }
 
     /**
@@ -380,16 +445,6 @@ object Util {
             content.contains(Regex("export\\s+default\\s+i18n\\b")) ||
                 content.contains(Regex("export\\s+default\\s+createI18n\\s*\\("))
         return hasDefaultExport && !hasNamedExport
-    }
-
-    private fun fileContainsCreateI18n(file: File): Boolean {
-        try {
-            val content = file.readText(Charsets.UTF_8)
-            return content.contains("createI18n(") ||
-                content.contains("createI18n (")
-        } catch (_: Exception) {
-            return false
-        }
     }
 
     private fun stripTsJsExtension(path: String): String {
