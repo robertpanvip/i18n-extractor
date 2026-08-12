@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,6 +29,21 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
+    }
+
+    /**
+     * 与 VueI18nProcessorTest 一致：支持带路径（src/xxx.ts）文件名的配置。
+     * configureByText 不接受含 "/" 文件名会抛 Invalid file name，因此先
+     * addFileToProject 再 configureFromExistingVirtualFile。
+     */
+    private fun configureFile(fileName: String, text: String): PsiFile {
+        return if (fileName.contains('/') || fileName.contains('\\')) {
+            val psiFile = myFixture.addFileToProject(fileName, text)
+            myFixture.configureFromExistingVirtualFile(psiFile.virtualFile)
+            psiFile
+        } else {
+            myFixture.configureByText(fileName, text)
+        }
     }
 
     // ============================================================
@@ -665,6 +681,159 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertFalse(
             "已有 namespace 导入时不应再注入, got:\n$resultText",
             resultText.contains("from 'i18next'")
+        )
+    }
+
+    // ============================================================
+    // 10. Bug 1: 无组件/无 Hook 的 React TS 文件不应注入 useTranslation
+    // ============================================================
+
+    /**
+     * 纯工具 TS 文件（既没有函数组件，也没有 use 开头自定义 hook），
+     * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
+     * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
+     */
+    fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
+        val file = configureFile(
+            "src/utils/format.ts",
+            """
+            // 普通工具函数，不返回 JSX，也不是 use 开头 hook
+            export function formatNumber(n: number) {
+                const label = "总共"
+                return label + ": " + n
+            }
+
+            export const MSG = {
+                title: "提示",
+                description: "说明文本"
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "纯工具 TS 文件不应注入 useTranslation import, got:\n$resultText",
+            resultText.contains("useTranslation")
+        )
+        assertFalse(
+            "纯工具 TS 文件不应注入 react-i18next import, got:\n$resultText",
+            resultText.contains("react-i18next")
+        )
+    }
+
+    /**
+     * 即便 TS 文件里有"自定义 Hook"（use 开头），也允许 useTranslation 注入。
+     * 这是 Bug 1 的反例：只有既没组件也没 hook 时才跳过。
+     */
+    fun testReactTsWithCustomHookShouldStillInjectUseTranslation() {
+        val file = configureFile(
+            "src/hooks/useAuth.ts",
+            """
+            export function useAuth() {
+                const hint = "登录成功"
+                return { hint }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "自定义 hook TS 文件应注入 react-i18next import, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "")
+                .contains("import{useTranslation}from'react-i18next'")
+        )
+        assertTrue(
+            "自定义 hook 体内应注入 useTranslation() 调用, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "")
+                .contains("const{t:\$t}=useTranslation()")
+        )
+    }
+
+    // ============================================================
+    // 11. Bug 2: 翻译资源文件（语言包）跳过提取与注入
+    // ============================================================
+
+    /**
+     * 文件基名本身就是 locale code（如 en-US.ts、zh_CN.ts），应判定为翻译资源文件，
+     * 不提取中文，也不注入任何 import。
+     */
+    fun testTranslationResourceByLocaleNameShouldSkip() {
+        val file = configureFile(
+            "src/zh-CN.ts",
+            """
+            export default {
+                common: {
+                    confirm: "确定",
+                    cancel: "取消"
+                }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        assertEquals(
+            "locale 命名的文件不应提取任何字符串, got: ${processor.extractedStrings}",
+            0,
+            processor.extractedStrings.size
+        )
+        assertEquals(
+            "locale 命名的文件不应读取 existingStrings, got: ${processor.existingStrings}",
+            0,
+            processor.existingStrings.size
+        )
+        val resultText = file.text
+        assertFalse(
+            "locale 文件不应注入任何 import, got:\n$resultText",
+            resultText.contains("import { useTranslation }") ||
+                resultText.contains("import i18n from")
+        )
+    }
+
+    /**
+     * 文件位于 locales / i18n 目录下，即便名不是 locale code，也应按目录判定跳过
+     * （典型：src/locales/index.ts 是语言包聚合文件）
+     */
+    fun testTranslationResourceByDirectoryShouldSkip() {
+        val file = configureFile(
+            "src/locales/index.ts",
+            """
+            import zh from './zh-CN'
+            import en from './en-US'
+
+            export const resources = {
+                zh: { translation: zh },
+                en: { translation: en }
+            }
+
+            const label = "中文标签"
+            export { label }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        assertEquals(
+            "locales/ 目录下的文件不应提取字符串, got: ${processor.extractedStrings}",
+            0,
+            processor.extractedStrings.size
+        )
+        val resultText = file.text
+        assertFalse(
+            "locales/ 目录下的文件不应被注入 import/hook, got:\n$resultText",
+            resultText.contains("useTranslation") || resultText.contains("i18next")
         )
     }
 }

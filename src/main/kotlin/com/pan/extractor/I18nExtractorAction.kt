@@ -30,6 +30,19 @@ class I18nExtractorAction : AnAction() {
                 lower.endsWith(".jsx")
     }
 
+    /**
+     * Bug 2：翻译资源文件（语言包）不应被提取或注入。
+     * 典型：en-US.ts、locales/zh-CN.js、messages.ja.ts、src/i18n/en.ts 等。
+     */
+    private fun isTranslationResource(vf: VirtualFile): Boolean =
+        Util.isTranslationResourceFile(vf)
+
+    /**
+     * Bug 2 重载：PsiFile 版本（single-file 流程使用）。
+     */
+    private fun isTranslationResource(psiFile: PsiFile): Boolean =
+        Util.isTranslationResourceFile(psiFile)
+
     override fun update(e: AnActionEvent) {
         val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
         if (virtualFile == null) {
@@ -39,6 +52,12 @@ class I18nExtractorAction : AnAction() {
 
         if (virtualFile.isDirectory) {
             e.presentation.isEnabledAndVisible = true
+            return
+        }
+
+        // Bug 2: 翻译资源文件上禁用菜单
+        if (isTranslationResource(virtualFile)) {
+            e.presentation.isEnabledAndVisible = false
             return
         }
 
@@ -58,6 +77,9 @@ class I18nExtractorAction : AnAction() {
     }
 
     private fun processSingleFile(project: com.intellij.openapi.project.Project, psiFile: PsiFile) {
+        // Bug 2（保险）：即便 update() 放过了，到这里仍要拦截语言包文件
+        if (isTranslationResource(psiFile)) return
+
         val ins = I18nProcessor(project, psiFile)
         ins.collect()
 
@@ -83,7 +105,8 @@ class I18nExtractorAction : AnAction() {
         for (child in dir.children) {
             if (child.isDirectory) {
                 result.addAll(collectSupportedFiles(child))
-            } else if (isSupportedFile(child.name)) {
+            } else if (isSupportedFile(child.name) && !isTranslationResource(child)) {
+                // Bug 2: 目录批量扫描时直接排除翻译资源文件，避免后续被 Processor 处理
                 result.add(child)
             }
         }

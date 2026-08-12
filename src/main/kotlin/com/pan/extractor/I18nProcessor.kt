@@ -202,6 +202,14 @@ class I18nProcessor(
     }
 
     fun collect(): MutableList<() -> Unit> {
+        // Bug 2: 语言包/翻译资源文件（en-US.ts、i18n/zh-CN.js、messages.ja.ts、locales/xxx）
+        // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
+        val containingFile = psiFile.containingFile
+        if (containingFile != null && Util.isTranslationResourceFile(containingFile)) {
+            effects = mutableListOf()
+            return effects
+        }
+
         collectExistingTKeys()
         val changes = pureCollect(psiFile)
         effects = changes;
@@ -329,6 +337,10 @@ class I18nProcessor(
     }
 
     fun run() {
+        // Bug 2（双重保险）：翻译资源文件不做任何 import/hook 注入
+        val containingFile = psiFile.containingFile
+        if (containingFile != null && Util.isTranslationResourceFile(containingFile)) return
+
         this.effects.forEach { it() }
         val isVue = isVueFile(psiFile.containingFile)
         val isReact = Util.isReact(psiFile)
@@ -431,7 +443,19 @@ class I18nProcessor(
     private fun ensureReactI18nImported(psiFile: PsiElement) {
         val containingFile = psiFile.containingFile ?: return
 
-        // 1. 确保 react-i18next 导入存在
+        // Bug 1 修复：先确认文件中真正存在"能合法调用 useTranslation 的地方"，
+        // 否则直接 return，避免给纯工具/纯常量/纯配置文件注入 useTranslation import。
+        // 合法注入位置：
+        //   1) React 函数组件/类组件的 render 函数体（findReactComponentFunctions）
+        //   2) React 项目中 .ts/.tsx 文件里的自定义 hook（use 开头的顶级函数）
+        val componentFuncs = Util.findReactComponentFunctions(containingFile)
+        val hookFuncs = Util.findHookFunctions(containingFile)
+        val allTargets = (componentFuncs.asSequence() + hookFuncs.asSequence())
+            .distinct()
+            .toList()
+        if (allTargets.isEmpty()) return
+
+        // 1. 确保 react-i18next 导入存在（仅当有合法调用目标时才注入 import）
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
         if (imports.none { it.text.contains("react-i18next") }) {
             val importText = "import { useTranslation } from 'react-i18next';\n"
@@ -450,13 +474,9 @@ class I18nProcessor(
             }
         }
 
-        // 2. 找到所有 React 组件函数并注入 useTranslation hook
-        val componentFuncs = Util.findReactComponentFunctions(containingFile)
-        if (componentFuncs.isEmpty()) return
-
-        // 3. 逐个注入（从后往前插入，避免 offset 偏移）
+        // 2. 逐个注入（从后往前插入，避免 offset 偏移）
         // 使用 PSI 操作创建语句并插入，全部使用纯 PSI 操作避免 Document locked 异常
-        for (func in componentFuncs.asReversed()) {
+        for (func in allTargets.asReversed()) {
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
             // 检查是否已存在 useTranslation 调用
             val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)

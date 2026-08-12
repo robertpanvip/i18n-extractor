@@ -100,6 +100,141 @@ object Util {
         return hasReactDependency(containingFile)
     }
 
+    // Bug 2: 判定一个文件是否属于"语言包/翻译资源文件"——这类文件本身就存着
+    // 翻译后的 key/value，不应该再被提取或注入 useTranslation/useI18n/i18n。
+    //
+    // 典型场景：
+    //   - locales/en-US.ts / i18n/zh-CN.js / translations/zh_TW.tsx
+    //   - src/locales/messages.ja.ts / locale/ko.json（JSON 本身不在支持后缀里）
+    //   - 命名直接是两字母语言码：en.ts / de.ts / ja.ts
+    //   - 自定义前缀+locale：messages.en-US.ts / i18n.zh.js
+
+    /** 两字母 ISO 639-1 语言码列表（覆盖绝大多数项目的命名习惯）。 */
+    private val ISO_639_1 = setOf(
+        "ab","aa","af","ak","sq","am","ar","an","hy","as","av","ae","ay","az","bm","ba","eu","be","bn","bh","bi",
+        "bs","br","bg","my","ca","ch","ce","ny","zh","cv","kw","co","cr","hr","cs","da","dv","nl","dz","en","eo","et",
+        "ee","fo","fj","fi","fr","ff","gl","ka","de","el","gn","gu","ht","ha","he","hz","hi","ho","hu","ia","id","ie",
+        "ga","ig","ik","io","is","it","iu","ja","jv","kl","kn","ks","kk","km","ki","rw","ky","kv","kg","ko","ku","kj",
+        "la","lb","lg","li","ln","lo","lt","lu","lv","gv","mk","mg","ms","ml","mt","mi","mr","mh","mn","na","nv","nb",
+        "nd","ne","ng","nn","no","ii","nr","oc","oj","cu","om","or","os","pa","pi","fa","pl","ps","pt","qu","rm","rn",
+        "ro","ru","sa","sc","sd","se","sm","sg","sr","gd","sn","si","sk","sl","so","st","es","su","sw","ss","sv","ta",
+        "te","tg","th","ti","bo","tk","tl","tn","to","tr","ts","tt","tw","ug","uk","ur","uz","ve","vi","vo","wa","cy","wo",
+        "fy","xh","yi","yo","za","zu","zhs","zht","cmn","yue"
+    )
+
+    /** 翻译资源常见目录名（全部小写，按路径片段匹配）。 */
+    private val TRANSLATION_DIRS = setOf("locales","i18n","locale","lang","languages","translations")
+
+    /** 常见的文件基名前缀（messages.en / i18n.zh-CN 这种）。 */
+    private val TRANSLATION_BASE_PREFIXES = setOf("messages","i18n","translation","translations","strings","resources","lang","locale")
+
+    /**
+     * `en-US` / `zh_CN` / `en` / `zhs` 之类的 locale 标记匹配。
+     * 组成：语言码(2~4字母) + (可选: _/- 区域码(2字母/2+字母))
+     */
+    private val LOCALE_SEGMENT_RE =
+        Regex("^([a-z]{2,4})([-_][a-zA-Z0-9]{2,8})?$")
+
+    /**
+     * 将文件名去掉最后的扩展名后返回"基名 + 语言前缀候选"两部分，
+     * 例如：
+     *   messages.en-US.ts -> ("messages", "en-US")
+     *   zh_CN.ts          -> ("zh_CN", null)
+     *   i18n.zhs.js       -> ("i18n", "zhs")
+     */
+    private fun splitBasenameAndMaybeLocale(stem: String): Pair<String, String?> {
+        val dotIdx = stem.lastIndexOf('.')
+        return if (dotIdx >= 0) {
+            val prefix = stem.substring(0, dotIdx)
+            val suffix = stem.substring(dotIdx + 1)
+            if (TRANSLATION_BASE_PREFIXES.contains(prefix.lowercase())) prefix to suffix
+            else stem to null
+        } else {
+            stem to null
+        }
+    }
+
+    private fun looksLikeLocaleCode(raw: String): Boolean {
+        val token = raw.trim()
+        if (token.isBlank()) return false
+        val m = LOCALE_SEGMENT_RE.matchEntire(token) ?: return false
+        val lang = m.groupValues[1].lowercase()
+        // 语言码必须是已知的 ISO 639-1（或 zhs/zht/cmn/yue 扩展），避免误伤普通文件名
+        if (lang !in ISO_639_1) return false
+        return true
+    }
+
+    /**
+     * 给定文件名（含扩展名）与文件路径（可用 VirtualFile path、canonicalPath、或 null），
+     * 判定该文件是不是语言包/翻译资源文件。
+     *
+     * 规则（命中任意一条即视为翻译文件）：
+     * 1. 路径中出现 `locales/`、`i18n/`、`locale/`、`lang/`、`languages/`、`translations/` 等目录段；
+     * 2. 去掉扩展名后的"纯基名"本身就像 locale code（en / en-US / zh_CN / zhs / ...）；
+     * 3. 去掉扩展名后是 `messages.en-US`、`i18n.zh_CN` 这类"翻译前缀 + locale code"组合。
+     */
+    fun isTranslationResourceFile(fileName: String, filePath: String?): Boolean {
+        val name = fileName
+        val lower = name.lowercase()
+
+        // 快速剔除：只处理受支持的脚本后缀，避免误伤 index.d.ts 之类
+        val knownExt = lower.endsWith(".ts") || lower.endsWith(".tsx") ||
+            lower.endsWith(".js") || lower.endsWith(".jsx") ||
+            lower.endsWith(".json")
+        if (!knownExt) return false
+
+        // 1) 路径目录段命中：locales / i18n / locale / lang / translations / ...
+        if (filePath != null && filePath.isNotEmpty()) {
+            val normalized = filePath.replace('\\', '/').lowercase()
+            for (dir in TRANSLATION_DIRS) {
+                // 精确匹配目录段，避免把 "mailing/" 之类误判成 "lang"
+                if ("/$normalized/".contains("/$dir/")) return true
+            }
+        }
+
+        // 去掉扩展名（最多去掉两层：.d.ts 保留 stem = index.d，不过翻译文件一般不会是 .d.ts）
+        val extIdx = name.lastIndexOf('.')
+        val stem = if (extIdx >= 0) name.substring(0, extIdx) else name
+
+        // 2) "基名就是 locale code"：en.ts / zh-US.tsx / zh_CN.js
+        if (looksLikeLocaleCode(stem)) return true
+
+        // 3) "前缀.语言码"：messages.en-US.ts / i18n.zhs.js / strings.zh_TW.tsx
+        val (maybePrefix, maybeLocale) = splitBasenameAndMaybeLocale(stem)
+        if (maybeLocale != null && TRANSLATION_BASE_PREFIXES.contains(maybePrefix.lowercase())) {
+            if (looksLikeLocaleCode(maybeLocale)) return true
+        }
+
+        // 兜底：常见的语言-region连写（如 zhHans、zhHant、ptBR、enGB）——不带 -/_ 分隔
+        if (stem.length in 4..7) {
+            val langPart = stem.take(2).lowercase()
+            val regionPart = stem.drop(2)
+            if (langPart in ISO_639_1 && regionPart.all { it.isLetter() || it.isDigit() }) {
+                // zhHans / zhHant 明确视作 locale
+                if (setOf("zhHans","zhHant","zhCN","zhTW","zhHK","enUS","enGB","enAU",
+                        "enCA","deDE","deAT","deCH","frFR","frCA","jaJP","koKR",
+                        "ptBR","ptPT","esES","esAR","esMX","ruRU","itIT","nlNL",
+                        "nlBE","plPL","trTR","thTH","viVN","idID","msMY",
+                        "arSA","heIL","hiIN","bnBD","svSE","nbNO","daDK",
+                        "fiFI","csCZ","skSK","huHU","roRO","bgBG","srRS",
+                        "hrHR","slSI","ukUA","elGR","caES","euES","glES")
+                    .contains(stem)) return true
+            }
+        }
+
+        return false
+    }
+
+    /** [isTranslationResourceFile] 的 PsiFile 便捷入口。 */
+    fun isTranslationResourceFile(psiFile: PsiFile): Boolean {
+        return isTranslationResourceFile(psiFile.name, psiFile.virtualFile?.path ?: psiFile.name)
+    }
+
+    /** [isTranslationResourceFile] 的 VirtualFile 便捷入口。 */
+    fun isTranslationResourceFile(vf: VirtualFile): Boolean {
+        return isTranslationResourceFile(vf.name, vf.path)
+    }
+
     /**
      * 查找文件中的所有 React 组件函数（顶级作用域）
      * 判断标准（满足任一即可）：
