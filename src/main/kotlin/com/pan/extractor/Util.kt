@@ -22,6 +22,9 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
+import kotlin.io.path.Path
+import kotlin.io.path.relativeToOrNull
 
 object Util {
     fun isJSX(element: PsiElement): Boolean {
@@ -258,6 +261,146 @@ object Util {
             dir = dir.parent
         }
         return false
+    }
+
+    /**
+     * 从 [currentPsiFile] 向上查找最近的 package.json 所在目录（即项目根）。
+     * 找不到则返回 null。
+     */
+    fun findProjectRoot(currentPsiFile: PsiFile): VirtualFile? {
+        var dir: VirtualFile? = currentPsiFile.virtualFile?.parent ?: return null
+        while (dir != null) {
+            if (dir.findChild("package.json") != null) return dir
+            dir = dir.parent
+        }
+        return null
+    }
+
+    /**
+     * 在 Vue 项目中查找调用了 `createI18n(` 的文件（通常是 @/locales/index.ts 之类）。
+     *
+     * 查找顺序：
+     * 1. 优先在项目根下的常见目录查找（src/locales, locales, src/i18n, i18n），
+     *    只在这些目录下做文件内文本匹配，避免遍历 whole repo 太慢。
+     * 2. 如果这些目录都没有命中（或都不存在），再在项目根做 walk 扫描（限制深度 4）。
+     *
+     * @return 命中的文件（VirtualFile），未找到返回 null
+     */
+    fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? {
+        val projectRoot = findProjectRoot(currentPsiFile) ?: return null
+        val rootDir = File(projectRoot.path)
+
+        val commonDirs = listOf(
+            "src/locales",
+            "locales",
+            "src/i18n",
+            "i18n",
+            "src/locale",
+            "locale"
+        ).map { File(rootDir, it) }
+
+        // 阶段 1：常见目录内精确匹配 .ts/.tsx/.js/.jsx 文件
+        commonDirs.forEach { dir ->
+            if (!dir.isDirectory) return@forEach
+            dir.walkTopDown()
+                .maxDepth(2)
+                .filter { it.isFile && it.extension.lowercase() in setOf("ts", "tsx", "js", "jsx") }
+                .forEach { file ->
+                    if (fileContainsCreateI18n(file)) return LocalFileSystem.getInstance().findFileByIoFile(file)
+                }
+        }
+
+        // 阶段 2：常见目录未命中，在项目根做 walk（最大深度 4，排除 node_modules）
+        val extSet = setOf("ts", "tsx", "js", "jsx")
+        rootDir.walkTopDown()
+            .maxDepth(4)
+            .onEnter { it.name != "node_modules" && it.name != ".git" && it.name != "dist" && it.name != "build" }
+            .filter { it.isFile && it.extension.lowercase() in extSet }
+            .forEach { file ->
+                if (fileContainsCreateI18n(file)) return LocalFileSystem.getInstance().findFileByIoFile(file)
+            }
+
+        return null
+    }
+
+    /**
+     * 构造从当前文件 [currentPsiFile] 导入 Vue i18n 实例文件 [i18nVFile] 的路径。
+     *
+     * 优先级：
+     * 1. 如果 i18n 实例文件在项目根的 `src/` 下，且当前文件也在 `src/` 下，使用 `@/xxx` 别名。
+     *    此时会检查是否是目录 index 文件，从而省略 `/index` 后缀。
+     * 2. 否则使用相对路径（以 `./` 或 `../` 开头）。
+     *
+     * 返回值为不含引号的路径字符串，例如 `"@/locales"` 或 `"./locales/index"`。
+     * 返回 null 代表无法推断路径（fallback 由调用方处理）。
+     */
+    fun resolveVueI18nImportPath(currentPsiFile: PsiFile, i18nVFile: VirtualFile): String? {
+        val projectRoot = findProjectRoot(currentPsiFile) ?: return null
+        val rootPath = File(projectRoot.path).toPath()
+        val i18nPath = File(i18nVFile.path).toPath()
+        val currentPath = currentPsiFile.virtualFile?.let { File(it.path).toPath() } ?: return null
+
+        val srcDir = rootPath.resolve("src")
+
+        // 1) 别名路径：两个文件都在 src/ 下
+        if (i18nPath.startsWith(srcDir) && currentPath.startsWith(srcDir)) {
+            val i18nRel = i18nPath.relativeToOrNull(srcDir)?.toString()?.replace("\\", "/")
+                ?: return null
+            val noExt = stripTsJsExtension(i18nRel)
+            val clean = if (noExt.endsWith("/index")) noExt.removeSuffix("/index") else noExt
+            return "@/$clean"
+        }
+
+        // 2) 相对路径
+        val currentDir = currentPath.parent ?: return null
+        val relative = i18nPath.relativeToOrNull(currentDir)?.toString()?.replace("\\", "/")
+            ?: return null
+        val noExt = stripTsJsExtension(relative)
+        val clean = if (noExt.endsWith("/index")) noExt.removeSuffix("/index") else noExt
+        return if (!clean.startsWith(".")) "./$clean" else clean
+    }
+
+    /**
+     * 检测 createI18n 文件中的导出方式：
+     * - 命名导出：`export const i18n = createI18n(...)` / `export { i18n }`
+     * - 默认导出：`export default i18n` / `export default createI18n(...)`
+     *
+     * 默认认为是命名导出（与用户习惯一致），仅当文件文本中存在默认导出而无命名导出时才返回 true。
+     */
+    fun isVueI18nDefaultExport(i18nVFile: VirtualFile): Boolean {
+        val content = try {
+            String(i18nVFile.contentsToByteArray(), StandardCharsets.UTF_8)
+        } catch (_: Exception) {
+            return false
+        }
+        val hasNamedExport =
+            content.contains(Regex("export\\s+(const|let|var)\\s+i18n\\b")) ||
+                content.contains(Regex("export\\s*\\{[^}]*\\bi18n\\b[^}]*\\}"))
+        val hasDefaultExport =
+            content.contains(Regex("export\\s+default\\s+i18n\\b")) ||
+                content.contains(Regex("export\\s+default\\s+createI18n\\s*\\("))
+        return hasDefaultExport && !hasNamedExport
+    }
+
+    private fun fileContainsCreateI18n(file: File): Boolean {
+        try {
+            val content = file.readText(Charsets.UTF_8)
+            return content.contains("createI18n(") ||
+                content.contains("createI18n (")
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    private fun stripTsJsExtension(path: String): String {
+        val lc = path.lowercase()
+        return when {
+            lc.endsWith(".tsx") -> path.substring(0, path.length - 4)
+            lc.endsWith(".ts") -> path.substring(0, path.length - 3)
+            lc.endsWith(".jsx") -> path.substring(0, path.length - 4)
+            lc.endsWith(".js") -> path.substring(0, path.length - 3)
+            else -> path
+        }
     }
 
     fun getJsonContent(json: String): String {

@@ -532,8 +532,12 @@ class I18nProcessor(
     /**
      * 当文件使用 i18n.global.t / i18n.t 但缺少 i18n 实例导入时，注入默认导入。
      *
-     * - Vue:   `import { i18n } from 'vue-i18n'`  （命名导入，vue-i18n 全局实例）
-     * - React: `import i18n from 'i18next'`       （默认导入，i18next 全局实例）
+     * - Vue:   查找项目中调用 createI18n 的文件（通常位于 @/locales 目录），
+     *          根据该文件的实际路径与导出方式生成导入：
+     *            `import { i18n } from '@/locales'`   （命名导出，别名路径）
+     *            `import i18n from './locales/index'` （默认导出，相对路径）
+     *          找不到 createI18n 文件时回退到从 vue-i18n 包导入。
+     * - React: 保持 `import i18n from 'i18next'`（i18next 全局实例）
      *
      * 注意：已有任意形式的 i18n 导入时不重复注入。
      */
@@ -541,7 +545,7 @@ class I18nProcessor(
         if (hasI18nInstanceImported(psiFile)) return
 
         val importText = if (isVue) {
-            "import { i18n } from 'vue-i18n';\n"
+            buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
         } else {
             "import i18n from 'i18next';\n"
         }
@@ -587,6 +591,34 @@ class I18nProcessor(
                 }
             }
         }
+    }
+
+    /**
+     * 为 Vue 全局 i18n 实例构造 import 语句。
+     *
+     * 流程：
+     * 1. 通过 Util.findVueI18nInstanceFile 查找 createI18n 调用的文件
+     * 2. 通过 resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
+     * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
+     */
+    private fun buildVueI18nInstanceImport(psiFile: PsiElement): String {
+        val containingFile = psiFile.containingFile ?: return FALLBACK_VUE_I18N_IMPORT
+        val i18nVFile = Util.findVueI18nInstanceFile(containingFile)
+            ?: return FALLBACK_VUE_I18N_IMPORT
+        val importPath = Util.resolveVueI18nImportPath(containingFile, i18nVFile)
+            ?: return FALLBACK_VUE_I18N_IMPORT
+        val isDefault = Util.isVueI18nDefaultExport(i18nVFile)
+        return if (isDefault) {
+            "import i18n from '$importPath';\n"
+        } else {
+            "import { i18n } from '$importPath';\n"
+        }
+    }
+
+    companion object {
+        /** 找不到 createI18n 文件时的回退：直接从 vue-i18n 包导入命名导出 i18n */
+        private const val FALLBACK_VUE_I18N_IMPORT = "import { i18n } from 'vue-i18n';\n"
     }
 
     /**

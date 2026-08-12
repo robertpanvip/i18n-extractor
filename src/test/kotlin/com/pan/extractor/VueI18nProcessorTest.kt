@@ -33,6 +33,26 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
+        // 在 @/locales 下创建包含 createI18n 的 i18n 实例文件（命名导出），
+        // 模拟用户真实项目结构，测试 ensureI18nInstanceImported 的路径推断逻辑。
+        myFixture.addFileToProject(
+            "src/locales/index.ts",
+            """
+            import { createI18n } from 'vue-i18n';
+
+            const messages = {
+              zh: {},
+              en: {}
+            };
+
+            export const i18n = createI18n({
+              legacy: false,
+              globalInjection: true,
+              locale: 'zh',
+              messages,
+            });
+            """.trimIndent()
+        )
     }
 
     // ============================================================
@@ -922,8 +942,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * 测试使用 i18n.global.t 但缺少 i18n 实例导入时，应自动注入默认导入。
-     * Vue 默认注入命名导入：import { i18n } from 'vue-i18n'
+     * 测试使用 i18n.global.t 但缺少 i18n 实例导入时，应自动从 @/locales 注入。
+     *
+     * 在 setUp() 中已创建 `src/locales/index.ts`（命名导出 createI18n 的 i18n 实例），
+     * 且 Test.vue 放在默认 tempFileManager 位置（也在项目的 src/ 范围内），
+     * 因此应注入：`import { i18n } from '@/locales'`
      */
     fun testVueI18nGlobalTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -943,10 +966,10 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
-        // 应注入 i18n 实例的命名导入
+        // 应注入 i18n 实例的命名导入（来自 @/locales 而不是 vue-i18n 包）
         assertTrue(
-            "应注入 import { i18n } from 'vue-i18n', got:\n$resultText",
-            resultText.contains("import { i18n } from 'vue-i18n'")
+            "应注入 import { i18n } from '@/locales', got:\n$resultText",
+            resultText.contains("import { i18n } from '@/locales'")
         )
         // 不应注入 useI18n（已使用全局 i18n）
         assertFalse(
@@ -977,10 +1000,10 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
-        // 不应再注入默认路径的 import
+        // 不应再注入 @/locales 的 i18n 导入（hasI18nInstanceImported 会匹配已有命名导入）
         assertFalse(
-            "不应重复注入 import { i18n } from 'vue-i18n', got:\n$resultText",
-            resultText.contains("from 'vue-i18n'")
+            "不应重复注入 from '@/locales' i18n, got:\n$resultText",
+            resultText.contains("from '@/locales'")
         )
         // 原有的 ./i18n 导入应保留
         assertTrue(
@@ -1012,8 +1035,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val resultText = file.text
         assertFalse(
-            "已有默认导入时不应再注入命名导入, got:\n$resultText",
-            resultText.contains("from 'vue-i18n'")
+            "已有默认导入时不应再注入 from '@/locales', got:\n$resultText",
+            resultText.contains("from '@/locales'")
         )
         assertTrue(
             "原有 import i18n from './i18n' 应保留, got:\n$resultText",
@@ -1044,8 +1067,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val resultText = file.text
         assertFalse(
-            "已有 namespace 导入时不应再注入, got:\n$resultText",
-            resultText.contains("from 'vue-i18n'")
+            "已有 namespace 导入时不应再注入 from '@/locales', got:\n$resultText",
+            resultText.contains("from '@/locales'")
         )
     }
 
