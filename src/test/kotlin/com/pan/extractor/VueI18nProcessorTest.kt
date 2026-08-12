@@ -1065,8 +1065,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
 
         val processor = I18nProcessor(project, file)
+        println("DEBUG useCounter: beforeCollect=\n${file.text}")
         processor.collect()
-        println("DEBUG useCounter: beforeExecute=\n${file.text}")
+        println("DEBUG useCounter: afterCollect=\n${file.text}")
         processor.execute()
 
         val resultText = file.text
