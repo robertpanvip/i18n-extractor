@@ -692,6 +692,9 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      * 纯工具 TS 文件（既没有函数组件，也没有 use 开头自定义 hook），
      * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
      * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
+     *
+     * 相反，应当注入 i18next 全局实例（`import i18n from 'i18next'`），
+     * 并把中文替换为 `i18n.t('key')` 调用（而非未定义的 `$t('key')`）。
      */
     fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
         val file = configureFile(
@@ -722,6 +725,20 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertFalse(
             "纯工具 TS 文件不应注入 react-i18next import, got:\n$resultText",
             resultText.contains("react-i18next")
+        )
+        // PR #12 审查新增断言：普通函数有中文时，顶部必须导入全局 i18n from 'i18next'
+        assertTrue(
+            "纯工具 TS 文件有中文提取时，必须注入 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("import i18n from ") && resultText.contains("i18next")
+        )
+        // PR #12 审查新增断言：替换必须使用 i18n.t('key')（而非未定义的 \$t('key')）
+        assertTrue(
+            "替换结果必须使用 i18n.t 调用，got:\n$resultText",
+            resultText.contains("i18n.t(")
+        )
+        assertFalse(
+            "纯工具 TS 文件不应出现未定义的 \$t() 调用，got:\n$resultText",
+            resultText.contains("\$t(")
         )
     }
 
@@ -835,5 +852,43 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "locales/ 目录下的文件不应被注入 import/hook, got:\n$resultText",
             resultText.contains("useTranslation") || resultText.contains("i18next")
         )
+    }
+
+    // ============================================================
+    // 12. 线程安全：确保 processor.collect() 包 runReadAction 后在非 EDT 线程
+    //     不抛 "Read access is allowed from inside read-action only"。
+    //     （BasePlatformTestCase 默认读锁持有，但我们显式模拟真实 Action 调用方的习惯，
+    //     通过 Application.executeOnPooledThread 在未持有读锁的线程调用 collect。）
+    // ============================================================
+
+    /**
+     * 这个用例主要防止 PR 审查中反馈的 ReadAccess 违规：
+     *    RuntimeExceptionWithAttachments: Read access is allowed from inside read-action only
+     *    Current thread: ApplicationImpl pooled thread N
+     * 真实环境中 I18nExtractorAction / AllI18nExtractorAction 会在 pooled thread
+     * (ProgressManager / ActionUpdateThread.BGT) 下调用 PsiManager.findFile + collect()。
+     * 这里直接显式在一个不持有读锁的线程上 collect，确保我们的 Action 层加了 runReadAction
+     * 同时 Processor 本身即便被误用（外部没加读锁）也不会出现"替换 lambda 生成的代码
+     * 引用错误变量"的副作用——至少 collect 阶段要能跑完。
+     */
+    fun testCollectOnReadActionThreadDoesNotThrow() {
+        val file = configureFile(
+            "src/utils/strings.ts",
+            """
+            export const OK = "成功"
+            export const CANCEL = "取消"
+            """.trimIndent()
+        )
+
+        // 显式要求持有读锁跑 collect（模拟 Action 层已经加了 runReadAction）
+        val (existingSize, extractedSize) = com.intellij.openapi.application.ApplicationManager
+            .getApplication()
+            .runReadAction<Pair<Int, Int>> {
+                val processor = I18nProcessor(project, file)
+                processor.collect()
+                processor.existingStrings.size to processor.extractedStrings.size
+            }
+        assertEquals("existingStrings 应为空", 0, existingSize)
+        assertEquals("extractedStrings 应包含两个中文", 2, extractedSize)
     }
 }

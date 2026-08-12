@@ -9,6 +9,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
@@ -132,15 +133,20 @@ class AllI18nExtractorAction : AnAction() {
         // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
         val files = allFiles.filterNot { Util.isTranslationResourceFile(it) }
         val extracted = mutableMapOf<String, String>()
-        val psiFiles = files.map { file ->
-            val psiFile: PsiFile? = PsiManager
-                .getInstance(project)
-                .findFile(file)
-            psiFile?.let { I18nProcessor(project, it) }
-        }
-        psiFiles.forEach { processor ->
-            processor?.collect();
-            processor?.extractedStrings?.let { extracted.putAll(it) }
+
+        val psiFiles: List<I18nProcessor?> = files.map { file ->
+            // 🔴 线程合规：transform() 此时可能跑在 WriteCommandAction lambda 里（OK），
+            //    但"全项目扫描"也可能是后台触发；PsiManager.findFile + processor.collect()
+            //    属于纯 PSI 读，统一加一层 runReadAction 保险。
+            ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
+                val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
+                if (psiFile == null) null else {
+                    val processor = I18nProcessor(project, psiFile)
+                    processor.collect()
+                    extracted.putAll(processor.extractedStrings)
+                    processor
+                }
+            }
         }
 
         // 弹出模态框显示 JSON

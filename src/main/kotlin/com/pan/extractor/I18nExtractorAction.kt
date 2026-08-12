@@ -4,6 +4,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
@@ -80,16 +81,30 @@ class I18nExtractorAction : AnAction() {
         // Bug 2（保险）：即便 update() 放过了，到这里仍要拦截语言包文件
         if (isTranslationResource(psiFile)) return
 
-        val ins = I18nProcessor(project, psiFile)
-        ins.collect()
+        // 线程规则：PSI 读取（findFile、遍历、collect）必须包在 runReadAction 中，
+        // 否则 ActionUpdateThread.BGT 或进度线程（Application pooled thread）会抛：
+        //   Read access is allowed from inside read-action only
+        val triple = ApplicationManager.getApplication().runReadAction<Triple<Map<String, String>, Map<String, String>, I18nProcessor>> {
+            val ins = I18nProcessor(project, psiFile)
+            ins.collect()
+            Triple(
+                HashMap<String, String>(ins.existingStrings),
+                HashMap<String, String>(ins.extractedStrings),
+                ins
+            )
+        }
+        val existing = triple.first
+        val extracted = triple.second
+        val processor = triple.third
 
         val allStrings = mutableMapOf<String, String>()
-        allStrings.putAll(ins.existingStrings)
-        allStrings.putAll(ins.extractedStrings)
+        allStrings.putAll(existing)
+        allStrings.putAll(extracted)
 
         val dialog = ExtractedStringsDialog(project, allStrings)
         if (dialog.showAndGet()) {
-            ins.execute()
+            // WriteCommandAction.execute() 内部会自行持有 Read+Write 锁，无需再包
+            processor.execute()
             if (dialog.json !== null) {
                 val content = getJsonContent(dialog.json!!)
                 CopyPasteManager.getInstance().setContents(StringSelection(content))
@@ -130,12 +145,18 @@ class I18nExtractorAction : AnAction() {
                 if (indicator.isCanceled) break
                 indicator.fraction = (index + 1).toDouble() / files.size
                 indicator.text2 = file.name
-                val psiFile = psiManager.findFile(file) ?: continue
-                val processor = I18nProcessor(project, psiFile)
-                processor.collect()
-                extracted.putAll(processor.existingStrings)
-                extracted.putAll(processor.extractedStrings)
-                processors.add(processor)
+
+                // 🔴 线程合规：进度线程是 Application pooled thread（非 EDT），
+                //    findFile + collect() 做大量 PSI 读遍历，必须包 runReadAction，
+                //    否则抛 "Read access is allowed from inside read-action only"
+                ApplicationManager.getApplication().runReadAction {
+                    val psiFile = psiManager.findFile(file) ?: return@runReadAction
+                    val processor = I18nProcessor(project, psiFile)
+                    processor.collect()
+                    extracted.putAll(processor.existingStrings)
+                    extracted.putAll(processor.extractedStrings)
+                    processors.add(processor)
+                }
             }
         }, "I18n Extraction", true, project)
 

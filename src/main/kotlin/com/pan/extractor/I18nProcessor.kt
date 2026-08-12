@@ -210,7 +210,27 @@ class I18nProcessor(
             return effects
         }
 
+        // —— PR 审查 #2 修复（React 普通函数有中文顶部无全局导入）：
+        //    翻译函数名必须在"字符串替换闭包被构造"（即 pureCollect()）之前切换，
+        //    否则闭包会 capture 闭包创建时刻的 tFunctionName 快照（始终是 \$t）。
+        //
+        //    预判规则：文件是 React 项目 + （当前默认翻译函数仍是 \$t）+ （既没有组件也没有自定义 hook）
+        //    → 强制切换到 i18next 全局实例调用：i18n.t('key')，
+        //    后续 run() 阶段会注入 import i18n from 'i18next'（见 ensureI18nInstanceImported）。
+        if (tFunctionName == "\$t") {
+            val f = containingFile ?: (psiFile as? PsiFile)
+            if (f != null && Util.isReact(f)) {
+                val components = Util.findReactComponentFunctions(f)
+                val hooks = Util.findHookFunctions(f)
+                if (components.isEmpty() && hooks.isEmpty()) {
+                    tFunctionName = "i18n.t"
+                }
+            }
+        }
+
         collectExistingTKeys()
+        // collectExistingTKeys 可能会基于现有调用把 tFunctionName 改成 i18n.t（如文件
+        // 已经存在 i18n.t('xxx') 调用）——这是对的，不要覆盖回去。
         val changes = pureCollect(psiFile)
         effects = changes;
         return changes;
@@ -344,13 +364,21 @@ class I18nProcessor(
         this.effects.forEach { it() }
         val isVue = isVueFile(psiFile.containingFile)
         val isReact = Util.isReact(psiFile)
-        // 使用全局 i18n 实例（i18n.global.t / i18n.t）时，无论是否有新提取，
-        // 只要文件缺少 i18n 实例导入就补默认导入——否则既有的 i18n.global.t / i18n.t
-        // 调用会因未导入而失效。useI18n / useTranslation 的注入仅在出现新提取时才需要。
-        if (isVue && tFunctionName == "i18n.global.t") {
-            ensureI18nInstanceImported(psiFile, isVue = true)
-        } else if (isReact && tFunctionName == "i18n.t") {
-            ensureI18nInstanceImported(psiFile, isVue = false)
+        // 使用全局 i18n 实例（i18n.global.t / i18n.t）时，
+        // 只要有"需要使用 i18n.t"的场景（有新提取，或者原本就检测到存在 i18n global t 调用），
+        // 就需要补导入。否则 React 纯工具 TS 文件"没有中文提取"却被预判切到 tFunctionName="i18n.t"，
+        // 会被下方 367 行分支错误地注入 import i18n from 'i18next'。
+        val needGlobalI18nImport = (
+            extractedStrings.isNotEmpty() ||
+                tFunctionName == "i18n.global.t" ||
+                (tFunctionName == "i18n.t" && existingStrings.isNotEmpty())
+            )
+        if (needGlobalI18nImport) {
+            if (isVue && (tFunctionName == "i18n.global.t" || extractedStrings.isNotEmpty())) {
+                ensureI18nInstanceImported(psiFile, isVue = true)
+            } else if (isReact && tFunctionName == "i18n.t") {
+                ensureI18nInstanceImported(psiFile, isVue = false)
+            }
         }
         if (extractedStrings.isNotEmpty()) {
             if (isVue) {
