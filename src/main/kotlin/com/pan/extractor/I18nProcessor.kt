@@ -351,6 +351,10 @@ class I18nProcessor(
                 if (tFunctionName != "i18n.t") {
                     ensureReactI18nImported(psiFile)
                 }
+            } else {
+                // 非 SFC、非 React 的纯 .ts 文件（典型：Vue 项目中的自定义 hook）
+                // 含 use 开头的 hook 函数时注入 useI18n
+                ensureVueHookI18nImported(psiFile)
             }
         }
     }
@@ -462,6 +466,60 @@ class I18nProcessor(
                     func
                 )
                 // 插入到 body 的 '{' 之后（即第一个 LeafElement 之后）
+                val openingBrace = body.firstChild
+                if (openingBrace != null) {
+                    body.addAfter(hookStmt, openingBrace)
+                }
+            }
+        }
+    }
+
+    /**
+     * Vue 项目纯 .ts 文件中 use 开头自定义 hook 的 useI18n 注入。
+     *
+     * 场景：Vue 项目里独立的 .ts 文件（非 .vue SFC）写了 useXxx 自定义 hook，
+     * 内部有硬编码中文。这类文件既不是 Vue SFC（无 <script> 标签）也不是 React，
+     * 无法走 [ensureVueI18nImported]（依赖 <script>）或 [ensureReactI18nImported]。
+     *
+     * 处理：
+     * 1. 缺少 vue-i18n 导入时，在文件顶部注入 `import { useI18n } from 'vue-i18n'`
+     * 2. 给每个 use 开头的顶级 hook 函数体首行注入 `const { t: $t } = useI18n();`
+     */
+    private fun ensureVueHookI18nImported(psiFile: PsiElement) {
+        val containingFile = psiFile.containingFile ?: return
+
+        // 1. 确保 vue-i18n 导入存在
+        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+        if (imports.none { it.text.contains("vue-i18n") }) {
+            val importText = "import { useI18n } from 'vue-i18n';\n"
+            val importStmt = createJSStatementFromText(importText, containingFile)
+            if (imports.isNotEmpty()) {
+                val firstImport = imports.first()
+                firstImport.parent.addBefore(importStmt, firstImport)
+            } else {
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
+                } else {
+                    containingFile.add(importStmt)
+                }
+            }
+        }
+
+        // 2. 找到所有 use 开头的 hook 函数并注入 useI18n
+        val hookFuncs = Util.findHookFunctions(containingFile)
+        if (hookFuncs.isEmpty()) return
+
+        // 3. 逐个注入（从后往前插入，避免 offset 偏移）
+        for (func in hookFuncs.asReversed()) {
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            // 检查是否已存在 useI18n 调用
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.none { it.text.contains("useI18n") }) {
+                val hookStmt = createJSStatementFromText(
+                    "\n    const { t: \$t } = useI18n();",
+                    func
+                )
                 val openingBrace = body.firstChild
                 if (openingBrace != null) {
                     body.addAfter(hookStmt, openingBrace)

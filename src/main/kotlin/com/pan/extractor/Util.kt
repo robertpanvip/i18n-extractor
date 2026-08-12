@@ -124,6 +124,40 @@ object Util {
         return result
     }
 
+    /**
+     * 查找文件中所有 use 开头的顶级 hook 函数（函数声明、箭头函数、函数表达式）。
+     * 用于 Vue/React 项目中纯 .ts/.tsx 文件的自定义 hook：识别后可注入
+     * useI18n / useTranslation，使 hook 内部的硬编码中文能被国际化。
+     * 与 [findReactComponentFunctions] 不同，本函数只按函数名前缀匹配，
+     * 不依赖 React 上下文（return JSX / hook 调用等），可安全用于 Vue 项目。
+     */
+    fun findHookFunctions(file: PsiFile): List<PsiElement> {
+        val result = mutableListOf<PsiElement>()
+        val seen = mutableSetOf<PsiElement>()
+        // 1. 通过 JSFunction 查找（函数声明、箭头函数、函数表达式）
+        PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java).forEach { func ->
+            if (!isTopLevelFunction(func, file)) return@forEach
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
+            val name = getFunctionName(func)
+            if (name != null && name.startsWith("use") && func !in seen) {
+                result.add(func)
+                seen.add(func)
+            }
+        }
+        // 2. 回退：通过 JSVarStatement 查找（const useXxx = () => {} 可能不匹配 JSFunction）
+        PsiTreeUtil.findChildrenOfType(file, JSVarStatement::class.java).forEach { varStmt ->
+            if (!isTopLevelFunction(varStmt, file)) return@forEach
+            val func = PsiTreeUtil.findChildOfType(varStmt, JSFunction::class.java) ?: return@forEach
+            PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
+            val name = getFunctionName(func)
+            if (name != null && name.startsWith("use") && func !in seen) {
+                result.add(func)
+                seen.add(func)
+            }
+        }
+        return result
+    }
+
     /** 函数是否在顶级作用域（不被其他函数嵌套） */
     private fun isTopLevelFunction(func: PsiElement, file: PsiFile): Boolean {
         var p = func.parent

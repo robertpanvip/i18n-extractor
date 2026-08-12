@@ -1048,4 +1048,131 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             resultText.contains("from 'vue-i18n'")
         )
     }
+
+    /**
+     * Vue 项目纯 .ts 文件中的 use 开头自定义 hook，内部硬编码中文应被提取，
+     * 且自动注入 import { useI18n } from 'vue-i18n' 与 const { t: $t } = useI18n()。
+     */
+    fun testVueCustomHookInTsFileInjectsUseI18n() {
+        val file = myFixture.configureByText(
+            "useCounter.ts",
+            """
+            export function useCounter() {
+                const label = "计数器"
+                return { label }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "应注入 import { useI18n } from 'vue-i18n', got:\n$resultText",
+            resultText.contains("import { useI18n } from 'vue-i18n'")
+        )
+        assertTrue(
+            "应注入 const { t: \$t } = useI18n(), got:\n$resultText",
+            resultText.contains("const { t: \$t } = useI18n()")
+        )
+        assertTrue(
+            "硬编码中文应被替换为 \$t('计数器'), got:\n$resultText",
+            resultText.contains("\$t('计数器')")
+        )
+    }
+
+    /**
+     * 箭头函数形式的 use hook（const useXxx = () => {}）也应被识别并注入。
+     */
+    fun testVueCustomHookArrowFunctionInTsFileInjectsUseI18n() {
+        val file = myFixture.configureByText(
+            "useToggle.ts",
+            """
+            export const useToggle = () => {
+                const hint = "提示文本"
+                return { hint }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "箭头函数 hook 应注入 useI18n 导入, got:\n$resultText",
+            resultText.contains("import { useI18n } from 'vue-i18n'")
+        )
+        assertTrue(
+            "箭头函数 hook 体应注入 const { t: \$t } = useI18n(), got:\n$resultText",
+            resultText.contains("const { t: \$t } = useI18n()")
+        )
+    }
+
+    /**
+     * 已有 useI18n 调用的 hook 不应重复注入。
+     */
+    fun testVueCustomHookWithExistingUseI18nNotReInjected() {
+        val file = myFixture.configureByText(
+            "useUser.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            export function useUser() {
+                const { t: \$t } = useI18n()
+                const label = "用户名"
+                return { label }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        // 只应出现一次 useI18n 导入
+        assertEquals(
+            "useI18n 导入不应重复, got:\n$resultText",
+            1,
+            resultText.split("import { useI18n } from 'vue-i18n'").size - 1
+        )
+        // hook 体内的 useI18n 调用也只应有一次
+        assertEquals(
+            "useI18n() 调用不应重复, got:\n$resultText",
+            1,
+            resultText.split("const { t: \$t } = useI18n()").size - 1
+        )
+    }
+
+    /**
+     * 非 use 开头的普通函数（如普通工具函数）不应被注入 useI18n。
+     */
+    fun testVueNonHookFunctionInTsFileNotInjected() {
+        val file = myFixture.configureByText(
+            "format.ts",
+            """
+            export function formatDate() {
+                const label = "日期"
+                return label
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "普通函数不应注入 useI18n 导入, got:\n$resultText",
+            resultText.contains("import { useI18n } from 'vue-i18n'")
+        )
+        assertFalse(
+            "普通函数不应注入 useI18n 调用, got:\n$resultText",
+            resultText.contains("useI18n()")
+        )
+    }
 }
