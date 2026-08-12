@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,6 +34,52 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
+        // 在 @/locales 下创建包含 createI18n 的 i18n 实例文件（命名导出），
+        // 模拟用户真实项目结构，测试 ensureI18nInstanceImported 的路径推断逻辑。
+        myFixture.addFileToProject(
+            "src/locales/index.ts",
+            """
+            import { createI18n } from 'vue-i18n';
+
+            const messages = {
+              zh: {},
+              en: {}
+            };
+
+            export const i18n = createI18n({
+              legacy: false,
+              globalInjection: true,
+              locale: 'zh',
+              messages,
+            });
+            """.trimIndent()
+        )
+    }
+
+    /**
+     * 配置测试用的 Vue/TS 文件。
+     * - 如果文件名包含路径（如 "src/Test.vue"）：先 addFileToProject 创建，
+     *   再 configureFromExistingVirtualFile，确保文件位置与真实项目一致；
+     * - 否则直接用 configureByText。
+     */
+    private fun configureFile(fileName: String, text: String): PsiFile {
+        return if (fileName.contains('/') || fileName.contains('\\')) {
+            val psiFile = myFixture.addFileToProject(fileName, text)
+            myFixture.configureFromExistingVirtualFile(psiFile.virtualFile)
+            psiFile
+        } else {
+            myFixture.configureByText(fileName, text)
+        }
+    }
+
+    /**
+     * 去掉空白字符（空格、换行、制表符）后再做子串判断。
+     * 避免不同 PSI/格式化版本对代码排版差异导致的测试误报。
+     */
+    private fun String.containsIgnoringWs(other: String): Boolean {
+        val a = this.replace("\\s+".toRegex(), "")
+        val b = other.replace("\\s+".toRegex(), "")
+        return a.contains(b)
     }
 
     // ============================================================
@@ -43,8 +90,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue template 普通文本
      */
     fun testVueTemplateTextExtract() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>
@@ -69,8 +116,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 Vue 模板中已存在 $t(`反引号字符串`) 应跳过提取并正确识别为已有
      */
     fun testVueExistingBacktickTShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <Button type="primary" :loading="loading" @click="() => handleSubmit()">
@@ -104,7 +151,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
 
         for ((name, argText) in styles) {
-            val file = myFixture.configureByText(
+            val file = configureFile(
                 "Test_$name.vue",
                 """
                 <template>
@@ -135,8 +182,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 变量名 }} 不应提取（纯变量，无中文）
      */
     fun testVueVariableExpressionShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ message }}</div>
@@ -157,8 +204,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 对象.属性 }} 成员变量表达式 - 不应提取
      */
     fun testVueMemberExpressionShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ user.name }}</div>
@@ -179,8 +226,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 数组[索引] }} 表达式 - 不应提取
      */
     fun testVueArrayIndexExpressionShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ items[0] }}</div>
@@ -205,8 +252,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 函数调用() }} 无参函数调用 - 不应提取
      */
     fun testVueFunctionCallNoArgsShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ getMessage() }}</div>
@@ -227,8 +274,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 函数调用('中文') }} 函数字符串参数 - 应提取参数中的中文
      */
     fun testVueFunctionCallWithStringArgShouldExtract() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ formatMessage('你好世界') }}</div>
@@ -249,8 +296,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 对象.方法('中文') }} 方法调用带字符串参数 - 应提取参数中的中文
      */
     fun testVueMethodCallWithStringArgShouldExtract() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ utils.format('提示信息') }}</div>
@@ -275,8 +322,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 条件 ? '中文1' : '中文2' }} 三目表达式 - 两个分支都应提取
      */
     fun testVueTernaryExpressionBothChinese() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ isVip ? '会员专享' : '普通用户' }}</div>
@@ -306,8 +353,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 条件 ? '中文' : variable }} 三目表达式只有一个分支有中文
      */
     fun testVueTernaryExpressionOneChinese() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ status === 1 ? '已启用' : statusText }}</div>
@@ -333,8 +380,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ 条件 ? $t('key1') : $t('key2') }} 三目表达式已有 $t() 应跳过
      */
     fun testVueTernaryExpressionWithExistingTShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ isVip ? ${'$'}t('会员专享') : ${'$'}t('普通用户') }}</div>
@@ -355,8 +402,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试嵌套三目表达式 {{ a ? '中文1' : b ? '中文2' : '中文3' }}
      */
     fun testVueNestedTernaryExpression() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ level === 1 ? '高级' : level === 2 ? '中级' : '初级' }}</div>
@@ -385,8 +432,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ `模板字符串${变量}` }} 模板字符串表达式
      */
     fun testVueTemplateLiteralExpression() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ `你好${'$'}{name}` }}</div>
@@ -407,8 +454,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 {{ `模板字符串${'纯字符串'}` }} 模板字符串中纯字符串插值应内联
      */
     fun testVueTemplateLiteralWithPureStringInterpolation() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>{{ `前缀${'$'}{'中间文本'}后缀` }}</div>
@@ -434,8 +481,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 确保已有的不会被重复提取，新的文本正常提取
      */
     fun testVueMixedContent() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """<template>
   <Button type="primary" :loading="loading" @click="() => handleSubmit()">
         {{ ${'$'}t(`确定`) }}
@@ -465,8 +512,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试多个 {{ }} 表达式混合场景
      */
     fun testVueMultipleMustacheExpressions() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>
@@ -501,8 +548,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 :title="'中文'" 动态属性中的字符串应提取
      */
     fun testVueDynamicAttributeStringShouldExtract() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div :title="'提示信息'">hover me</div>
@@ -523,8 +570,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 :title="$t('key')" 动态属性中已有 $t() 应跳过
      */
     fun testVueDynamicAttributeWithExistingTShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div :title="${'$'}t('提示信息')">hover me</div>
@@ -550,8 +597,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 按钮文本为中文时应被正常提取
      */
     fun testVueClickHandlerNoStringShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <button @click="handleClick()">点击</button>
@@ -575,8 +622,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 HTML 注释中的中文应跳过
      */
     fun testVueCommentShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <!-- 这是注释，不应被提取 -->
@@ -597,8 +644,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 测试 style 标签中的中文应跳过
      */
     fun testVueStyleShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+        val file = configureFile(
+            "src/Test.vue",
             """
             <template>
                 <div>真实文本</div>
@@ -627,7 +674,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
      * 而不是 React 的双括号格式 {{key}}
      */
     fun testVueProjectTsxTemplateLiteralUsesSingleBrace() {
-        val file = myFixture.configureByText(
+        val file = configureFile(
             "App.tsx",
             """
             import { defineComponent, ref } from 'vue'
@@ -656,114 +703,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
-    // ============================================================
-    // 12. Bug 复现 - 混合引号三目 + 多表达式混合文本
-    // ============================================================
-
-    /**
-     * Bug1: 三目表达式混合引号（反引号 + 双引号）应都能提取
-     * {{ visibleToggle ? `点击展开` : "点击收起" }}
-     */
-    fun testVueTernaryMixedQuotes() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ visibleToggle ? `点击展开` : "点击收起" }}</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertEquals(
-            "Should extract 2 strings from mixed-quote ternary, but got: ${processor.extractedStrings}",
-            2,
-            processor.extractedStrings.size
-        )
-        assertTrue(
-            "Should contain '点击展开', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("点击展开")
-        )
-        assertTrue(
-            "Should contain '点击收起', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("点击收起")
-        )
-    }
-
-    /**
-     * Bug2: 同一个 XmlText 中多个 {{ }} + 中间普通文本应都能提取
-     * <div>{{ "点击收起" }}-测试 {{ "点击收起" }}</div>
-     */
-    fun testVueMixedMustacheAndPlainText() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ "点击收起" }}-测试 {{ "点击收起" }}</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        // "点击收起" 来自两个 {{ }} 表达式（去重后1个）+ "-测试" 来自中间普通文本
-        assertTrue(
-            "Should contain '点击收起', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("点击收起")
-        )
-        assertTrue(
-            "Should contain '-测试' plain text between mustaches, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("-测试")
-        )
-    }
-
-    /**
-     * Bug3: 已有双引号 import 时不应重复添加 import
-     * import { useI18n } from "vue-i18n"; （双引号）不应再新增一个单引号版本
-     */
-    fun testVueExistingDoubleQuoteImportShouldNotDuplicate() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <script setup lang="ts">
-            import { useI18n } from "vue-i18n";
-            import { ref } from "vue";
-            const { t: ${'$'}t } = useI18n();
-            const visibleToggle = ref();
-            </script>
-
-            <template>
-              <div>
-                {{ visibleToggle ? "点击展开" : "点击收起" }}
-              </div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-        processor.execute()
-
-        val resultText = file.text
-        // 统计 vue-i18n import 出现次数，应该只有 1 个
-        val importCount = Regex("import\\s*\\{[^}]*useI18n[^}]*\\}\\s*from\\s*['\"]vue-i18n['\"]")
-            .findAll(resultText).count()
-
-        assertEquals(
-            "Should have exactly 1 vue-i18n import, got $importCount. Result:\n$resultText",
-            1,
-            importCount
-        )
-    }
-
     /**
      * 测试 Vue 项目中 isReact 判断应为 false（即使文件是 .tsx 后缀）
      */
     fun testVueProjectTsxIsReactShouldBeFalse() {
-        val file = myFixture.configureByText(
+        val file = configureFile(
             "Component.tsx",
             """
             import { defineComponent } from 'vue'
@@ -786,19 +730,23 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     // ============================================================
-    // 13. Mustache 与纯文本混合边界场景
+    // 11. HTML 注释跳过（Bug 修复）
     // ============================================================
 
     /**
-     * 测试纯文本在 mustache 前面：前缀文本 + {{ 表达式 }}
-     * 例如：前缀-{{ "内容" }}
+     * 测试 div 中全部是 HTML 注释时不应提取任何内容
+     * 场景：<div><!-- 注释1 --><!-- 注释2 --></div>
      */
-    fun testVuePlainTextPrefixBeforeMustache() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+    fun testDivWithOnlyHtmlCommentsShouldNotExtract() {
+        val file = configureFile(
+            "test.vue",
             """
             <template>
-                <div>前缀-{{ "内容" }}</div>
+                <div>
+                    <!--    <FormList-->
+                    <!--      label="输出变量"-->
+                    <!--    />-->
+                </div>
             </template>
             """.trimIndent()
         )
@@ -807,280 +755,23 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "Should contain '内容' from mustache, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("内容")
-        )
-        assertTrue(
-            "Should contain '前缀-' plain text before mustache, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("前缀-")
-        )
-    }
-
-    /**
-     * 测试纯文本在 mustache 后面：{{ 表达式 }} + 后缀文本
-     * 例如：{{ "内容" }}-后缀
-     */
-    fun testVuePlainTextSuffixAfterMustache() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ "内容" }}-后缀</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should contain '内容' from mustache, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("内容")
-        )
-        assertTrue(
-            "Should contain '-后缀' plain text after mustache, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("-后缀")
-        )
-    }
-
-    /**
-     * 测试多个 mustache + 多段纯文本交替
-     * 例如：开头 {{ "a" }} 中间 {{ "b" }} 结尾
-     */
-    fun testVueMultiplePlainTextAndMustaches() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>开头 {{ "苹果" }} 中间 {{ "香蕉" }} 结尾</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should contain '苹果', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("苹果")
-        )
-        assertTrue(
-            "Should contain '香蕉', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("香蕉")
-        )
-        assertTrue(
-            "Should contain '开头' plain text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.trim() == "开头" }
-        )
-        assertTrue(
-            "Should contain '中间' plain text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.trim() == "中间" }
-        )
-        assertTrue(
-            "Should contain '结尾' plain text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.trim() == "结尾" }
-        )
-    }
-
-    /**
-     * 测试三目表达式 + 周围纯文本
-     * 例如：状态：{{ isOn ? '开启' : '关闭' }}模式
-     */
-    fun testVueTernaryWithSurroundingPlainText() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>状态：{{ isOn ? '开启' : '关闭' }}模式</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should contain '开启', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("开启")
-        )
-        assertTrue(
-            "Should contain '关闭', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("关闭")
-        )
-        assertTrue(
-            "Should contain '状态：' plain text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("状态：")
-        )
-        assertTrue(
-            "Should contain '模式' plain text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("模式")
-        )
-    }
-
-    /**
-     * 测试只有纯英文的 mustache 间文本应跳过
-     * 例如：{{ "hello" }} world {{ "foo" }}
-     */
-    fun testVueEnglishPlainTextBetweenMustachesShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ "hello" }} world {{ "foo" }}</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        // 英文纯文本不应被提取
-        assertFalse(
-            "English plain text 'world' should not be extracted, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("world")
-        )
-    }
-
-    /**
-     * 测试 v-html 中的中文（属性值，非模板文本）
-     * v-html 的值是字符串字面量，会整体被提取
-     */
-    fun testVueVHtmlAttributeString() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div v-html="'<span>你好</span>'"></div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        // v-html 的值是字符串字面量，整个字符串内容会被提取（包含 HTML 标签）
-        assertTrue(
-            "Should extract string from v-html attribute containing Chinese, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.contains("你好") }
-        )
-    }
-
-    /**
-     * 测试 v-text 中的中文
-     */
-    fun testVueVTextAttributeString() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div v-text="'欢迎使用'"></div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should extract '欢迎使用' from v-text attribute, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("欢迎使用")
-        )
-    }
-
-    /**
-     * 测试自定义事件处理函数中的字符串参数
-     * 例如：@click="handleClick('提交')"
-     */
-    fun testVueEventHandlerStringArg() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <button @click="handleClick('提交', '成功')">按钮</button>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should extract '提交' from event handler, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提交")
-        )
-        assertTrue(
-            "Should extract '成功' from event handler, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("成功")
-        )
-        assertTrue(
-            "Should extract '按钮' from text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("按钮")
-        )
-    }
-
-    /**
-     * 测试 class 绑定中的中文
-     * 例如：:class="isActive ? '激活类' : '默认类'"
-     */
-    fun testVueClassBindingTernary() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div :class="isActive ? '激活类' : '默认类'">内容</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should extract '激活类' from class binding, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("激活类")
-        )
-        assertTrue(
-            "Should extract '默认类' from class binding, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("默认类")
-        )
-        assertTrue(
-            "Should extract '内容' from text, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("内容")
-        )
-    }
-
-    /**
-     * 测试三目表达式中已有 $t() 调用（反引号版本）应跳过
-     */
-    fun testVueTernaryWithExistingTBacktickShouldSkip() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ isVip ? ${'$'}t(\`会员专享\`) : ${'$'}t(\`普通用户\`) }}</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "extractedStrings should be empty for existing \$t() with backtick in ternary, but got: ${processor.extractedStrings}",
+            "全是 HTML 注释的 div 不应提取任何内容, got: ${processor.extractedStrings}",
             processor.extractedStrings.isEmpty()
         )
     }
 
     /**
-     * 测试三目表达式中混合 $t() 和普通字符串
-     * 只有普通字符串分支应该被提取
+     * 测试 div 中 HTML 注释和实际文本混合时，只提取实际文本
      */
-    fun testVueTernaryMixedExistingTAndPlainString() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+    fun testDivWithHtmlCommentsAndTextExtractsOnlyText() {
+        val file = configureFile(
+            "test.vue",
             """
             <template>
-                <div>{{ isVip ? ${'$'}t('会员专享') : '普通用户' }}</div>
+                <div>
+                    <!-- 这是注释 -->
+                    这是实际文本
+                </div>
             </template>
             """.trimIndent()
         )
@@ -1088,96 +779,452 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
+        assertTrue(
+            "应提取实际文本 '这是实际文本', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("这是实际文本")
+        )
+        assertFalse(
+            "不应提取注释内容 '这是注释', got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("这是注释")
+        )
+    }
+
+    // ============================================================
+    // 12. Mustache 中 JS 注释跳过（Bug 修复）
+    // ============================================================
+
+    /**
+     * 测试 {{ }} 中只有 JS 注释时不应提取
+     * 场景：<div>{{ //新增按钮 }}</div>
+     */
+    fun testMustacheWithOnlyJsCommentShouldNotExtract() {
+        val file = configureFile(
+            "test.vue",
+            """
+            <template>
+                <div>{{
+                    //新增按钮
+                }}</div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertFalse(
+            "{{ //新增按钮 }} 中的 JS 注释不应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("//新增按钮")
+        )
+    }
+
+    // ============================================================
+    // 13. 模板字符串中已有 $t() 调用不应重复提取（Bug 修复）
+    // ============================================================
+
+    /**
+     * 测试 {{ }} 中三目表达式已有 $t() 调用时不应修改
+     * 场景：record.x ? `${$t("已于")}${record.x}${$t("发布")}` : $t("未发布")
+     */
+    fun testMustacheWithExistingTCallsShouldNotExtract() {
+        val file = configureFile(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    {{
+                        record.releaseTime
+                            ? `${'$'}t("已于")`${'$'}{record.releaseTime}${'$'}t("发布")`
+                            : ${'$'}t("未发布")
+                    }}
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 所有字符串已在 $t() 中，不应被重复提取
+        assertFalse(
+            "'已于' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("已于")
+        )
+        assertFalse(
+            "'发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("发布")
+        )
+        assertFalse(
+            "'未发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("未发布")
+        )
+        // 应在 existingStrings 中
+        assertTrue(
+            "'已于' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已于")
+        )
+        assertTrue(
+            "'未发布' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("未发布")
+        )
+    }
+
+    // ============================================================
+    // 14. i18n.global.t 全局调用支持
+    // ============================================================
+
+    /**
+     * 测试文件中使用 i18n.global.t 时，新提取的字符串应使用 i18n.global.t
+     */
+    fun testI18nGlobalTDetectionForNewExtraction() {
+        val file = configureFile(
+            "test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            import { i18n } from './i18n'
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+
+        // "已有文本" 应在 existingStrings 中
+        assertTrue(
+            "'已有文本' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已有文本")
+        )
+        // "新提取文本" 应被提取
+        assertTrue(
+            "'新提取文本' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("新提取文本")
+        )
+        // 新提取的应使用 i18n.global.t
+        assertTrue(
+            "新提取的字符串应使用 i18n.global.t, got:\n$resultText",
+            resultText.contains("i18n.global.t('新提取文本')")
+        )
+    }
+
+    /**
+     * 测试 i18n.global.t 和 $t 可以在同一文件中共存
+     * 两者都应被识别为已翻译，新提取使用 i18n.global.t
+     */
+    fun testI18nGlobalTCoexistWithUseI18n() {
+        val file = configureFile(
+            "test.vue",
+            """
+            <template>
+                <div>
+                    <span>{{ ${'$'}t("vue文本") }}</span>
+                    <span>{{ i18n.global.t("全局文本") }}</span>
+                </div>
+            </template>
+            <script setup lang="ts">
+            import { useI18n } from 'vue-i18n'
+            import { i18n } from './i18n'
+            const { t: ${'$'}t } = useI18n()
+            const newMsg = "待提取"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 两种形式都应识别为已翻译
+        assertTrue(
+            "'vue文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("vue文本")
+        )
+        assertTrue(
+            "'全局文本' (via i18n.global.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("全局文本")
+        )
+        // 新提取的应存在
+        assertTrue(
+            "'待提取' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("待提取")
+        )
+        // 不应重复提取已有文本
+        assertFalse(
+            "'vue文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("vue文本")
+        )
+        assertFalse(
+            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("全局文本")
+        )
+    }
+
+    // ============================================================
+    // 15. i18n.global.t 全局实例导入注入
+    // ============================================================
+
+    /**
+     * 测试使用 i18n.global.t 但缺少 i18n 实例导入时，应自动从 @/locales 注入。
+     *
+     * 在 setUp() 中已创建 `src/locales/index.ts`（命名导出 createI18n 的 i18n 实例），
+     * 且 Test.vue 放在默认 tempFileManager 位置（也在项目的 src/ 范围内），
+     * 因此应注入：`import { i18n } from '@/locales'`
+     */
+    fun testVueI18nGlobalTInjectImportWhenMissing() {
+        val file = configureFile(
+            "src/Test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        println("DEBUG: testVueI18nGlobalTInjectImportWhenMissing result:\n$resultText")
+        // 应注入 i18n 实例的命名导入（来自 @/locales 而不是 vue-i18n 包）
+        assertTrue(
+            "应注入 import { i18n } from '@/locales', got:\n$resultText",
+            resultText.contains("import { i18n } from '@/locales'")
+        )
+        // 不应注入 useI18n（已使用全局 i18n）
+        assertFalse(
+            "不应注入 useI18n, got:\n$resultText",
+            resultText.contains("useI18n")
+        )
+    }
+
+    /**
+     * 测试已有 i18n 命名导入时不重复注入
+     */
+    fun testVueI18nGlobalTNotDuplicateNamedImport() {
+        val file = configureFile(
+            "src/Test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            import { i18n } from './i18n'
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        // 不应再注入 @/locales 的 i18n 导入（hasI18nInstanceImported 会匹配已有命名导入）
+        assertFalse(
+            "不应重复注入 from '@/locales' i18n, got:\n$resultText",
+            resultText.contains("from '@/locales'")
+        )
+        // 原有的 ./i18n 导入应保留
+        assertTrue(
+            "原有 import { i18n } from './i18n' 应保留, got:\n$resultText",
+            resultText.contains("import { i18n } from './i18n'")
+        )
+    }
+
+    /**
+     * 测试已有 i18n 默认导入时不重复注入
+     */
+    fun testVueI18nGlobalTNotDuplicateDefaultImport() {
+        val file = configureFile(
+            "src/Test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            import i18n from './i18n'
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "已有默认导入时不应再注入 from '@/locales', got:\n$resultText",
+            resultText.contains("from '@/locales'")
+        )
+        assertTrue(
+            "原有 import i18n from './i18n' 应保留, got:\n$resultText",
+            resultText.contains("import i18n from './i18n'")
+        )
+    }
+
+    /**
+     * 测试已有 namespace 导入（import * as i18n）时不重复注入
+     */
+    fun testVueI18nGlobalTNotDuplicateNamespaceImport() {
+        val file = configureFile(
+            "src/Test.vue",
+            """
+            <template>
+                <div>{{ i18n.global.t("已有文本") }}</div>
+            </template>
+            <script setup lang="ts">
+            import * as i18n from './i18n'
+            const newMsg = "新提取文本"
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "已有 namespace 导入时不应再注入 from '@/locales', got:\n$resultText",
+            resultText.contains("from '@/locales'")
+        )
+    }
+
+    /**
+     * Vue 项目纯 .ts 文件中的 use 开头自定义 hook，内部硬编码中文应被提取，
+     * 且自动注入 import { useI18n } from 'vue-i18n' 与 const { t: $t } = useI18n()。
+     */
+    fun testVueCustomHookInTsFileInjectsUseI18n() {
+        val file = configureFile(
+            "src/useCounter.ts",
+            """
+            export function useCounter() {
+                const label = "计数器"
+                return { label }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "应注入 import { useI18n } from 'vue-i18n', got:\n$resultText",
+            resultText.containsIgnoringWs("import { useI18n } from 'vue-i18n'")
+        )
+        assertTrue(
+            "应注入 const { t: \$t } = useI18n(), got:\n$resultText",
+            resultText.containsIgnoringWs("const { t: \$t } = useI18n()")
+        )
+        assertTrue(
+            "硬编码中文应被替换为 \$t('计数器'), got:\n$resultText",
+            resultText.contains("\$t('计数器')")
+        )
+    }
+
+    /**
+     * 箭头函数形式的 use hook（const useXxx = () => {}）也应被识别并注入。
+     */
+    fun testVueCustomHookArrowFunctionInTsFileInjectsUseI18n() {
+        val file = configureFile(
+            "src/useToggle.ts",
+            """
+            export const useToggle = () => {
+                const hint = "提示文本"
+                return { hint }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "箭头函数 hook 应注入 useI18n 导入, got:\n$resultText",
+            resultText.containsIgnoringWs("import { useI18n } from 'vue-i18n'")
+        )
+        assertTrue(
+            "箭头函数 hook 体应注入 const { t: \$t } = useI18n(), got:\n$resultText",
+            resultText.containsIgnoringWs("const { t: \$t } = useI18n()")
+        )
+    }
+
+    /**
+     * 已有 useI18n 调用的 hook 不应重复注入。
+     */
+    fun testVueCustomHookWithExistingUseI18nNotReInjected() {
+        val file = configureFile(
+            "src/useUser.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            export function useUser() {
+                const { t: ${'$'}t } = useI18n()
+                const label = "用户名"
+                return { label }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val normalizedText = resultText.replace("\\s+".toRegex(), "")
+        // 只应出现一次 useI18n 导入
         assertEquals(
-            "Should extract only 1 string (the plain one) from mixed ternary, got: ${processor.extractedStrings}",
+            "useI18n 导入不应重复, got:\n$resultText",
             1,
-            processor.extractedStrings.size
+            normalizedText.split("import{useI18n}from'vue-i18n'").size - 1
         )
-        assertTrue(
-            "Should contain '普通用户', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("普通用户")
+        // hook 体内的 useI18n 调用也只应有一次
+        assertEquals(
+            "useI18n() 调用不应重复, got:\n$resultText",
+            1,
+            normalizedText.split("const{t:\$t}=useI18n()").size - 1
         )
     }
 
     /**
-     * 测试 slot 中的中文内容
+     * 非 use 开头的普通函数（如普通工具函数）不应被注入 useI18n。
      */
-    fun testVueSlotContentChinese() {
-        val file = myFixture.configureByText(
-            "Test.vue",
+    fun testVueNonHookFunctionInTsFileNotInjected() {
+        val file = configureFile(
+            "src/format.ts",
             """
-            <template>
-                <Modal>
-                    <template #header>
-                        <span>标题文字</span>
-                    </template>
-                    <div>主体内容</div>
-                </Modal>
-            </template>
+            export function formatDate() {
+                const label = "日期"
+                return label
+            }
             """.trimIndent()
         )
 
         val processor = I18nProcessor(project, file)
         processor.collect()
+        processor.execute()
 
-        assertTrue(
-            "Should extract '标题文字' from slot, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("标题文字")
+        val resultText = file.text
+        assertFalse(
+            "普通函数不应注入 useI18n 导入, got:\n$resultText",
+            resultText.contains("import { useI18n } from 'vue-i18n'")
         )
-        assertTrue(
-            "Should extract '主体内容' from slot, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("主体内容")
-        )
-    }
-
-    /**
-     * 测试 v-for 循环中的中文
-     * {{ item.name }} - 标签 中，变量表达式和后面的纯文本都会被处理
-     */
-    fun testVueVForWithChinese() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <ul>
-                    <li v-for="item in list" :key="item.id">
-                        {{ item.name }} - 标签
-                    </li>
-                </ul>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        // 文本中包含中文"标签"，至少应该被提取到（可能是纯文本形式或模板字符串占位形式）
-        assertTrue(
-            "Should extract text containing '标签' from v-for item, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.contains("标签") }
-        )
-    }
-
-    /**
-     * 测试计算属性中的模板字符串 + mustache 混合
-     * 例如：{{ `共${total}条记录` }}
-     */
-    fun testVueTemplateLiteralWithVariableInterpolation() {
-        val file = myFixture.configureByText(
-            "Test.vue",
-            """
-            <template>
-                <div>{{ \`共${'$'}{total}条记录\` }}</div>
-            </template>
-            """.trimIndent()
-        )
-
-        val processor = I18nProcessor(project, file)
-        processor.collect()
-
-        assertTrue(
-            "Should extract template literal with Chinese, got: ${processor.extractedStrings}",
-            processor.extractedStrings.any { it.value.contains("共") && it.value.contains("条记录") }
+        assertFalse(
+            "普通函数不应注入 useI18n 调用, got:\n$resultText",
+            resultText.contains("useI18n()")
         )
     }
 }

@@ -35,6 +35,8 @@ class AllI18nExtractorAction : AnAction() {
 
     e.presentation.isEnabledAndVisible =
         file?.let {
+            // Bug 2: 翻译资源文件禁用菜单
+            if (Util.isTranslationResourceFile(it)) return@let false
             val name = it.name.lowercase()
             name.endsWith(".js") ||
                     name.endsWith(".jsx") ||
@@ -126,12 +128,15 @@ class AllI18nExtractorAction : AnAction() {
 
     fun transform(e: AnActionEvent) {
         val project = e.project ?: return
-        val files= getIncludesFile(project);
+        val allFiles = getIncludesFile(project)
+        // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
+        val files = allFiles.filterNot { Util.isTranslationResourceFile(it) }
         val extracted = mutableMapOf<String, String>()
-        val psiFiles=files.map { file-> val psiFile: PsiFile? = PsiManager
-            .getInstance(project)
-                .findFile(file);
-            psiFile?.let { I18nProcessor(project, it) };
+        val psiFiles = files.map { file ->
+            val psiFile: PsiFile? = PsiManager
+                .getInstance(project)
+                .findFile(file)
+            psiFile?.let { I18nProcessor(project, it) }
         }
         psiFiles.forEach { processor ->
             processor?.collect();

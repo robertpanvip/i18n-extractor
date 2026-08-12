@@ -7,6 +7,8 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -28,6 +30,19 @@ class I18nExtractorAction : AnAction() {
                 lower.endsWith(".jsx")
     }
 
+    /**
+     * Bug 2：翻译资源文件（语言包）不应被提取或注入。
+     * 典型：en-US.ts、locales/zh-CN.js、messages.ja.ts、src/i18n/en.ts 等。
+     */
+    private fun isTranslationResource(vf: VirtualFile): Boolean =
+        Util.isTranslationResourceFile(vf)
+
+    /**
+     * Bug 2 重载：PsiFile 版本（single-file 流程使用）。
+     */
+    private fun isTranslationResource(psiFile: PsiFile): Boolean =
+        Util.isTranslationResourceFile(psiFile)
+
     override fun update(e: AnActionEvent) {
         val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
         if (virtualFile == null) {
@@ -37,6 +52,12 @@ class I18nExtractorAction : AnAction() {
 
         if (virtualFile.isDirectory) {
             e.presentation.isEnabledAndVisible = true
+            return
+        }
+
+        // Bug 2: 翻译资源文件上禁用菜单
+        if (isTranslationResource(virtualFile)) {
+            e.presentation.isEnabledAndVisible = false
             return
         }
 
@@ -56,6 +77,9 @@ class I18nExtractorAction : AnAction() {
     }
 
     private fun processSingleFile(project: com.intellij.openapi.project.Project, psiFile: PsiFile) {
+        // Bug 2（保险）：即便 update() 放过了，到这里仍要拦截语言包文件
+        if (isTranslationResource(psiFile)) return
+
         val ins = I18nProcessor(project, psiFile)
         ins.collect()
 
@@ -81,7 +105,8 @@ class I18nExtractorAction : AnAction() {
         for (child in dir.children) {
             if (child.isDirectory) {
                 result.addAll(collectSupportedFiles(child))
-            } else if (isSupportedFile(child.name)) {
+            } else if (isSupportedFile(child.name) && !isTranslationResource(child)) {
+                // Bug 2: 目录批量扫描时直接排除翻译资源文件，避免后续被 Processor 处理
                 result.add(child)
             }
         }
@@ -96,14 +121,25 @@ class I18nExtractorAction : AnAction() {
         val processors = mutableListOf<I18nProcessor>()
         val extracted = mutableMapOf<String, String>()
 
-        for (file in files) {
-            val psiFile = psiManager.findFile(file) ?: continue
-            val processor = I18nProcessor(project, psiFile)
-            processor.collect()
-            extracted.putAll(processor.existingStrings)
-            extracted.putAll(processor.extractedStrings)
-            processors.add(processor)
-        }
+        // 使用进度对话框，避免文件过多时 UI 冻结
+        ProgressManager.getInstance().runProcessWithProgressSynchronously({
+            val indicator = ProgressManager.getInstance().progressIndicator
+            indicator.text = "Extracting i18n strings..."
+            indicator.isIndeterminate = false
+            for ((index, file) in files.withIndex()) {
+                if (indicator.isCanceled) break
+                indicator.fraction = (index + 1).toDouble() / files.size
+                indicator.text2 = file.name
+                val psiFile = psiManager.findFile(file) ?: continue
+                val processor = I18nProcessor(project, psiFile)
+                processor.collect()
+                extracted.putAll(processor.existingStrings)
+                extracted.putAll(processor.extractedStrings)
+                processors.add(processor)
+            }
+        }, "I18n Extraction", true, project)
+
+        if (processors.isEmpty()) return
 
         val dialog = ExtractedStringsDialog(project, extracted)
         if (dialog.showAndGet()) {

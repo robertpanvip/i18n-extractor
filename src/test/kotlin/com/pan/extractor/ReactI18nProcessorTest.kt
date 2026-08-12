@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,6 +29,21 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
+    }
+
+    /**
+     * 与 VueI18nProcessorTest 一致：支持带路径（src/xxx.ts）文件名的配置。
+     * configureByText 不接受含 "/" 文件名会抛 Invalid file name，因此先
+     * addFileToProject 再 configureFromExistingVirtualFile。
+     */
+    private fun configureFile(fileName: String, text: String): PsiFile {
+        return if (fileName.contains('/') || fileName.contains('\\')) {
+            val psiFile = myFixture.addFileToProject(fileName, text)
+            myFixture.configureFromExistingVirtualFile(psiFile.virtualFile)
+            psiFile
+        } else {
+            myFixture.configureByText(fileName, text)
+        }
     }
 
     // ============================================================
@@ -437,6 +453,387 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue(
             "React 项目中的 .ts 文件 isReact 应为 true，因为 package.json 中包含 react 依赖",
             isReact
+        )
+    }
+
+    // ============================================================
+    // 8. i18n.t 全局调用支持（React i18next）
+    // ============================================================
+
+    /**
+     * 测试 React 文件中使用 i18n.t 时，新提取的字符串应使用 i18n.t
+     * 且不应注入 useTranslation hook
+     */
+    fun testReactI18nTGlobalDetection() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import i18n from './i18n'
+
+            export default function App() {
+                const handleClick = () => {
+                    alert(i18n.t("已存在"))
+                }
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                        <button onClick={handleClick}>{i18n.t("按钮")}</button>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // "已存在" 和 "按钮" 应在 existingStrings 中
+        assertTrue(
+            "'已存在' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("已存在")
+        )
+        assertTrue(
+            "'按钮' 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("按钮")
+        )
+        // "新标题" 应被提取
+        assertTrue(
+            "'新标题' 应被提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("新标题")
+        )
+    }
+
+    /**
+     * 测试 React 中 i18n.t 和 $t 共存
+     */
+    fun testReactI18nTCoexistWithUseTranslation() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import { useTranslation } from 'react-i18next'
+            import i18n from './i18n'
+
+            export default function App() {
+                const { t: ${'$'}t } = useTranslation()
+                return (
+                    <div>
+                        <span>{${'$'}t("hook文本")}</span>
+                        <span>{i18n.t("全局文本")}</span>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 两种形式都应识别为已翻译
+        assertTrue(
+            "'hook文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("hook文本")
+        )
+        assertTrue(
+            "'全局文本' (via i18n.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
+            processor.existingStrings.containsValue("全局文本")
+        )
+        // 不应重复提取
+        assertFalse(
+            "'hook文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("hook文本")
+        )
+        assertFalse(
+            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("全局文本")
+        )
+    }
+
+    // ============================================================
+    // 9. i18n.t 全局实例导入注入
+    // ============================================================
+
+    /**
+     * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入默认导入。
+     * React 默认注入默认导入：import i18n from 'i18next'
+     */
+    fun testReactI18nTInjectImportWhenMissing() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            export default function App() {
+                const handleClick = () => {
+                    alert(i18n.t("已存在"))
+                }
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                        <button onClick={handleClick}>按钮</button>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        // 应注入 i18n 实例的默认导入
+        assertTrue(
+            "应注入 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("import i18n from 'i18next'")
+        )
+        // 不应注入 useTranslation（已使用全局 i18n）
+        assertFalse(
+            "不应注入 useTranslation, got:\n$resultText",
+            resultText.contains("useTranslation")
+        )
+    }
+
+    /**
+     * 测试已有 i18n 默认导入时不重复注入
+     */
+    fun testReactI18nTNotDuplicateDefaultImport() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import i18n from './i18n'
+
+            export default function App() {
+                const handleClick = () => {
+                    alert(i18n.t("已存在"))
+                }
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "已有默认导入时不应再注入, got:\n$resultText",
+            resultText.contains("from 'i18next'")
+        )
+        assertTrue(
+            "原有 import i18n from './i18n' 应保留, got:\n$resultText",
+            resultText.contains("import i18n from './i18n'")
+        )
+    }
+
+    /**
+     * 测试已有 i18n 命名导入时不重复注入
+     */
+    fun testReactI18nTNotDuplicateNamedImport() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import { i18n } from './i18n'
+
+            export default function App() {
+                return <h1>{i18n.t("标题")}</h1>
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "已有命名导入时不应再注入默认导入, got:\n$resultText",
+            resultText.contains("from 'i18next'")
+        )
+        assertTrue(
+            "原有 import { i18n } from './i18n' 应保留, got:\n$resultText",
+            resultText.contains("import { i18n } from './i18n'")
+        )
+    }
+
+    /**
+     * 测试已有 namespace 导入时不重复注入
+     */
+    fun testReactI18nTNotDuplicateNamespaceImport() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import * as i18n from './i18n'
+
+            export default function App() {
+                return <h1>{i18n.t("标题")}</h1>
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "已有 namespace 导入时不应再注入, got:\n$resultText",
+            resultText.contains("from 'i18next'")
+        )
+    }
+
+    // ============================================================
+    // 10. Bug 1: 无组件/无 Hook 的 React TS 文件不应注入 useTranslation
+    // ============================================================
+
+    /**
+     * 纯工具 TS 文件（既没有函数组件，也没有 use 开头自定义 hook），
+     * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
+     * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
+     */
+    fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
+        val file = configureFile(
+            "src/utils/format.ts",
+            """
+            // 普通工具函数，不返回 JSX，也不是 use 开头 hook
+            export function formatNumber(n: number) {
+                const label = "总共"
+                return label + ": " + n
+            }
+
+            export const MSG = {
+                title: "提示",
+                description: "说明文本"
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertFalse(
+            "纯工具 TS 文件不应注入 useTranslation import, got:\n$resultText",
+            resultText.contains("useTranslation")
+        )
+        assertFalse(
+            "纯工具 TS 文件不应注入 react-i18next import, got:\n$resultText",
+            resultText.contains("react-i18next")
+        )
+    }
+
+    /**
+     * 即便 TS 文件里有"自定义 Hook"（use 开头），也允许 useTranslation 注入。
+     * 这是 Bug 1 的反例：只有既没组件也没 hook 时才跳过。
+     */
+    fun testReactTsWithCustomHookShouldStillInjectUseTranslation() {
+        val file = configureFile(
+            "src/hooks/useAuth.ts",
+            """
+            export function useAuth() {
+                const hint = "登录成功"
+                return { hint }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        assertTrue(
+            "自定义 hook TS 文件应注入 react-i18next import, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "")
+                .contains("import{useTranslation}from'react-i18next'")
+        )
+        assertTrue(
+            "自定义 hook 体内应注入 useTranslation() 调用, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "")
+                .contains("const{t:\$t}=useTranslation()")
+        )
+    }
+
+    // ============================================================
+    // 11. Bug 2: 翻译资源文件（语言包）跳过提取与注入
+    // ============================================================
+
+    /**
+     * 文件基名本身就是 locale code（如 en-US.ts、zh_CN.ts），应判定为翻译资源文件，
+     * 不提取中文，也不注入任何 import。
+     */
+    fun testTranslationResourceByLocaleNameShouldSkip() {
+        val file = configureFile(
+            "src/zh-CN.ts",
+            """
+            export default {
+                common: {
+                    confirm: "确定",
+                    cancel: "取消"
+                }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        assertEquals(
+            "locale 命名的文件不应提取任何字符串, got: ${processor.extractedStrings}",
+            0,
+            processor.extractedStrings.size
+        )
+        assertEquals(
+            "locale 命名的文件不应读取 existingStrings, got: ${processor.existingStrings}",
+            0,
+            processor.existingStrings.size
+        )
+        val resultText = file.text
+        assertFalse(
+            "locale 文件不应注入任何 import, got:\n$resultText",
+            resultText.contains("import { useTranslation }") ||
+                resultText.contains("import i18n from")
+        )
+    }
+
+    /**
+     * 文件位于 locales / i18n 目录下，即便名不是 locale code，也应按目录判定跳过
+     * （典型：src/locales/index.ts 是语言包聚合文件）
+     */
+    fun testTranslationResourceByDirectoryShouldSkip() {
+        val file = configureFile(
+            "src/locales/index.ts",
+            """
+            import zh from './zh-CN'
+            import en from './en-US'
+
+            export const resources = {
+                zh: { translation: zh },
+                en: { translation: en }
+            }
+
+            const label = "中文标签"
+            export { label }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        assertEquals(
+            "locales/ 目录下的文件不应提取字符串, got: ${processor.extractedStrings}",
+            0,
+            processor.extractedStrings.size
+        )
+        val resultText = file.text
+        assertFalse(
+            "locales/ 目录下的文件不应被注入 import/hook, got:\n$resultText",
+            resultText.contains("useTranslation") || resultText.contains("i18next")
         )
     }
 }
