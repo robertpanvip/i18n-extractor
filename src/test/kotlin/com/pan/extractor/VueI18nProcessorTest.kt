@@ -1200,7 +1200,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
-     * 非 use 开头的普通函数（如普通工具函数）不应被注入 useI18n。
+     * 非 use 开头的普通函数（如普通工具函数）不应注入 useI18n；
+     *
+     * 【问题 5 修复】但必须切换到全局 i18n.global.t('xxx') 调用，并且顶部注入
+     * `import { i18n } from '@/locales/index'`（vue-i18n createI18n 的实例文件）。
+     * 因为：这个纯工具 TS 文件即不在 Vue SFC script setup 里，也不是自定义 hook，
+     * 不存在可以把 `$t` 解构出来的作用域 —— 写 `$t('总共')` 会 ReferenceError。
      */
     fun testVueNonHookFunctionInTsFileNotInjected() {
         val file = configureFile(
@@ -1218,6 +1223,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
+        // 问题 5：必须切 i18n.global.t（而不是 useI18n 解构出的 \$t）
+        assertTrue(
+            "Vue 纯 TS 普通函数必须使用 i18n.global.t 替换中文, got:\n$resultText",
+            resultText.containsIgnoringWs("i18n.global.t('日期')")
+        )
+        // 不能用 useI18n（SFC / hook 才用）
         assertFalse(
             "普通函数不应注入 useI18n 导入, got:\n$resultText",
             resultText.contains("import { useI18n } from 'vue-i18n'")
@@ -1226,5 +1237,78 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "普通函数不应注入 useI18n 调用, got:\n$resultText",
             resultText.contains("useI18n()")
         )
+        // 不能出现未定义的 \$t
+        assertFalse(
+            "普通函数替换后不应出现未定义的 \$t(), got:\n$resultText",
+            resultText.contains("\$t('日期')")
+        )
+        // 必须注入 i18n 实例 import（来自 @/locales 下的 createI18n 文件）
+        assertTrue(
+            "Vue 纯 TS 普通函数必须注入全局 i18n 实例 import, got:\n$resultText",
+            resultText.containsIgnoringWs("import { i18n } from") && resultText.containsIgnoringWs("locales")
+        )
+    }
+
+    // ============================================================
+    // 问题 3：已写在 t() 内的中文没被提取到 existingStrings
+    // ============================================================
+
+    /**
+     * 问题 3（Vue SFC）：template/script 中已有的 \$t('中文')、t('中文')、
+     * i18n.global.t('中文') 调用内的中文必须进入 existingStrings，
+     * 最终对话框里展示的 allStrings 不能缺这些 key/value。
+     */
+    fun testVueExistingTCallArgChineseCollected() {
+        val file = configureFile(
+            "src/Mix.vue",
+            """
+            <template>
+              <div>
+                <span>{{ \$t('新增') }}</span>
+                <span>{{ i18n.global.t('删除') }}</span>
+              </div>
+            </template>
+            <script setup lang="ts">
+            const label = t('保存')
+            const ok = i18n.global.t('确认')
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // existingStrings 必须收录 4 个调用里的中文
+        val expected = setOf("新增", "删除", "保存", "确认")
+        val values = processor.existingStrings.values.toSet()
+        assertTrue(
+            "已存在 t 调用的中文必须进 existingStrings，\nexpected=$expected\ngot=$values",
+            values.containsAll(expected)
+        )
+    }
+
+    /**
+     * 问题 3（重复注入回归）：同一个 Vue 文件重复调用 execute() 时，
+     * `import { useI18n } from 'vue-i18n'` 与 `const { t: \$t } = useI18n()`
+     * 都只能出现一次（问题 4 语义化 import 去重回归）。
+     */
+    fun testVueUseI18nImportedTwiceNotDuplicated() {
+        val file = configureFile(
+            "src/Repeat.vue",
+            """
+            <template>
+              <h1>你好</h1>
+            </template>
+            <script setup lang="ts">
+            </script>
+            """.trimIndent()
+        )
+        // 连续执行两遍（模拟用户连点 2 次 Extract）
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+
+        val txt = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = txt.split("import{useI18n}from'vue-i18n'").size - 1
+        val constCnt = txt.split("const{t:\$t}=useI18n()").size - 1
+        assertEquals("useI18n import 重复了 $importCnt 次, txt:\n$txt", 1, importCnt)
+        assertEquals("useI18n const 解构重复了 $constCnt 次, txt:\n$txt", 1, constCnt)
     }
 }

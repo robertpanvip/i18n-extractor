@@ -5,6 +5,9 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParseException
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.notification.Notifications
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -27,8 +30,39 @@ import java.nio.charset.StandardCharsets
 class AllI18nExtractorAction : AnAction() {
 
     override fun getActionUpdateThread(): ActionUpdateThread {
-        // 关键：告诉系统 update() 要后台执行
-        return ActionUpdateThread.BGT  // Background Thread
+        return ActionUpdateThread.BGT
+    }
+
+    // ── 问题 6：全项目提取成功提示 ──
+    private fun notifyExtractSuccess(
+        project: Project,
+        title: String,
+        extractedCount: Int,
+        processedFiles: Int,
+        jsonWritten: Boolean,
+    ) {
+        val filesPart = "（扫描 $processedFiles 个文件）"
+        val jsonPart = if (jsonWritten) "，JSON 已复制到剪贴板" else ""
+        val subtitle = "提取 $extractedCount 条 key$filesPart$jsonPart"
+        val notificationGroup = NotificationGroupManager.getInstance()
+            .getNotificationGroup("Vue i18n 提取提示")
+        Notifications.Bus.notify(
+            notificationGroup.createNotification(title, subtitle, NotificationType.INFORMATION),
+            project
+        )
+    }
+
+    private fun notifyNothingExtracted(project: Project) {
+        val notificationGroup = NotificationGroupManager.getInstance()
+            .getNotificationGroup("Vue i18n 提取提示")
+        Notifications.Bus.notify(
+            notificationGroup.createNotification(
+                "未找到可提取的中文",
+                "整个项目中未发现硬编码中文或 t 调用，无需处理。",
+                NotificationType.WARNING
+            ),
+            project
+        )
     }
 
    override fun update(e: AnActionEvent) {
@@ -169,6 +203,17 @@ class AllI18nExtractorAction : AnAction() {
                 val content = getJsonContent(dialog.json!!)
                 CopyPasteManager.getInstance().setContents(StringSelection(content))
             }
+
+            // 问题 6：执行 OK 后提示提取成功
+            notifyExtractSuccess(
+                project,
+                title = "全项目国际化提取完成",
+                extractedCount = extracted.size,
+                processedFiles = files.size,
+                jsonWritten = dialog.json !== null
+            )
+        } else if (extracted.isEmpty()) {
+            notifyNothingExtracted(project)
         }
     }
 

@@ -891,4 +891,39 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertEquals("existingStrings 应为空", 0, existingSize)
         assertEquals("extractedStrings 应包含两个中文", 2, extractedSize)
     }
+
+    // ============================================================
+    // 问题 3：已写在 t()/i18n.t() 内的中文没被提取到 existingStrings
+    // ============================================================
+
+    /**
+     * 问题 3（React）：文件已经写了 `i18n.t('删除')` 或 `t('新增')` 这类调用，
+     * 其参数字符串的中文也必须进入 existingStrings（最终对话框里出现，写回语言包）。
+     * 之前只识别了简单引用名 $t/t，漏掉了链式 i18n.t / i18n.global.t 分支。
+     */
+    fun testReactExistingI18nTCallArgsCollected() {
+        val file = configureFile(
+            "src/existingMix.ts",
+            """
+            import i18n from 'i18next';
+            import { useTranslation } from 'react-i18next';
+
+            function App() {
+                const { t } = useTranslation();
+                return {
+                    a: t('成功'),
+                    b: i18n.t('取消'),
+                };
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val values = processor.existingStrings.values.toSet()
+        val expected = setOf("成功", "取消")
+        assertTrue(
+            "React: t() / i18n.t() 内的中文必须进 existingStrings, \nexpect=$expected\ngot=$values",
+            values.containsAll(expected)
+        )
+    }
 }
