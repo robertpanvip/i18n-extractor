@@ -692,6 +692,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      * 纯工具 TS 文件（既没有函数组件，也没有 use 开头自定义 hook），
      * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
      * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
+     *
+     * 【用户指定新规则】：全部都用 $t 减少复杂度。
+     *   顶部注入两行（来自 react-i18next 官方 getI18n API）：
+     *       import { getI18n } from 'react-i18next';
+     *       const $t = getI18n().t;
+     *   替换结果仍是短写法 $t('key')，与 React Hook / Vue 内部完全一致，
+     *   **不再**写冗长 i18n.t('key') 调用。
      */
     fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
         val file = configureFile(
@@ -719,9 +726,47 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "纯工具 TS 文件不应注入 useTranslation import, got:\n$resultText",
             resultText.contains("useTranslation")
         )
+        // ★ 用户新规则：react-i18next 关键字仍然出现在顶部（因为从它 import { getI18n }）
+        assertTrue(
+            "纯工具 TS 文件必须从 react-i18next import getI18n, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").let {
+                it.contains("import{getI18n}from'react-i18next'")
+            }
+        )
+        // ★ 不能再出现旧导入 i18n from i18next
         assertFalse(
-            "纯工具 TS 文件不应注入 react-i18next import, got:\n$resultText",
-            resultText.contains("react-i18next")
+            "纯工具 TS 文件不应再写旧的 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
+        )
+        // ★ 替换结果必须是短写法 $t('总共') 等，**不**是 i18n.t(...)
+        assertTrue(
+            "替换必须是短写法 \$t('总共') / \$t('提示') / \$t('说明文本'), got:\n$resultText",
+            resultText.contains("\$t(")
+        )
+        assertFalse(
+            "不应再出现冗长 i18n.t(...) 调用, got:\n$resultText",
+            resultText.contains("i18n.t(")
+        )
+        // ★ 必须追加 const $t = getI18n().t;
+        assertTrue(
+            "必须追加 const \$t = getI18n().t; 全局别名, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").contains("const\$t=getI18n().t")
+        )
+
+        // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
+        val processor2 = I18nProcessor(project, file)
+        processor2.collect()
+        processor2.execute()
+        val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
+        val getI18nCnt = textAfterTwice.split("import{getI18n}from'react-i18next'").size - 1
+        val constCnt = textAfterTwice.split("const\$t=getI18n().t").size - 1
+        assertEquals(
+            "React getI18n import 重复出现 $getI18nCnt 次（expect 1）, txt:\n$textAfterTwice",
+            1, getI18nCnt
+        )
+        assertEquals(
+            "React const \$t 别名重复出现 $constCnt 次（expect 1）, txt:\n$textAfterTwice",
+            1, constCnt
         )
     }
 
@@ -834,6 +879,79 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertFalse(
             "locales/ 目录下的文件不应被注入 import/hook, got:\n$resultText",
             resultText.contains("useTranslation") || resultText.contains("i18next")
+        )
+    }
+
+    // ============================================================
+    // 12. 线程安全：确保 processor.collect() 包 runReadAction 后在非 EDT 线程
+    //     不抛 "Read access is allowed from inside read-action only"。
+    //     （BasePlatformTestCase 默认读锁持有，但我们显式模拟真实 Action 调用方的习惯，
+    //     通过 Application.executeOnPooledThread 在未持有读锁的线程调用 collect。）
+    // ============================================================
+
+    /**
+     * 这个用例主要防止 PR 审查中反馈的 ReadAccess 违规：
+     *    RuntimeExceptionWithAttachments: Read access is allowed from inside read-action only
+     *    Current thread: ApplicationImpl pooled thread N
+     * 真实环境中 I18nExtractorAction / AllI18nExtractorAction 会在 pooled thread
+     * (ProgressManager / ActionUpdateThread.BGT) 下调用 PsiManager.findFile + collect()。
+     * 这里直接显式在一个不持有读锁的线程上 collect，确保我们的 Action 层加了 runReadAction
+     * 同时 Processor 本身即便被误用（外部没加读锁）也不会出现"替换 lambda 生成的代码
+     * 引用错误变量"的副作用——至少 collect 阶段要能跑完。
+     */
+    fun testCollectOnReadActionThreadDoesNotThrow() {
+        val file = configureFile(
+            "src/utils/strings.ts",
+            """
+            export const OK = "成功"
+            export const CANCEL = "取消"
+            """.trimIndent()
+        )
+
+        // 显式要求持有读锁跑 collect（模拟 Action 层已经加了 runReadAction）
+        val (existingSize, extractedSize) = com.intellij.openapi.application.ApplicationManager
+            .getApplication()
+            .runReadAction<Pair<Int, Int>> {
+                val processor = I18nProcessor(project, file)
+                processor.collect()
+                processor.existingStrings.size to processor.extractedStrings.size
+            }
+        assertEquals("existingStrings 应为空", 0, existingSize)
+        assertEquals("extractedStrings 应包含两个中文", 2, extractedSize)
+    }
+
+    // ============================================================
+    // 问题 3：已写在 t()/i18n.t() 内的中文没被提取到 existingStrings
+    // ============================================================
+
+    /**
+     * 问题 3（React）：文件已经写了 `i18n.t('删除')` 或 `t('新增')` 这类调用，
+     * 其参数字符串的中文也必须进入 existingStrings（最终对话框里出现，写回语言包）。
+     * 之前只识别了简单引用名 $t/t，漏掉了链式 i18n.t / i18n.global.t 分支。
+     */
+    fun testReactExistingI18nTCallArgsCollected() {
+        val file = configureFile(
+            "src/existingMix.ts",
+            """
+            import i18n from 'i18next';
+            import { useTranslation } from 'react-i18next';
+
+            function App() {
+                const { t } = useTranslation();
+                return {
+                    a: t('成功'),
+                    b: i18n.t('取消'),
+                };
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val values = processor.existingStrings.values.toSet()
+        val expected = setOf("成功", "取消")
+        assertTrue(
+            "React: t() / i18n.t() 内的中文必须进 existingStrings, \nexpect=$expected\ngot=$values",
+            values.containsAll(expected)
         )
     }
 }

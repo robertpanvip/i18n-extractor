@@ -1200,7 +1200,16 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
-     * 非 use 开头的普通函数（如普通工具函数）不应被注入 useI18n。
+     * 非 use 开头的普通函数（如普通工具函数）不应注入 useI18n；
+     *
+     * 【Vue 用户指定简化后规则】：全部用 \$t 减少复杂度。
+     *   - 顶部注入 import { i18n } from '@/locales/index'（vue-i18n createI18n 的实例文件）
+     *   - 紧接着追加一行：const \$t = i18n.global.t;
+     *   - 所有字符串仍然用短写法 \$t('日期')，**不要**写长 i18n.global.t('日期')
+     *
+     * 因为：这个纯工具 TS 文件即不在 Vue SFC script setup 里，也不是自定义 hook，
+     * 不存在 useI18n() 解构出 \$t 的作用域。用"全局 const 别名"的方式就可以和
+     * Vue SFC 内部的写法保持 100% 一致，降低心智负担。
      */
     fun testVueNonHookFunctionInTsFileNotInjected() {
         val file = configureFile(
@@ -1218,6 +1227,17 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
+        // ★ 用户新规则：全部都用 \$t，替换仍然是 \$t('日期')，不需要写 i18n.global.t('日期')
+        assertTrue(
+            "Vue 纯 TS 普通函数替换仍应为短写法 \$t('日期'), got:\n$resultText",
+            resultText.contains("\$t('日期')")
+        )
+        // 也不应该再出现冗长的 i18n.global.t(...) 字面调用（这一版已完全用 const 别名替代）
+        assertFalse(
+            "Vue 纯 TS 普通函数不再直接写 i18n.global.t('日期')，改 const 别名, got:\n$resultText",
+            resultText.containsIgnoringWs("i18n.global.t('日期')")
+        )
+        // 不能用 useI18n（SFC / hook 才用）
         assertFalse(
             "普通函数不应注入 useI18n 导入, got:\n$resultText",
             resultText.contains("import { useI18n } from 'vue-i18n'")
@@ -1226,5 +1246,93 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "普通函数不应注入 useI18n 调用, got:\n$resultText",
             resultText.contains("useI18n()")
         )
+        // ★ 必须注入 i18n 实例 import + 必须追加 const \$t = i18n.global.t
+        assertTrue(
+            "Vue 纯 TS 普通函数必须注入全局 i18n 实例 import, got:\n$resultText",
+            resultText.containsIgnoringWs("import { i18n } from") && resultText.containsIgnoringWs("locales")
+        )
+        assertTrue(
+            "Vue 纯 TS 普通函数必须追加 const \$t = i18n.global.t; 全局别名，got:\n$resultText",
+            resultText.containsIgnoringWs("const \$t = i18n.global.t")
+        )
+
+        // —— 重复执行不重复注入（问题 4 Vue 纯 TS 版）——
+        val processor2 = I18nProcessor(project, file)
+        processor2.collect()
+        processor2.execute()
+        val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = textAfterTwice.split("import{i18n}from").size - 1
+        val constCnt = textAfterTwice.split("const\$t=i18n.global.t").size - 1
+        assertEquals(
+            "Vue 纯 TS 全局 i18n 实例 import 重复了 $importCnt 次 (expect 1), txt:\n$textAfterTwice",
+            1, importCnt
+        )
+        assertEquals(
+            "Vue 纯 TS const \$t 别名重复了 $constCnt 次 (expect 1), txt:\n$textAfterTwice",
+            1, constCnt
+        )
+    }
+
+    // ============================================================
+    // 问题 3：已写在 t() 内的中文没被提取到 existingStrings
+    // ============================================================
+
+    /**
+     * 问题 3（Vue SFC）：template/script 中已有的 \$t('中文')、t('中文')、
+     * i18n.global.t('中文') 调用内的中文必须进入 existingStrings，
+     * 最终对话框里展示的 allStrings 不能缺这些 key/value。
+     */
+    fun testVueExistingTCallArgChineseCollected() {
+        val file = configureFile(
+            "src/Mix.vue",
+            """
+            <template>
+              <div>
+                <span>{{ ${'$'}t('新增') }}</span>
+                <span>{{ i18n.global.t('删除') }}</span>
+              </div>
+            </template>
+            <script setup lang="ts">
+            const label = t('保存')
+            const ok = i18n.global.t('确认')
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // existingStrings 必须收录 4 个调用里的中文
+        val expected = setOf("新增", "删除", "保存", "确认")
+        val values = processor.existingStrings.values.toSet()
+        assertTrue(
+            "已存在 t 调用的中文必须进 existingStrings，\nexpected=$expected\ngot=$values",
+            values.containsAll(expected)
+        )
+    }
+
+    /**
+     * 问题 3（重复注入回归）：同一个 Vue 文件重复调用 execute() 时，
+     * `import { useI18n } from 'vue-i18n'` 与 `const { t: \$t } = useI18n()`
+     * 都只能出现一次（问题 4 语义化 import 去重回归）。
+     */
+    fun testVueUseI18nImportedTwiceNotDuplicated() {
+        val file = configureFile(
+            "src/Repeat.vue",
+            """
+            <template>
+              <h1>你好</h1>
+            </template>
+            <script setup lang="ts">
+            </script>
+            """.trimIndent()
+        )
+        // 连续执行两遍（模拟用户连点 2 次 Extract）
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.execute() }
+
+        val txt = file.text.replace("\\s+".toRegex(), "")
+        val importCnt = txt.split("import{useI18n}from'vue-i18n'").size - 1
+        val constCnt = txt.split("const{t:${'$'}t}=useI18n()").size - 1
+        assertEquals("useI18n import 重复了 $importCnt 次, txt:\n$txt", 1, importCnt)
+        assertEquals("useI18n const 解构重复了 $constCnt 次, txt:\n$txt", 1, constCnt)
     }
 }
