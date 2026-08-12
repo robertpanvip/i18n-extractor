@@ -49,19 +49,32 @@ class I18nProcessor(
     private var tFunctionName: String = "\$t"
 
     /**
-     * 全局 $t 别名注入标记（用户要求 Vue 全局导入统一走 const \$t = i18n.global.t）
+     * 全局 $t 别名注入标记（用户要求：全部统一用 $t，减少复杂度）。
      *
+     * =============== Vue 版本 needInjectGlobalDollarT ===============
      * - true：run() 调 ensureI18nInstanceImported(isVue=true) 时，会在
      *   `import { i18n } from '...'` 之后追加 `const \$t = i18n.global.t;`
      *   （并去重保证只出现一次）。
-     * - false（默认）：走常规逻辑。
      *
-     * 该标记在 collect() 中进行预判：
-     *   "Vue 项目 + 非 .vue SFC（纯 .ts/.js 文件）+ 无自定义 hook"
-     *   → 这种场景没法用 useI18n 解构 \$t，但只要我们在文件顶部把 i18n.global.t
-     *   赋给全局 const \$t，全文件仍然可以用 \$t('xxx') 短写法、不需要写长串。
+     * 预判："Vue 项目 + 非 .vue SFC（纯 .ts/.js 文件）+ 无自定义 hook"
+     * → 这种场景没法用 useI18n 解构 $t，但只要在文件顶部把 i18n.global.t
+     *   赋给全局 const $t，全文件仍然可以用 $t('xxx') 短写法。
+     *
+     * =============== React 版本 needInjectReactGlobalDollarT ===============
+     * - true：run() 调 ensureI18nInstanceImported(isVue=false) 时，会在
+     *   `import { getI18n } from 'react-i18next'` 之后追加
+     *   `const \$t = getI18n().t;`（并去重保证只出现一次）。
+     *
+     * 预判："React 项目 + 既没有 React 组件也没有自定义 hook（纯工具函数）"
+     * → 旧实现是切 `tFunctionName="i18n.t"` + 注入 `import i18n from 'i18next'`，
+     *   用户觉得长调用 i18n.t('key') 麻烦，要求统一写 $t('key')：
+     *   仍然保持 tFunctionName 为默认 \$t，只需要在顶部写 2 行代码：
+     *       import { getI18n } from 'react-i18next';
+     *       const $t = getI18n().t;
+     *   之后文件里所有替换仍然是短写法 \$t('xxx')，与 Vue/组件/Hook 内部一致。
      */
     private var needInjectGlobalDollarT: Boolean = false
+    private var needInjectReactGlobalDollarT: Boolean = false
 
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
@@ -225,20 +238,22 @@ class I18nProcessor(
             return effects
         }
 
-        // —— PR 审查 #2 修复（React 普通函数有中文顶部无全局导入）：
-        //    翻译函数名必须在"字符串替换闭包被构造"（即 pureCollect()）之前切换，
-        //    否则闭包会 capture 闭包创建时刻的 tFunctionName 快照（始终是 \$t）。
+        // —— 旧：React 普通函数预判切换 tFunctionName=i18n.t，然后注入 import i18n from 'i18next'
+        // —— 新（用户要求：统一用 $t 减少复杂度）：React 普通函数预判也不切 tFunctionName，
+        //    保持默认 $t；改为打布尔标记 needInjectReactGlobalDollarT=true，由 ensureI18nInstanceImported
+        //    在文件顶部注入：
+        //        import { getI18n } from 'react-i18next';
+        //        const $t = getI18n().t;
+        //    翻译函数仍是 $t('key')，与 Vue/React hook 内部一致。
         //
-        //    预判规则：文件是 React 项目 + （当前默认翻译函数仍是 \$t）+ （既没有组件也没有自定义 hook）
-        //    → 强制切换到 i18next 全局实例调用：i18n.t('key')，
-        //    后续 run() 阶段会注入 import i18n from 'i18next'（见 ensureI18nInstanceImported）。
+        //    预判规则：React 项目 + （当前默认翻译函数仍是 $t）+ （既没有组件也没有自定义 hook）
         if (tFunctionName == "\$t") {
             val f = containingFile ?: (psiFile as? PsiFile)
             if (f != null && Util.isReact(f)) {
                 val components = Util.findReactComponentFunctions(f)
                 val hooks = Util.findHookFunctions(f)
                 if (components.isEmpty() && hooks.isEmpty()) {
-                    tFunctionName = "i18n.t"
+                    needInjectReactGlobalDollarT = true
                 }
             } else if (f != null &&
                 !f.name.endsWith(".vue", ignoreCase = true) &&
@@ -417,12 +432,14 @@ class I18nProcessor(
         // 需要全局 i18n 实例 import 的场景：
         // 1) extractedStrings 非空 + (tFunctionName == i18n.global.t / i18n.t 全局模式)
         // 2) needInjectGlobalDollarT = true（Vue 纯 TS 普通函数——需要顶部注入 import + const $t=...）
-        // 3) tFunctionName == i18n.t 且 existingStrings 非空（React 纯 TS 场景，已有 i18n.t 调用但缺 import）
+        // 3) needInjectReactGlobalDollarT = true（React 纯工具函数——需要顶部注入 import { getI18n } from react-i18next + const $t = getI18n().t）
+        // 4) tFunctionName == i18n.t 且 existingStrings 非空（React 纯 TS 场景，已有 i18n.t 调用但缺 import）
         //
-        // needInjectGlobalDollarT 优先级较高：只要用户有需要，即便文件没提取到新中文（极端 case）
-        // 也应该至少把 \$t 定义好，避免替换后运行时报 ReferenceError。
+        // 两个 needInject*GlobalDollarT 优先级较高：只要用户有需要，即便文件没提取到新中文（极端 case）
+        // 也应该至少把 $t 定义好，避免替换后运行时报 ReferenceError。
         val needGlobalI18nImport = (
             needInjectGlobalDollarT ||
+                needInjectReactGlobalDollarT ||
                 extractedStrings.isNotEmpty() ||
                 tFunctionName == "i18n.global.t" ||
                 (tFunctionName == "i18n.t" && existingStrings.isNotEmpty())
@@ -430,19 +447,35 @@ class I18nProcessor(
         if (needGlobalI18nImport) {
             if (isVue && (tFunctionName == "i18n.global.t" || extractedStrings.isNotEmpty() || needInjectGlobalDollarT)) {
                 ensureI18nInstanceImported(psiFile, isVue = true, injectGlobalDollarT = needInjectGlobalDollarT)
-            } else if (isReact && (tFunctionName == "i18n.t" || needInjectGlobalDollarT)) {
-                ensureI18nInstanceImported(psiFile, isVue = false, injectGlobalDollarT = false)
-            } else if (
-                needInjectGlobalDollarT ||
-                (tFunctionName == "i18n.global.t" && extractedStrings.isNotEmpty())
-            ) {
-                // 兜底分支：.vue SFC 之外的 Vue 项目脚本（isVue=false 因为不是 SFC）。
-                // 以前直接切到 i18n.global.t，现在统一走 needInjectGlobalDollarT。
+            } else if (isReact &&
+                (tFunctionName == "i18n.t" || extractedStrings.isNotEmpty() || needInjectReactGlobalDollarT)) {
                 ensureI18nInstanceImported(
                     psiFile,
-                    isVue = true,
-                    injectGlobalDollarT = needInjectGlobalDollarT || tFunctionName != "\$t"
+                    isVue = false,
+                    injectGlobalDollarT = false,
+                    injectReactGlobalDollarT = needInjectReactGlobalDollarT
                 )
+            } else if (
+                needInjectGlobalDollarT ||
+                needInjectReactGlobalDollarT ||
+                (tFunctionName == "i18n.global.t" && extractedStrings.isNotEmpty())
+            ) {
+                // 兜底分支：.vue SFC 之外的 Vue 项目脚本，或 needInjectReactGlobalDollarT=true 但 isReact
+                // 判定暂时 false 的场景（兼容老文件）。
+                if (needInjectReactGlobalDollarT) {
+                    ensureI18nInstanceImported(
+                        psiFile,
+                        isVue = false,
+                        injectGlobalDollarT = false,
+                        injectReactGlobalDollarT = true
+                    )
+                } else {
+                    ensureI18nInstanceImported(
+                        psiFile,
+                        isVue = true,
+                        injectGlobalDollarT = needInjectGlobalDollarT || tFunctionName != "\$t"
+                    )
+                }
             }
         }
         if (extractedStrings.isNotEmpty()) {
@@ -452,8 +485,11 @@ class I18nProcessor(
                     ensureVueI18nImported(psiFile)
                 }
             } else if (isReact) {
-                // 使用 i18n.t（i18next 全局实例）时不需要注入 useTranslation
-                if (tFunctionName != "i18n.t") {
+                // 新规则：React 纯工具 TS 场景用 react-i18next getI18n + const $t=getI18n().t，
+                // 仍然不需要 useTranslation（不能在普通函数中调 hook）。
+                // 只有 tFunctionName!="i18n.t" 且 **没开启 needInjectReactGlobalDollarT** 的场景才注入
+                // useTranslation（典型：React 组件内部 / 自定义 hook）。
+                if (tFunctionName != "i18n.t" && !needInjectReactGlobalDollarT) {
                     ensureReactI18nImported(psiFile)
                 }
             } else {
@@ -734,16 +770,23 @@ class I18nProcessor(
     }
 
     /**
-     * 当文件使用 i18n.global.t / i18n.t 但缺少 i18n 实例导入时，注入默认导入。
+     * 当文件使用 i18n.global.t / i18n.t / getI18n().t 但缺少 i18n 实例导入时，注入默认导入。
      *
      * - Vue:   查找项目中调用 createI18n 的文件（通常位于 @/locales 目录），
      *          根据该文件的实际路径与导出方式生成导入：
      *            `import { i18n } from '@/locales'`   （命名导出，别名路径）
      *            `import i18n from './locales/index'` （默认导出，相对路径）
      *          找不到 createI18n 文件时回退到从 vue-i18n 包导入。
-     * - React: 保持 `import i18n from 'i18next'`（i18next 全局实例）
+     *          （可选 injectGlobalDollarT=true：追加 const \$t = i18n.global.t;）
      *
-     * 注意：已有任意形式的 i18n 导入时不重复注入。
+     * - React 旧模式：`import i18n from 'i18next'`（i18next 全局实例，兼容已存在导入场景）
+     *
+     * - React 新模式（用户要求）：统一用 \$t 减少复杂度，顶部写两行：
+     *       import { getI18n } from 'react-i18next';
+     *       const $t = getI18n().t;
+     *   由 injectReactGlobalDollarT=true 开启。
+     *
+     * 注意：已有任意形式的 i18n / getI18n 导入时不重复注入。
      */
     /**
      * 确保文件顶部已经导入了 i18n 实例。
@@ -751,45 +794,73 @@ class I18nProcessor(
      * @param injectGlobalDollarT —— 仅在 isVue=true 且"非 SFC 的纯 TS 文件"时为 true：
      *   在已经 `import { i18n } from '@/locales/xxx'` 之后，再追加一行
      *   `const $t = i18n.global.t;`（去重，用户要求"全部统一用 $t 减少复杂度"）。
+     *
+     * @param injectReactGlobalDollarT —— 仅在 isVue=false 且"React 纯工具 TS（无组件无 Hook）"时为 true：
+     *   顶部注入 `import { getI18n } from 'react-i18next';`，并在其后追加
+     *   `const $t = getI18n().t;`（去重）。
      */
     private fun ensureI18nInstanceImported(
         psiFile: PsiElement,
         isVue: Boolean,
-        injectGlobalDollarT: Boolean = false
+        injectGlobalDollarT: Boolean = false,
+        injectReactGlobalDollarT: Boolean = false
     ) {
         val i18nAlreadyImported = hasI18nInstanceImported(psiFile)
-        if (i18nAlreadyImported && !(isVue && injectGlobalDollarT)) {
-            // 既已导入，也不需要补 $t 别名 → 直接 return
+        // React getI18n 导入是否已经存在？
+        val reactGetI18nAlreadyImported = !isVue && hasReactGetI18nImported(psiFile)
+
+        // 提前 return：i18n/getI18n 导入都有了 且 不需要追加任何 const $t 别名
+        val importAlreadySatisfied = if (isVue) {
+            i18nAlreadyImported
+        } else {
+            // React：两种模式任一满足即可（旧 i18n from i18next / 新 getI18n from react-i18next）
+            i18nAlreadyImported || reactGetI18nAlreadyImported
+        }
+        val noConstNeeded =
+            !(isVue && injectGlobalDollarT) && !(!isVue && injectReactGlobalDollarT)
+        if (importAlreadySatisfied && noConstNeeded) {
             return
         }
 
-        val importText: String? = if (i18nAlreadyImported) {
-            // i18n import 已经有了，只需要追加 const $t = i18n.global.t
-            null
-        } else {
-            if (isVue) {
-                buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
-            } else {
-                "import i18n from 'i18next';\n"
-            }
+        // —— 计算 import 文本 & const $t 别名文本 ——
+        val importText: String? = when {
+            // 如果当前满足"已有 import"条件，就不再额外写 import
+            importAlreadySatisfied -> null
+            isVue -> buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
+            // React 新模板（injectReactGlobalDollarT=true 时优先）：
+            //   import { getI18n } from 'react-i18next';
+            injectReactGlobalDollarT -> "import { getI18n } from 'react-i18next';\n"
+            // React 旧兼容模板：import i18n from 'i18next'（仍保留给 tFunctionName="i18n.t" 等旧场景）
+            else -> "import i18n from 'i18next';\n"
         }
-        val dollarTText: String? = if (isVue && injectGlobalDollarT) {
-            "const \$t = i18n.global.t;\n"
-        } else null
+        val dollarTText: String? = when {
+            isVue && injectGlobalDollarT -> "const \$t = i18n.global.t;\n"
+            !isVue && injectReactGlobalDollarT -> "const \$t = getI18n().t;\n"
+            else -> null
+        }
 
-        // 快速 helper：在一个 PsiElement（scriptContent 或 文件顶部）里，
-        // 检查是否已经存在 `const $t = i18n.global.t`（宽松空格/分号容忍）
-        fun hasGlobalDollarTAliased(root: PsiElement): Boolean {
+        // 快速 helper（Vue 版）：在一个 PsiElement 里检查是否已经存在
+        // `const $t = i18n.global.t`（宽松空格/分号容忍）
+        fun hasVueGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
             val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
-            // 注意：这里是 Kotlin """...""" 原始字符串，想写 JS 的 "$t" 不能写 \$t，
-            // 必须用 ${'$'} 插入字面 $ 符号，避免 Kotlin 解释成字符串模板。
             val reSimple = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
             return vars.any {
                 re.containsMatchIn(it.text.replace("\\s+", "")) ||
                     reSimple.containsMatchIn(it.text) ||
                     it.text.replace("\\s+", "").let { t ->
                         t.contains("const\$t=i18n.global.t")
+                    }
+            }
+        }
+        // 快速 helper（React 版）：检查是否已经存在 `const $t = getI18n().t`
+        fun hasReactGlobalDollarTAliased(root: PsiElement): Boolean {
+            val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+            val reSimple = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+            return vars.any {
+                reSimple.containsMatchIn(it.text) ||
+                    it.text.replace("\\s+", "").let { t ->
+                        t.contains("const\$t=getI18n().t")
                     }
             }
         }
@@ -804,7 +875,7 @@ class I18nProcessor(
                 val scriptContent = PsiTreeUtil.findChildOfType(sfcScript, JSEmbeddedContent::class.java)
                     ?: return
                 val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
-                val dollarTAlreadyAliased = hasGlobalDollarTAliased(scriptContent)
+                val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(scriptContent)
 
                 // 1) Import 注入（如果需要）
                 if (importText != null) {
@@ -842,7 +913,7 @@ class I18nProcessor(
                 //            在缺少 JS language 上下文时失败）
                 val containingFile = psiFile.containingFile ?: return
                 val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-                val dollarTAlreadyAliased = hasGlobalDollarTAliased(containingFile)
+                val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(containingFile)
 
                 // 1) Import 注入（如果需要）
                 if (importText != null) {
@@ -878,20 +949,42 @@ class I18nProcessor(
                 }
             }
         } else {
-            // React: 注入到文件顶部（injectGlobalDollarT 恒 false，无需处理 $t 别名）
-            if (importText == null) return
+            // —— React: 注入到文件顶部
+            // 旧模式：只有 import i18n from 'i18next'（dollarTText=null，因为 tFunctionName 是 i18n.t）
+            // 新模式：import { getI18n } from 'react-i18next' + const $t = getI18n().t;
             val containingFile = psiFile.containingFile ?: return
-            val importStmt = createJSStatementFromText(importText, containingFile)
             val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-            if (imports.isNotEmpty()) {
-                val firstImport = imports.first()
-                firstImport.parent.addBefore(importStmt, firstImport)
-            } else {
-                val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                if (firstStatement != null) {
-                    containingFile.addBefore(importStmt, firstStatement)
+            val dollarTAlreadyAliased = hasReactGlobalDollarTAliased(containingFile)
+
+            // 1) Import 注入（如果需要）
+            if (importText != null) {
+                val importStmt = createJSStatementFromText(importText, containingFile)
+                if (imports.isNotEmpty()) {
+                    val firstImport = imports.first()
+                    firstImport.parent.addBefore(importStmt, firstImport)
                 } else {
-                    containingFile.add(importStmt)
+                    val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                    if (firstStatement != null) {
+                        containingFile.addBefore(importStmt, firstStatement)
+                    } else {
+                        containingFile.add(importStmt)
+                    }
+                }
+            }
+            // 2) React $t 别名注入（新模式 injectReactGlobalDollarT=true 时）
+            if (injectReactGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) {
+                val stmt = createStringExpressionNode(dollarTText, containingFile)
+                val latestImports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+                if (latestImports.isNotEmpty()) {
+                    val lastImport = latestImports.last()
+                    lastImport.parent.addAfter(stmt, lastImport)
+                } else {
+                    val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                    if (firstStatement != null) {
+                        containingFile.addBefore(stmt, firstStatement)
+                    } else {
+                        containingFile.add(stmt)
+                    }
                 }
             }
         }
@@ -932,8 +1025,13 @@ class I18nProcessor(
      * - `import i18n from '...'`                （默认导入）
      * - `import * as i18n from '...'`           （namespace 导入）
      * - `import i18n, { other } from '...'`     （混合导入）
+     *
+     * —— 新规则（React 兼容）：若已存在 `import { getI18n } from 'react-i18next'` 也算
+     * "已有全局 i18n 能力"，因为 getI18n() 就是 react-i18next 返回 i18next i18n 实例的
+     * 官方 API，不应该重复再注入 `import i18n from 'i18next'`。
      */
     private fun hasI18nInstanceImported(root: PsiElement): Boolean {
+        if (hasReactGetI18nImported(root)) return true
         val imports = PsiTreeUtil.findChildrenOfType(root, ES6ImportDeclaration::class.java)
         val namedImport = Regex("""import\s*\{[^}]*\bi18n\b[^}]*\}""")
         val defaultImport = Regex("""import\s+i18n\s+(?:,|from)""")
@@ -942,6 +1040,22 @@ class I18nProcessor(
             namedImport.containsMatchIn(imp.text) ||
                 defaultImport.containsMatchIn(imp.text) ||
                 namespaceImport.containsMatchIn(imp.text)
+        }
+    }
+
+    /**
+     * 检查文件是否已导入 react-i18next 的 getI18n（React 新模板）。
+     * 匹配形式：
+     *   - `import { getI18n } from 'react-i18next'`           （独立命名导入）
+     *   - `import { useTranslation, getI18n } from ...'`      （和 useTranslation 混合）
+     *   - 路径中含 `react-i18next`（容忍引号/反引号差异）
+     */
+    private fun hasReactGetI18nImported(root: PsiElement): Boolean {
+        val imports = PsiTreeUtil.findChildrenOfType(root, ES6ImportDeclaration::class.java)
+        val namedSpec = Regex("""import\s*\{[^}]*\bgetI18n\b[^}]*\}""")
+        return imports.any { imp ->
+            val t = imp.text
+            namedSpec.containsMatchIn(t) && t.contains("react-i18next")
         }
     }
 

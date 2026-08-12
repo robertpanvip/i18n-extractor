@@ -693,8 +693,12 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
      * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
      *
-     * 相反，应当注入 i18next 全局实例（`import i18n from 'i18next'`），
-     * 并把中文替换为 `i18n.t('key')` 调用（而非未定义的 `$t('key')`）。
+     * 【用户指定新规则】：全部都用 $t 减少复杂度。
+     *   顶部注入两行（来自 react-i18next 官方 getI18n API）：
+     *       import { getI18n } from 'react-i18next';
+     *       const $t = getI18n().t;
+     *   替换结果仍是短写法 $t('key')，与 React Hook / Vue 内部完全一致，
+     *   **不再**写冗长 i18n.t('key') 调用。
      */
     fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
         val file = configureFile(
@@ -722,23 +726,47 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "纯工具 TS 文件不应注入 useTranslation import, got:\n$resultText",
             resultText.contains("useTranslation")
         )
+        // ★ 用户新规则：react-i18next 关键字仍然出现在顶部（因为从它 import { getI18n }）
+        assertTrue(
+            "纯工具 TS 文件必须从 react-i18next import getI18n, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").let {
+                it.contains("import{getI18n}from'react-i18next'")
+            }
+        )
+        // ★ 不能再出现旧导入 i18n from i18next
         assertFalse(
-            "纯工具 TS 文件不应注入 react-i18next import, got:\n$resultText",
-            resultText.contains("react-i18next")
+            "纯工具 TS 文件不应再写旧的 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
         )
-        // PR #12 审查新增断言：普通函数有中文时，顶部必须导入全局 i18n from 'i18next'
+        // ★ 替换结果必须是短写法 $t('总共') 等，**不**是 i18n.t(...)
         assertTrue(
-            "纯工具 TS 文件有中文提取时，必须注入 import i18n from 'i18next', got:\n$resultText",
-            resultText.contains("import i18n from ") && resultText.contains("i18next")
+            "替换必须是短写法 \$t('总共') / \$t('提示') / \$t('说明文本'), got:\n$resultText",
+            resultText.contains("\$t(")
         )
-        // PR #12 审查新增断言：替换必须使用 i18n.t('key')（而非未定义的 \$t('key')）
-        assertTrue(
-            "替换结果必须使用 i18n.t 调用，got:\n$resultText",
+        assertFalse(
+            "不应再出现冗长 i18n.t(...) 调用, got:\n$resultText",
             resultText.contains("i18n.t(")
         )
-        assertFalse(
-            "纯工具 TS 文件不应出现未定义的 \$t() 调用，got:\n$resultText",
-            resultText.contains("\$t(")
+        // ★ 必须追加 const $t = getI18n().t;
+        assertTrue(
+            "必须追加 const \$t = getI18n().t; 全局别名, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").contains("const\$t=getI18n().t")
+        )
+
+        // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
+        val processor2 = I18nProcessor(project, file)
+        processor2.collect()
+        processor2.execute()
+        val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
+        val getI18nCnt = textAfterTwice.split("import{getI18n}from'react-i18next'").size - 1
+        val constCnt = textAfterTwice.split("const\$t=getI18n().t").size - 1
+        assertEquals(
+            "React getI18n import 重复出现 $getI18nCnt 次（expect 1）, txt:\n$textAfterTwice",
+            1, getI18nCnt
+        )
+        assertEquals(
+            "React const \$t 别名重复出现 $constCnt 次（expect 1）, txt:\n$textAfterTwice",
+            1, constCnt
         )
     }
 
