@@ -488,6 +488,11 @@ class I18nProcessor(
     private fun ensureVueHookI18nImported(psiFile: PsiElement) {
         val containingFile = psiFile.containingFile ?: return
 
+        // 0. 先找到所有 use 开头的 hook 函数，没有则直接返回
+        //    （避免普通 TS 文件被注入 vue-i18n import）
+        val hookFuncs = Util.findHookFunctions(containingFile)
+        if (hookFuncs.isEmpty()) return
+
         // 1. 确保 vue-i18n 导入存在
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
         if (imports.none { it.text.contains("vue-i18n") }) {
@@ -505,10 +510,6 @@ class I18nProcessor(
                 }
             }
         }
-
-        // 2. 找到所有 use 开头的 hook 函数并注入 useI18n
-        val hookFuncs = Util.findHookFunctions(containingFile)
-        if (hookFuncs.isEmpty()) return
 
         // 3. 逐个注入（从后往前插入，避免 offset 偏移）
         for (func in hookFuncs.asReversed()) {

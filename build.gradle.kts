@@ -11,6 +11,14 @@ group = "com.pan"
 version = "1.3.7"
 
 repositories {
+    maven {
+        name = "TencentMavenPublic"
+        url = uri("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
+    }
+    maven {
+        name = "TencentJetbrains"
+        url = uri("https://mirrors.cloud.tencent.com/jetbrains/")
+    }
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
