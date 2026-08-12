@@ -803,6 +803,128 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     }
 
     // ============================================================
+    // 10.1 Bug 1+. 用户报告"问题 1：没有中文的文件也导入了全局导入"
+    // ============================================================
+
+    /**
+     * 纯工具 TS 文件，**完全没有中文**，也没有任何 t/i18n.t/$t 调用 →
+     * 绝不应该注入任何全局 i18n 导入（哪怕它同时满足「React 项目 + 无组件 + 无 Hook」的预判条件）。
+     *
+     * 前一版 bug：needInjectReactGlobalDollarT 被单独 OR 进 needGlobalI18nImport，
+     * 导致预判命中时无论文件里是否有中文，顶部都会塞进两行导入。
+     */
+    fun testReactEmptyToolTsFileNoChineseShouldNotInjectAnything() {
+        val file = configureFile(
+            "src/utils/number.ts",
+            """
+            // 完全没有中文，也没有 i18n 调用的普通工具函数
+            export function formatNumber(n: number): string {
+                return Intl.NumberFormat("en-US").format(n)
+            }
+
+            export const MATH = {
+                PI: 3.14159,
+                E: 2.71828
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        assertEquals(
+            "无中文 React 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.extractedStrings}",
+            0, processor.extractedStrings.size
+        )
+        assertFalse(
+            "无中文文件不应出现任何 i18n 全局导入（import getI18n / i18next 都不行）, got:\n$resultText",
+            compact.contains("react-i18next") || compact.contains("from'i18next'")
+        )
+        assertFalse(
+            "无中文文件不应出现 const \$t 别名定义, got:\n$resultText",
+            compact.contains("const\$t=getI18n().t") || compact.contains("const\$t=i18n.global.t")
+        )
+        assertFalse(
+            "无中文文件不应出现 useTranslation, got:\n$resultText",
+            compact.contains("useTranslation")
+        )
+    }
+
+    /**
+     * （Vue 对称场景见 VueI18nProcessorTest.testVueEmptyToolTsFileNoChineseShouldNotInjectAnything）
+     */
+
+    // ============================================================
+    // 10.2 Bug 2+. 用户报告"问题 2：有的地方只导入了 const $t = getI18n().t"
+    //      （没有对应 import { getI18n } from 'react-i18next' → 运行时 getI18n is not defined）
+    // ============================================================
+
+    /**
+     * 【典型触发路径】
+     *   1) 文件顶部已存在**老模式**的 `import i18n from 'i18next'`（可能是历史遗留）
+     *   2) 但这个文件同时属于"React 项目 + 无组件 + 无 Hook" → 预判 injectReactGlobalDollarT=true
+     *   3) 文件里有新的硬编码中文（非已有 i18n.t 调用），所以 extractedStrings 非空，需要走新模式
+     *
+     * 老代码的 bug：hasI18nInstanceImported 把「老 i18n from i18next」也算成导入已存在，
+     * importAlreadySatisfied=true → importText=null，但是 dollarTText 仍然追加
+     * `const $t = getI18n().t` → **只出现 const，不出现 getI18n import**，运行时报
+     * ReferenceError: getI18n is not defined。
+     *
+     * 修复后：React injectReactGlobalDollarT=true 模式必须「严格存在 getI18n 命名导入」
+     * 才叫 requiredImportAlreadyPresent，老 i18n 导入顶用不上；
+     * importText 是否生成只看 requiredImportAlreadyPresent，不再跨模式短路。
+     */
+    fun testReactOldI18nImportedButNeedGetI18nShouldStillInjectBoth() {
+        val file = configureFile(
+            "src/utils/legacy.ts",
+            """
+            // 历史遗留：已经 import 老模式的 i18n from i18next（但还没写任何调用）
+            import i18n from 'i18next'
+
+            export function formatTip(type: string) {
+                // 有硬编码中文：需要新提取 → 命中 injectReactGlobalDollarT 新模式
+                const label = "提示"
+                return type + ": " + label
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // ★ 关键断言 1：老 i18n from i18next 必须保留（不破坏历史）
+        assertTrue(
+            "老 import i18n from 'i18next' 必须保留, got:\n$resultText",
+            compact.contains("importi18nfrom'i18next'")
+        )
+        // ★ 关键断言 2：新模式必须**额外**追加 import { getI18n } from 'react-i18next'
+        assertTrue(
+            "新模式必须额外追加 import { getI18n } from 'react-i18next'（不能因老 i18n 已导入就跳过）, got:\n$resultText",
+            compact.contains("import{getI18n}from'react-i18next'")
+        )
+        // ★ 关键断言 3：还要追加 const $t = getI18n().t
+        assertTrue(
+            "还要追加 const \$t = getI18n().t 全局别名, got:\n$resultText",
+            compact.contains("const\$t=getI18n().t")
+        )
+        // ★ 关键断言 4：替换是短 $t（不是老 i18n.t）
+        assertTrue(
+            "替换应该是短 \$t('提示'), got:\n$resultText",
+            resultText.contains("\$t('提示')")
+        )
+        assertFalse(
+            "替换不应再用老 i18n.t('提示'), got:\n$resultText",
+            resultText.contains("i18n.t(")
+        )
+    }
+
+    // ============================================================
     // 11. Bug 2: 翻译资源文件（语言包）跳过提取与注入
     // ============================================================
 

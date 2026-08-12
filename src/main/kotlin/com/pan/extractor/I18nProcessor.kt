@@ -430,25 +430,51 @@ class I18nProcessor(
         val isVue = isVueFile(psiFile.containingFile)
         val isReact = Util.isReact(psiFile)
         // 需要全局 i18n 实例 import 的场景：
-        // 1) extractedStrings 非空 + (tFunctionName == i18n.global.t / i18n.t 全局模式)
-        // 2) needInjectGlobalDollarT = true（Vue 纯 TS 普通函数——需要顶部注入 import + const $t=...）
-        // 3) needInjectReactGlobalDollarT = true（React 纯工具函数——需要顶部注入 import { getI18n } from react-i18next + const $t = getI18n().t）
-        // 4) tFunctionName == i18n.t 且 existingStrings 非空（React 纯 TS 场景，已有 i18n.t 调用但缺 import）
+        // 【问题 1 修复（用户报告：没有中文的文件也导入了全局导入）】
+        // 老代码把 needInjectGlobalDollarT / needInjectReactGlobalDollarT 作为「优先级最高的
+        // 独立 OR 条件」——但这两个标记只是"预判注入形式（Vue/React 的 const $t 别名模板）"
+        // 的 switch，不等于"有实际内容需要用 $t"。纯纯工具文件只要"是 React 项目 + 无组件无 Hook"
+        // 就会命中，导致哪怕一个中文都没提取也要顶部塞两行导入。
         //
-        // 两个 needInject*GlobalDollarT 优先级较高：只要用户有需要，即便文件没提取到新中文（极端 case）
-        // 也应该至少把 $t 定义好，避免替换后运行时报 ReferenceError。
+        // 新规则（严谨）：**只有存在"需要全局 i18n 语义的内容"才注入**。
+        //   「内容」= extractedStrings（新提取） 或 existingStrings（文件里原本写了 t/i18n 调用但缺导入）
+        //   「形式 switch」= needInjectGlobalDollarT / needInjectReactGlobalDollarT /
+        //                   tFunctionName == i18n.global.t / tFunctionName == i18n.t
+        //
+        // 具体 4 个场景：
+        //   1) extractedStrings 非空（有新中文替换）→ 必须注入全局语义（只要 tFunctionName 不是
+        //      组件/Hook 内部能提供的 \$t，或者 needInject*GlobalDollarT=true 预判了"纯工具文件")
+        //   2) existingStrings 非空（原本就有老 t 调用）+ tFunctionName == i18n.global.t / i18n.t
+        //      → 维持旧全局长调用，但缺 import 时补 import（这是 section 9 的老测试）
+        //   3) needInjectGlobalDollarT=true 且（extractedStrings 非空 或 existingStrings 非空
+        //      但文件里还没有 Vue 的 const $t = i18n.global.t 别名）→ Vue 纯工具文件要补齐
+        //   4) needInjectReactGlobalDollarT=true 且（extractedStrings 非空 或 existingStrings 非空
+        //      但文件里还没有 React 的 const $t = getI18n().t 别名）→ React 纯工具文件要补齐
+        val hasAnyTCallsNeedingGlobalInstance = extractedStrings.isNotEmpty() ||
+            (existingStrings.isNotEmpty() &&
+                (tFunctionName == "i18n.global.t" || tFunctionName == "i18n.t"))
+        val vueModeNeedsImport = needInjectGlobalDollarT &&
+            (extractedStrings.isNotEmpty() || existingStrings.isNotEmpty())
+        val reactModeNeedsImport = needInjectReactGlobalDollarT &&
+            (extractedStrings.isNotEmpty() || existingStrings.isNotEmpty())
         val needGlobalI18nImport = (
-            needInjectGlobalDollarT ||
-                needInjectReactGlobalDollarT ||
-                extractedStrings.isNotEmpty() ||
-                tFunctionName == "i18n.global.t" ||
-                (tFunctionName == "i18n.t" && existingStrings.isNotEmpty())
+            hasAnyTCallsNeedingGlobalInstance ||
+                vueModeNeedsImport || reactModeNeedsImport
             )
         if (needGlobalI18nImport) {
-            if (isVue && (tFunctionName == "i18n.global.t" || extractedStrings.isNotEmpty() || needInjectGlobalDollarT)) {
+            if (isVue && (
+                    tFunctionName == "i18n.global.t" ||
+                        (extractedStrings.isNotEmpty() && needInjectGlobalDollarT) ||
+                        vueModeNeedsImport
+                    )
+            ) {
                 ensureI18nInstanceImported(psiFile, isVue = true, injectGlobalDollarT = needInjectGlobalDollarT)
-            } else if (isReact &&
-                (tFunctionName == "i18n.t" || extractedStrings.isNotEmpty() || needInjectReactGlobalDollarT)) {
+            } else if (isReact && (
+                    tFunctionName == "i18n.t" ||
+                        (extractedStrings.isNotEmpty() && needInjectReactGlobalDollarT) ||
+                        reactModeNeedsImport
+                    )
+            ) {
                 ensureI18nInstanceImported(
                     psiFile,
                     isVue = false,
@@ -456,13 +482,13 @@ class I18nProcessor(
                     injectReactGlobalDollarT = needInjectReactGlobalDollarT
                 )
             } else if (
-                needInjectGlobalDollarT ||
-                needInjectReactGlobalDollarT ||
+                vueModeNeedsImport ||
+                reactModeNeedsImport ||
                 (tFunctionName == "i18n.global.t" && extractedStrings.isNotEmpty())
             ) {
                 // 兜底分支：.vue SFC 之外的 Vue 项目脚本，或 needInjectReactGlobalDollarT=true 但 isReact
                 // 判定暂时 false 的场景（兼容老文件）。
-                if (needInjectReactGlobalDollarT) {
+                if (reactModeNeedsImport) {
                     ensureI18nInstanceImported(
                         psiFile,
                         isVue = false,
@@ -805,42 +831,8 @@ class I18nProcessor(
         injectGlobalDollarT: Boolean = false,
         injectReactGlobalDollarT: Boolean = false
     ) {
-        val i18nAlreadyImported = hasI18nInstanceImported(psiFile)
-        // React getI18n 导入是否已经存在？
-        val reactGetI18nAlreadyImported = !isVue && hasReactGetI18nImported(psiFile)
-
-        // 提前 return：i18n/getI18n 导入都有了 且 不需要追加任何 const $t 别名
-        val importAlreadySatisfied = if (isVue) {
-            i18nAlreadyImported
-        } else {
-            // React：两种模式任一满足即可（旧 i18n from i18next / 新 getI18n from react-i18next）
-            i18nAlreadyImported || reactGetI18nAlreadyImported
-        }
-        val noConstNeeded =
-            !(isVue && injectGlobalDollarT) && !(!isVue && injectReactGlobalDollarT)
-        if (importAlreadySatisfied && noConstNeeded) {
-            return
-        }
-
-        // —— 计算 import 文本 & const $t 别名文本 ——
-        val importText: String? = when {
-            // 如果当前满足"已有 import"条件，就不再额外写 import
-            importAlreadySatisfied -> null
-            isVue -> buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
-            // React 新模板（injectReactGlobalDollarT=true 时优先）：
-            //   import { getI18n } from 'react-i18next';
-            injectReactGlobalDollarT -> "import { getI18n } from 'react-i18next';\n"
-            // React 旧兼容模板：import i18n from 'i18next'（仍保留给 tFunctionName="i18n.t" 等旧场景）
-            else -> "import i18n from 'i18next';\n"
-        }
-        val dollarTText: String? = when {
-            isVue && injectGlobalDollarT -> "const \$t = i18n.global.t;\n"
-            !isVue && injectReactGlobalDollarT -> "const \$t = getI18n().t;\n"
-            else -> null
-        }
-
-        // 快速 helper（Vue 版）：在一个 PsiElement 里检查是否已经存在
-        // `const $t = i18n.global.t`（宽松空格/分号容忍）
+        // ── 局部 helper：先声明，后面才能用 ─────────────────────────────
+        // Vue 版：检查是否已经存在 `const $t = i18n.global.t`（宽松空格/分号容忍）
         fun hasVueGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
             val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
@@ -853,7 +845,7 @@ class I18nProcessor(
                     }
             }
         }
-        // 快速 helper（React 版）：检查是否已经存在 `const $t = getI18n().t`
+        // React 版：检查是否已经存在 `const $t = getI18n().t`
         fun hasReactGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
             val reSimple = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
@@ -863,6 +855,45 @@ class I18nProcessor(
                         t.contains("const\$t=getI18n().t")
                     }
             }
+        }
+        // ───────────────────────────────────────────────────────────────
+
+        val i18nAlreadyImported = hasI18nInstanceImported(psiFile)
+        // React getI18n 导入是否已经存在？
+        val reactGetI18nAlreadyImported = !isVue && hasReactGetI18nImported(psiFile)
+
+        // 【问题 2 修复（用户报告：只出现 const $t=getI18n().t 却没 import { getI18n }）】
+        val requiredImportAlreadyPresent = when {
+            // React 新模板（getI18n）→ 严格要求 getI18n 导入，老 i18n 不算
+            !isVue && injectReactGlobalDollarT -> reactGetI18nAlreadyImported
+            // 其他所有情况：Vue + React 旧 i18n.t 模式 → 只要"存在一个指向 i18n 实例的导入"即可
+            else -> i18nAlreadyImported
+        }
+
+        // $t 全局别名是否已经存在：对应各自 helper 才叫存在
+        val dollarTAliasAlreadyPresent = when {
+            isVue && injectGlobalDollarT -> hasVueGlobalDollarTAliased(psiFile)
+            !isVue && injectReactGlobalDollarT -> hasReactGlobalDollarTAliased(psiFile)
+            else -> true // 不需要别名 → 当然算"已存在"
+        }
+
+        // 提前 return：(所需的 import 已存在) 且 (不需要追加别名 OR 别名也已经追加过)
+        val stillNeedConstAlias = (isVue && injectGlobalDollarT) || (!isVue && injectReactGlobalDollarT)
+        if (requiredImportAlreadyPresent && !(stillNeedConstAlias && !dollarTAliasAlreadyPresent)) {
+            return
+        }
+
+        // —— 计算 import 文本 & const $t 别名文本 ——
+        val importText: String? = when {
+            requiredImportAlreadyPresent -> null
+            isVue -> buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
+            injectReactGlobalDollarT -> "import { getI18n } from 'react-i18next';\n"
+            else -> "import i18n from 'i18next';\n"
+        }
+        val dollarTText: String? = when {
+            isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
+            !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = getI18n().t;\n"
+            else -> null
         }
 
         if (isVue) {
