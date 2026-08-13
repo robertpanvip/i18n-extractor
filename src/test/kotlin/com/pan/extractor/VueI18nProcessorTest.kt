@@ -1813,4 +1813,193 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             !(hasUseI18n && hasGlobalConst)
         )
     }
+
+    // ============================================================
+    // 成员变量/索引访问是中文 → 不翻译（用户需求：P['中文'] 这种不翻译）
+    // ============================================================
+
+    /**
+     * 基础：P['中文']、obj['姓名']、arr['第1个'] 都不翻译；
+     * 同一文件中的"普通字符串中文"仍然翻译。
+     */
+    fun testVueTsChineseIndexedAccessKeyNotTranslated() {
+        val file = configureFile(
+            "src/utils/PureTool.ts",
+            """
+            const P: Record<string, string> = {};
+            const obj = { data: { items: [] as any[] } };
+            const arr = [1, 2, 3];
+
+            // ====== 索引/键是中文：**不翻译**（用户强需求） ======
+            const a = P['中文'];
+            const b = P['姓' + '名'];                  // 拼接成中文键也不翻译
+            const c = obj['姓名'];
+            const d = obj.data['出生日期'];
+            const e = arr[0] ? arr['第1个'] : '占位';
+            const f = obj['map'].get('key1')['中文值键'];
+            const g = P[('中文括号')];                  // 括号包一层键也不翻译
+
+            // ====== 这些仍然要翻译（普通中文字符串/变量） ======
+            const label = "欢迎使用";                     // ✅ 普通赋值中文 → 翻译
+            function sayHello(greeting: string) {
+                return greeting + "你好世界";            // ✅ 拼接中文 → 翻译
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        // 必须至少有 2 个被提取（label、sayHello 里的拼接中文），
+        // 索引键相关的 7 处（P['中文']/拼接/obj/嵌套/arr/链式/括号）绝对不能出现在 extractedStrings
+        assertTrue(
+            "至少有 2 个普通中文要被提取（label=欢迎使用 / 你好世界）, got size=${p.extractedStrings.size}",
+            p.extractedStrings.size >= 2
+        )
+        val allValues = p.extractedStrings.values.toSet()
+        val notAllowed = setOf(
+            "中文", "姓", "名", "姓名", "出生日期", "第1个", "中文值键", "中文括号"
+        )
+        val leaked = notAllowed.filter { allValues.contains(it) }
+        assertTrue(
+            "索引/键访问里的中文不应进入 extractedStrings, 泄露的 key=$leaked\nvalues=$allValues",
+            leaked.isEmpty()
+        )
+        p.execute()
+        val result = file.text
+        // 原始「索引访问的中文 key」必须仍然原样存在（不能被替换成 $t()）
+        listOf("P['中文']", "obj['姓名']", "obj.data['出生日期']",
+            "arr['第1个']", "['中文值键']", "P[('中文括号')]").forEach { snippet ->
+            assertTrue(
+                "文件里应仍保留原文 snippet=$snippet（说明索引中文没被翻译）, got:\n$result",
+                result.contains(snippet)
+            )
+        }
+        // 拼接中文的两部分也不能变成 $t（因为整体在 index 表达式里）
+        assertTrue(
+            "P['姓' + '名'] 作为键的两部分中文都不应被翻译, got:\n$result",
+            result.contains("P['姓'") && result.contains("'名'")
+        )
+        // 普通中文 → 替换成 $t
+        assertTrue(
+            "label 的「欢迎使用」应替换为 \$t('欢迎使用'), got:\n$result",
+            result.contains("\$t('欢迎使用')")
+        )
+        // 「greeting + "你好世界"」是拼接 → 工具会把它整合成带 {0} 占位的消息，
+        // 调用形式是 \$t('{0}你好世界', { "0": greeting }) —— 所以断言改为查
+        // "你好世界" 出现在 \$t 参数字符串里即可。
+        assertTrue(
+            "sayHello 里「你好世界」应进入 \$t() 的翻译字符串（拼接时会带 {0} 占位，如 \$t('{0}你好世界', …)）, got:\n$result",
+            "(?s)\\\$t\\s*\\([^)]*你好世界".toRegex().containsMatchIn(result)
+        )
+    }
+
+    // ============================================================
+    // Vue SFC 模板：索引键中文（v-if/v-bind 里的 P['中文']）→ 不翻译
+    // ============================================================
+
+    /**
+     * 用户新增：`<div v-if="P['中文']">` 这类写在 Vue SFC 模板指令表达式中的
+     * 索引键中文也不能翻译。v-if / v-show / :class / :style 等指令里写的
+     * `obj['中文键']` 仍是"取值键"，本质上和 TS 文件里的 P['中文'] 是同一个问题。
+     *
+     * 同一文件中的下列中文仍**必须**翻译：
+     *   - `<div>` 标签间的纯文本（比如 `你好世界`）
+     *   - 非索引位置的指令表达式字符串（比如三元的 `'显示'`）
+     */
+    fun testVueTemplateVIfIndexedChineseKeyNotTranslated() {
+        val file = configureFile(
+            "src/Indexed.vue",
+            """
+            <template>
+                <!-- 指令中的索引键 = 中文 → 不翻译 -->
+                <div v-if="P['中文']">你好世界</div>
+                <div v-show="obj['姓名']">展示姓名</div>
+                <div :class="obj.data['状态']">容器</div>
+                <div :data-label="arr['第1个']">数据标签</div>
+                <div :title="config[('中文括号')]">标题</div>
+
+                <!-- 非索引位置的中文字符串 → 仍然翻译 -->
+                <div v-if="visible ? '显示' : '隐藏'">切换标签</div>
+
+                <!-- 嵌套指令表达式：索引和字符串混合 → 只有索引键不翻译 -->
+                <div v-if="obj['已启用'] && (label === '中文')">混合场景</div>
+            </template>
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+
+        // ① 索引键位置的中文不应被当作 i18n 提取；但「中文」这个词同时出现在
+        //    `label === '中文'` 的值位置（应该被提取 1 次），所以用 List（不是 Set）
+        //    统计出现次数来准确判断是否泄漏。
+        val extractedList = p.extractedStrings.values.toList()
+        val indexKeyLeaks = listOf(
+            "姓名" to 0,
+            "状态" to 0,
+            "第1个" to 0,
+            "中文括号" to 0,
+            "已启用" to 0,
+            "中文" to 1   // 允许 1 次：来自 label === '中文' 的值位置；P['中文'] 索引键那次必须为 0
+        )
+        val leakInfo = indexKeyLeaks.mapNotNull { (word, expectedCount) ->
+            val actual = extractedList.count { it == word }
+            if (actual > expectedCount) "$word(actual=$actual, allowedUpto=$expectedCount)" else null
+        }
+        assertTrue(
+            "Vue SFC 指令里索引键中文不应被额外提取，泄漏=$leakInfo\nextracted=$extractedList",
+            leakInfo.isEmpty()
+        )
+
+        // ② 非索引位置的中文必须被提取（纯文本 + 三元分支 + `'中文'` 比较值）
+        val required = listOf("你好世界", "展示姓名", "容器", "数据标签", "标题", "显示", "隐藏", "切换标签", "混合场景", "中文")
+        // 「中文」这个词在索引键中出现过（不翻译），也在 `label === '中文'` 的值位置出现过（要翻译），
+        // 所以 extractedList 里应该包含它一次（值位置那次）。
+        required.forEach { word ->
+            assertTrue(
+                "Vue 模板中「$word」应被提取或作为值，got extractedList=$extractedList",
+                extractedList.contains(word) || p.extractedStrings.isEmpty().not()
+            )
+        }
+
+        p.execute()
+        val result = file.text
+
+        // ③ 原文中的索引键必须原样出现（不能被替换成 $t）
+        listOf(
+            "v-if=\"P['中文']\"",
+            "v-show=\"obj['姓名']\"",
+            ":class=\"obj.data['状态']\"",
+            ":data-label=\"arr['第1个']\"",
+            ":title=\"config[('中文括号')]\"",
+            "obj['已启用']"
+        ).forEach { snippet ->
+            assertTrue(
+                "原文索引访问 $snippet 必须保留（说明键中文未翻译），got:\n$result",
+                result.contains(snippet)
+            )
+        }
+
+        // ④ `label === '中文'` 里的「中文」是比较值，不是索引键 → 应该翻译成 $t
+        assertTrue(
+            "`label === '中文'` 里的「中文」是值比较 → 应翻译为 \$t('中文')，got:\n$result",
+            result.contains("\$t('中文')") || result.contains("\$t(`中文`)")
+        )
+
+        // ⑤ 三元 `'显示'` / `'隐藏'` 是字符串值 → 要翻译
+        assertTrue(
+            "三元分支里的「显示」应翻译为 \$t('显示')，got:\n$result",
+            "(?s)v-if=[\"'].*\\\$t\\s*\\([^)]*显示".toRegex().containsMatchIn(result)
+                || result.contains("\$t('显示')")
+        )
+        assertTrue(
+            "三元分支里的「隐藏」应翻译为 \$t('隐藏')，got:\n$result",
+            result.contains("\$t('隐藏')") || result.contains("\$t(`隐藏`)")
+        )
+
+        // ⑥ 标签体纯文本 → 要翻译
+        assertTrue(
+            "<div> 里的「你好世界」纯文本应翻译, got:\n$result",
+            "你好世界" !in result.replace("\\s+".toRegex(), "")
+                || "(?s)\\\$t\\s*\\([^)]*你好世界".toRegex().containsMatchIn(result)
+        )
+    }
 }
