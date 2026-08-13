@@ -1398,6 +1398,14 @@ class I18nProcessor(
 
     private val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
+    /**
+     * Vue-i18n 不支持数字占位符 `$t('默认模型配置{0}子', { '0': "123" })` 这种
+     * 数字 key 对象写法，必须用命名插值。统一把 Vue 侧占位符改成 {N0} / {N1} ...，
+     * 调用侧参数对象写成 `{ N0: "123" }`（无引号，合法 JS identifier）。
+     * React i18next 的 `{{0}}` + `{ "0": val }` 原生支持，保持不变。
+     */
+    private fun vuePlaceholderKey(rawIndex: Int): String = "N$rawIndex"
+
     fun collectJSStringTemplate(
         raw: String,
         changes: MutableList<() -> Unit>,
@@ -1408,27 +1416,41 @@ class I18nProcessor(
         if (isInIndexKeyPosition(ele)) return
         // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
         val content = raw.substring(1, raw.length - 1)
-        val params = LinkedHashMap<String, String>() // 索引 -> ${}内的原始内容
-        var index = 0 // 按出现顺序分配数字索引
+        val params = LinkedHashMap<String, String>()
+        var index = 0
 
-        // 步骤2：替换所有${任意内容}为${数字索引}，并收集${}内的原始内容
-        // react-i18next 使用 {{key}} 双括号插值，vue-i18n 使用 {key} 单括号插值
-        // 通过 JSX 上下文 / react 导入 / package.json 依赖综合判断
-        val isReact = Util.isReact(ele)
+        // 步骤2：替换所有${任意内容}为占位符，并收集${}内的原始内容
+        // 三分枝占位符策略（以 containingFile + package.json 依赖双判定）：
+        //   Vue    → 资源 {N0} 单括号命名插值，参数对象 { N0: xxx }（标识符 key，避开 vue-i18n 不识别的数字字符串 key）
+        //   React  → 资源 {{0}} 双括号索引插值，参数对象 { "0": xxx }（i18next 原生支持，保持不变）
+        //   Generic（.ts 纯工具、package.json 无 React/Vue 依赖等）→ 兼容旧行为：资源 {0}、参数 { "0": xxx }
+        val containingFile = ele.containingFile
+        val isVue = (containingFile != null && isVueFile(containingFile)) || Util.isVue(ele)
+        val isReact = !isVue && Util.isReact(ele)
         val message = templateVarRegex.replace(content) { match ->
-            // 提取${}内的原始内容（groupValues[1] 是正则括号内的匹配结果）
             val innerContent = match.groupValues[1].trim()
             // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
             val pureString = extractPureStringContent(innerContent)
             if (pureString != null) {
                 return@replace pureString
             }
-            // 按顺序分配索引
-            val key = index.toString()
+            val rawIndex = index++
+            val (key, placeholder) = when {
+                isReact -> {
+                    val k = rawIndex.toString()
+                    k to "{{$k}}"
+                }
+                isVue -> {
+                    val k = vuePlaceholderKey(rawIndex)
+                    k to "{$k}"
+                }
+                else -> {
+                    val k = rawIndex.toString()
+                    k to "{$k}"
+                }
+            }
             params[key] = innerContent
-            index++
-            // 替换为${数字索引}，React 使用双括号，Vue 使用单括号
-            if (isReact) "{{$key}}" else "{$key}"
+            placeholder
         }
 
 
@@ -1441,17 +1463,20 @@ class I18nProcessor(
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
-        // 步骤5：预生成 paramsObject（在 lambda 外执行，确保 extractedStrings 在 collect 阶段就完整）
+        // 步骤5：预生成 paramsObject
+        // - Vue ：标识符 key，无引号（因为 key 形如 N0/N1）
+        // - React / Generic ：字符串 key，加引号（因为 key 形如 "0"/"1"）
+        val paramKeyNeedsQuote = !isVue
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
         ) { (k, v) ->
-            // 模板字面量带插值：递归构建嵌套 $t() 调用（同时注册到 extractedStrings）
-            if (isJSTemplateLiteral(v)) {
-                "\"$k\": ${buildNestedTExprFromText(v, ele)}"
+            val paramExpr = if (isJSTemplateLiteral(v)) {
+                buildNestedTExprFromText(v, ele)
             } else {
-                "\"$k\": $v"
+                v
             }
+            if (paramKeyNeedsQuote) "\"$k\": $paramExpr" else "$k: $paramExpr"
         }
 
         // 步骤6：添加替换逻辑
@@ -1490,31 +1515,51 @@ class I18nProcessor(
 
     /**
      * 从模板字面量文本直接构建嵌套 $t() 表达式（纯文本处理，不操作 PSI）
-     * 例如: `中国${1}` -> $t('中国{0}', { "0": 1 })
+     * - Vue：资源文件占位 `{N0}`，调用侧 `{ N0: val }` 无引号键
+     * - React：资源文件占位 `{{0}}`，调用侧 `{ "0": val }` 保持原样
      */
     fun buildNestedTExprFromText(raw: String, ele: PsiElement): String {
         val content = raw.substring(1, raw.length - 1)
         val params = LinkedHashMap<String, String>()
         var index = 0
-        val isReact = Util.isReact(ele)
+        val containingFile = ele.containingFile
+        val isVue = (containingFile != null && isVueFile(containingFile)) || Util.isVue(ele)
+        val isReact = !isVue && Util.isReact(ele)
 
         val message = templateVarRegex.replace(content) { match ->
             val innerContent = match.groupValues[1].trim()
             val pureString = extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
-            val key = index.toString()
+            val rawIndex = index++
+            val (key, placeholder) = when {
+                isReact -> {
+                    val k = rawIndex.toString()
+                    k to "{{$k}}"
+                }
+                isVue -> {
+                    val k = vuePlaceholderKey(rawIndex)
+                    k to "{$k}"
+                }
+                else -> {
+                    val k = rawIndex.toString()
+                    k to "{$k}"
+                }
+            }
             params[key] = innerContent
-            index++
-            if (isReact) "{{$key}}" else "{$key}"
+            placeholder
         }
 
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
+        // 参数对象：Vue 用标识符 key（无引号）；React/Generic 用字符串 key（加引号）
+        val paramKeyNeedsQuote = !isVue
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
-        ) { (k, v) -> "\"$k\": $v" }
+        ) { (k, v) ->
+            if (paramKeyNeedsQuote) "\"$k\": $v" else "$k: $v"
+        }
 
         return buildTFunctionExpr(message.trim(), paramsObject)
     }
