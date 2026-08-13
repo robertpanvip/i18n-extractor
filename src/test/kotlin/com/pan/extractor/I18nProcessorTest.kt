@@ -843,9 +843,14 @@ class I18nProcessorTest : BasePlatformTestCase() {
             "替换后 as const 仍保留在数组外层（不要把 as const 删掉），got:\n$result",
             result.trim().endsWith("as const")
         )
+        // NOTE：不能用 assertFalse(result.contains("\"待审批\"")) 来判断——因为 $t("待审批") 本身也会命中
+        //       该字符串。正确判断是「不存在『裸的独立字符串字面量』」，即它的前面不是 $t(。
         assertFalse(
-            "替换后不应残留硬编码 '待审批' 字符串，got:\n$result",
-            result.contains("\"待审批\"") || result.contains("'待审批'")
+            "替换后不应残留裸的硬编码 '待审批'（应被包进 \$t(\"待审批\") 形式），got:\n$result",
+            listOf("待审批", "已通过", "已拒绝", "已撤回").any { chinese ->
+                (result.contains("\"$chinese\"") && !result.contains("\$t(\"$chinese\"")) ||
+                    (result.contains("'$chinese'") && !result.contains("\$t('$chinese')"))
+            }
         )
     }
 
@@ -900,9 +905,11 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals(5, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("待支付"))
-        assertTrue(processor.extractedStrings.containsValue("已完成"))
+        // NOTE：processor 明确跳过 TypeScriptEnumField（原因是 enum 初始化值必须是编译期常量，
+        //       不能放 $t(...) 调用，会引发 TS18033）。所以提取数量应为 0，且枚举原始内容保持不动。
+        assertEquals("enum 字符串枚举不做 i18n 提取（避免 TS18033 编译错误）", 0, processor.extractedStrings.size)
+        assertFalse(processor.extractedStrings.containsValue("待支付"))
+        assertFalse(processor.extractedStrings.containsValue("已完成"))
 
         processor.execute()
         val result = file.text
@@ -911,8 +918,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
             result.contains("enum OrderState")
         )
         assertTrue(
-            "替换后 Canceled 应为 \$t('已取消')，got:\n$result",
-            result.contains("已取消") && (result.contains("\$t("))
+            "enum 原字符串值保持原样（不替换为 \$t 调用，TS 编译期常量约束），got:\n$result",
+            result.contains("Pending = \"待支付\"") || result.contains("Pending = '待支付'")
         )
     }
 
@@ -1028,16 +1035,30 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         processor.execute()
         val result = file.text
+        // NOTE：$t("提交成功") 本身就是字符串字面量包含提交成功 → 所以不能直接 assertFalse(result.contains("\"提交成功\""))
+        //       而是「如果提交成功字面量出现，必须紧邻包在 $t( 调用里）」。
         assertFalse(
-            "硬编码 '提交成功' 不应残留",
-            result.contains("\"提交成功\"") || result.contains("'提交成功'")
+            "硬编码 '提交成功' 不应残留裸字符串（应包在 \$t(\"提交成功\") 形式里），got:\n$result",
+            (result.contains("\"提交成功\"") && !result.contains("\$t(\"提交成功\"")) ||
+                (result.contains("'提交成功'") && !result.contains("\$t('提交成功')"))
         )
         assertFalse(
-            "硬编码 '提交失败' 不应残留",
-            result.contains("\"提交失败\"") || result.contains("'提交失败'")
+            "硬编码 '提交失败' 不应残留裸字符串（应包在 \$t(\"提交失败\") 形式里），got:\n$result",
+            (result.contains("\"提交失败\"") && !result.contains("\$t(\"提交失败\"")) ||
+                (result.contains("'提交失败'") && !result.contains("\$t('提交失败')"))
+        )
+        assertFalse(
+            "硬编码 '好消息' 不应残留裸字符串，got:\n$result",
+            (result.contains("\"好消息\"") && !result.contains("\$t(\"好消息\"")) ||
+                (result.contains("'好消息'") && !result.contains("\$t('好消息')"))
+        )
+        assertFalse(
+            "硬编码 '坏消息' 不应残留裸字符串，got:\n$result",
+            (result.contains("\"坏消息\"") && !result.contains("\$t(\"坏消息\"")) ||
+                (result.contains("'坏消息'") && !result.contains("\$t('坏消息')"))
         )
         assertTrue(
-            "至少应有一个三元表达式保留 `${'`'}ok ? ${'$'}t(...)${'`'}` 结构",
+            "至少应有一个三元表达式保留 `${'`'}ok ? ${'$'}t(...)${'`'}` 结构，got:\n$result",
             result.contains("?") && result.contains(":") && result.contains("${'$'}t(")
         )
     }

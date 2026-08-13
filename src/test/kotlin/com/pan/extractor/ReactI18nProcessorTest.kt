@@ -1506,9 +1506,27 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "commonProps.tip 不应残留硬编码 \"鼠标悬停提示\"，got:\n$result",
             result.contains("tip: \"鼠标悬停提示\"")
         )
+        // NOTE：如果替换形式是 $t("首页") → result.contains("\"首页\"") 会 TRUE，所以判断是
+        //       「如果命中字符串字面量，就必须紧邻包在 $t( 调用里」，而不是字面量 0 出现。
         assertFalse(
-            "tabs 数组中 '首页' 不应残留硬编码，got:\n$result",
-            result.contains("\"首页\"") || result.contains("'首页'")
+            "tabs 数组中 '首页' 不应残留裸硬编码（应包进 \$t(\"首页\") 形式），got:\n$result",
+            (result.contains("\"首页\"") && !result.contains("\$t(\"首页\"")) ||
+                (result.contains("'首页'") && !result.contains("\$t('首页')"))
+        )
+        assertFalse(
+            "tabs 数组中 '发现页' 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"发现页\"") && !result.contains("\$t(\"发现页\"")) ||
+                (result.contains("'发现页'") && !result.contains("\$t('发现页')"))
+        )
+        assertFalse(
+            "tabs 数组中 '我的' 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"我的\"") && !result.contains("\$t(\"我的\"")) ||
+                (result.contains("'我的'") && !result.contains("\$t('我的')"))
+        )
+        assertFalse(
+            "Button label=\"主按钮\" 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"主按钮\"") && !result.contains("\$t(\"主按钮\"")) ||
+                (result.contains("'主按钮'") && !result.contains("\$t('主按钮')"))
         )
     }
 
