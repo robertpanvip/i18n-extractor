@@ -2443,7 +2443,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val result = file.text
         assertTrue(
             "import { useI18n } from 'vue-i18n' 原本就有 → 不能因为 import 冲突被删（保持 1 次），got:\n$result",
-            result.count("import { useI18n } from 'vue-i18n'".toRegex()) == 1
+            "import \\{ useI18n \\} from 'vue-i18n'".toRegex().findAll(result).count() == 1
         )
         assertTrue(
             "actionLabels 对象尾部 as const 应保留，got:\n$result",

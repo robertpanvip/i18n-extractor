@@ -1037,8 +1037,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
             result.contains("\"提交失败\"") || result.contains("'提交失败'")
         )
         assertTrue(
-            "至少应有一个三元表达式保留 \`ok ? \$t(...)\` 结构",
-            result.contains("?") && result.contains(":") && result.contains("\$t(")
+            "至少应有一个三元表达式保留 `${'`'}ok ? ${'$'}t(...)${'`'}` 结构",
+            result.contains("?") && result.contains(":") && result.contains("${'$'}t(")
         )
     }
 
@@ -1055,12 +1055,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
             """
             const title = "操作提示"
             function toast(userName: string, code: number) {
-              return $BQ欢迎回来，$DOL{userName}，您的验证码是 $DOL{code}$BQ
+              return ${BQ}欢迎回来，${DOL}{userName}，您的验证码是 ${DOL}{code}${BQ}
             }
             function toast2(user: string, step: number, total: number) {
-              return $BQ用户$DOL{user}：第$DOL{step}/$DOL{total}步$BQ
+              return ${BQ}用户${DOL}{user}：第${DOL}{step}/${DOL}{total}步${BQ}
             }
-            const welcome = $BQ欢迎回来$BQ
+            const welcome = ${BQ}欢迎回来${BQ}
             """.trimIndent()
         )
 
@@ -1081,7 +1081,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
         val result = file.text
         assertFalse(
-            "toast 原始硬编码 \`欢迎回来，\${userName}，您的验证码是 \${code}\` 不应残留",
+            "toast 原始硬编码 `${'`'}欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}${'`'}` 不应残留",
             result.contains("欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}")
         )
     }
