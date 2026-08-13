@@ -788,33 +788,6 @@ object Util {
         return result.toList()
     }
 
-    /**
-     * 计算"从 filePsi（一个脚本文件所在 VFile）到 constantsVFile（常量库）"的相对 import specifier，
-     * 格式符合 ESM `import ... from 'X'` 规则：
-     * - 自动去掉 .ts / .tsx / .js 后缀（TS/JS bundler 惯例）；
-     * - 同级目录加 `./` 前缀；
-     * - `../` 层级按需要生成；
-     * - 失败返回 null，调用方应退化为命名空间导入或提示用户。
-     */
-    fun computeRelativeImportPath(from: VirtualFile?, to: VirtualFile?): String? {
-        if (from == null || to == null) return null
-        try {
-            val fromParentPath = File(from.path).parentFile?.toPath() ?: return null
-            val toPath = File(to.path).toPath()
-            val relative = toPath.relativeToOrNull(fromParentPath) ?: return null
-            var spec = relative.toString()
-                .replace('\\', '/')
-                .removeSuffix(".ts")
-                .removeSuffix(".tsx")
-                .removeSuffix(".js")
-                .removeSuffix("/index")
-            if (!spec.startsWith(".")) spec = "./$spec"
-            return spec
-        } catch (_: Throwable) {
-            return null
-        }
-    }
-
     private fun globToRegex(glob: String): Regex {
         var pattern = glob.replace("\\", "/")
 
