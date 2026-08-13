@@ -40,22 +40,13 @@ jobs:
 
 
       - name: Run tests
-        run: |
-          # 1) 先确认 Gradle/JDK 版本（防止 gradle/actions 启动失败但吞了 stderr）
-          echo "=== JAVA_HOME = $JAVA_HOME ==="
-          echo "=== which gradle = $(which gradle) ==="
-          gradle --version
-          echo "=== Gradle 配置阶段 stdout/stderr 完整打印（--console=plain + --stacktrace）==="
-          # 用 bash -x 追踪到具体哪条命令挂；用 --warning-mode=all 打印 warning
-          bash -xc "gradle test --no-daemon --no-configuration-cache --console=plain --stacktrace --warning-mode=all"
+        run: gradle test --no-daemon --no-configuration-cache
         continue-on-error: true
         id: test_first
 
       - name: Retry tests on failure
         if: steps.test_first.outcome == 'failure'
-        run: |
-          echo "=== 第一次失败，重试：追加 --info 打更多日志（classpath / task 启动）==="
-          bash -xc "gradle test --no-daemon --no-configuration-cache --console=plain --stacktrace --info --warning-mode=all"
+        run: gradle test --no-daemon --no-configuration-cache
 
 
       - name: Upload test report
