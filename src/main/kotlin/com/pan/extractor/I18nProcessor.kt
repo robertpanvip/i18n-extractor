@@ -25,6 +25,7 @@ import com.intellij.notification.Notifications
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.*
 import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
@@ -48,7 +49,19 @@ class I18nProcessor(
         val containingFile: VirtualFile?,
         val isVue: Boolean,
         val isReact: Boolean,
-    )
+    ) {
+        /** 给 Dialog/摘要展示用（只读，失败返回 1）。ReadAction 内调用更安全。 */
+        val startLine: Int
+            get() = runCatching {
+                val e = replaceRootPointer.element ?: return@runCatching 1
+                val file = containingFile ?: return@runCatching 1
+                val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                    .getDocument(file) ?: return@runCatching 1
+                val range = e.textRange ?: return@runCatching 1
+                if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
+                doc.getLineNumber(range.startOffset) + 1
+            }.getOrDefault(1)
+    }
 
     /** 原来的 effects/change 包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
     class CollectedChange(val siteId: String, private val runnable: () -> Unit) {

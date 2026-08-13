@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.util.*
 import javax.swing.*
 import javax.swing.table.DefaultTableModel
 
@@ -182,7 +183,13 @@ class ExtractedStringsDialog(
             preferredSize = Dimension(960, 220)
         }
 
-        val hint = JLabel("<html>提示：① 表中每行默认勾选，可去掉不想要的合并；②『骨架key』可编辑，对应翻译资源 JSON 里的键；③ OK 后，被选中的 site 会重写成 <code>$t('骨架{N0}', { N0: $t('差异') })</code> 形式。</html>")
+        val hint = JLabel(
+            "<html>" +
+            "提示：① 表中每行默认勾选，可去掉不想要的合并；" +
+            "② 『骨架key』可编辑，对应翻译资源 JSON 里的键；" +
+            "③ OK 后，被选中的 site 会重写成 <code>\$t('骨架{N0}', { N0: \$t('差异') })</code> 形式。" +
+            "</html>"
+        )
 
         root.add(hint, BorderLayout.NORTH)
         root.add(affixPane, BorderLayout.CENTER)

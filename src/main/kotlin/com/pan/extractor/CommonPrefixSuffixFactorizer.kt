@@ -130,7 +130,9 @@ object CommonPrefixSuffixFactorizer {
                         p = longestCommonPrefix(p, c.second.first)
                         s = longestCommonSuffix(s, c.second.second)
                     }
-                    Triple(p, s, anchor.originalMessage.substring(p.length, anchor.originalMessage.length - s.length.takeIf { it > 0 }?.let { anchor.originalMessage.length - it } ?: anchor.originalMessage.length))
+                    val a = anchor.originalMessage
+                    val end = if (s.isNotEmpty()) a.length - s.length else a.length
+                    Triple(p, s, a.substring(p.length, end))
                 }
                 // 如果交集前后缀太短（合并过程中缩小），放弃这个分组
                 val pLen = maxPrefix.codePointCount(0, maxPrefix.length)
@@ -164,9 +166,13 @@ object CommonPrefixSuffixFactorizer {
     private fun longestCommonAffix(a: String, b: String): Triple<String, String, String>? {
         if (a === b) return null
         val p = longestCommonPrefix(a, b)
-        val s = longestCommonSuffix(a.substring(p.length), b.substring(p.length))
-        val aa = a.substring(p.length, a.length - s.length.takeIf { it > 0 }?.let { a.length - it } ?: a.length)
-        val bb = b.substring(p.length, b.length - s.length.takeIf { it > 0 }?.let { b.length - it } ?: b.length)
+        val aTail = a.substring(p.length)
+        val bTail = b.substring(p.length)
+        val s = longestCommonSuffix(aTail, bTail)
+        val endA = if (s.isNotEmpty()) a.length - s.length else a.length
+        val endB = if (s.isNotEmpty()) b.length - s.length else b.length
+        val aa = a.substring(p.length, endA)
+        val bb = b.substring(p.length, endB)
         if (aa.isEmpty() || bb.isEmpty()) return null   // 其中一句没有差异（完全重合的情况另处理）
         return Triple(p, s, aa)
     }
