@@ -1576,6 +1576,36 @@ class I18nProcessor(
     }
 
     /**
+     * 纯文本构建 t() 调用，不依赖当前 processor 已探测到的 tFunctionName 注入上下文，
+     * 直接按 isVue/isReact 生成最稳妥形式（和现有探测一致：都用 \$t，减少复杂度）。
+     * - 若 skeletonKeyOverride 非空：key 用这个覆盖而不是 message.trim()（供合并骨架时使用）
+     */
+    fun buildTExprForRawText(
+        message: String,
+        paramsObject: String,
+        isVue: Boolean,
+        isReact: Boolean,
+        skeletonKeyOverride: String? = null,
+    ): String {
+        val trimmedMsg = message.trim()
+        val escapedMsg = if (trimmedMsg.contains("\n")) {
+            trimmedMsg.replace("`", "\\`")
+        } else {
+            trimmedMsg.replace("'", "\\'")
+        }
+        val quote = if (trimmedMsg.contains("\n")) "`" else "'"
+        val key = skeletonKeyOverride?.trim()?.ifBlank { null } ?: trimmedMsg
+        // 用户要求：统一用 \$t 减少复杂度（不需要再切 i18n.global.t / i18n.t 长形式）
+        val fn = "\$t"
+        val keyEscaped = if (key.contains("\n")) key.replace("`", "\\`") else key.replace("'", "\\'")
+        return if (paramsObject.replace(" ", "") == "{}") {
+            "$fn($quote$keyEscaped$quote)"
+        } else {
+            "$fn($quote$keyEscaped$quote, $paramsObject)"
+        }
+    }
+
+    /**
      * 从模板字面量文本直接构建嵌套 $t() 表达式（纯文本处理，不操作 PSI）
      * - Vue：资源文件占位 `{N0}`，调用侧 `{ N0: val }` 无引号键
      * - React：资源文件占位 `{{0}}`，调用侧 `{ "0": val }` 保持原样
