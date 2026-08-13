@@ -1,4 +1,3 @@
-// 完整可直接 cp 覆盖 /workspace/build.gradle.kts 的模板（本地测试临时用，测完 git checkout 回滚）
 import org.jetbrains.intellij.platform.gradle.models.Coordinates
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
@@ -12,58 +11,29 @@ group = "com.pan"
 version = "1.5.0"
 
 repositories {
-    maven {
-        name = "JetbrainsSnapshots"
-        url = uri("https://www.jetbrains.com/intellij-repository/snapshots")
-        content {
-            includeGroupByRegex("""com\.jetbrains\.intellij.*""")
-            includeGroupByRegex("""com\.jetbrains.*""")
-            includeGroupByRegex("""org\.jetbrains\.intellij.*""")
-            includeGroupByRegex("""bundled.*""")
-        }
-    }
-    maven {
-        name = "JetbrainsReleases"
-        url = uri("https://www.jetbrains.com/intellij-repository/releases")
-        content {
-            includeGroupByRegex("""com\.jetbrains\.intellij.*""")
-            includeGroupByRegex("""com\.jetbrains.*""")
-            includeGroupByRegex("""org\.jetbrains\.intellij.*""")
-            includeGroupByRegex("""bundled.*""")
-        }
-    }
-    maven {
-        name = "TencentMavenPublic"
-        url = uri("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
-        content {
-            excludeGroupByRegex("""com\.jetbrains\.intellij.*""")
-            excludeGroupByRegex("""com\.jetbrains.*""")
-            excludeGroupByRegex("""org\.jetbrains\.intellij.*""")
-            excludeGroupByRegex("""bundled.*""")
-        }
-    }
-    mavenCentral {
-        content {
-            excludeGroupByRegex("""com\.jetbrains\.intellij.*""")
-            excludeGroupByRegex("""com\.jetbrains.*""")
-            excludeGroupByRegex("""org\.jetbrains\.intellij.*""")
-            excludeGroupByRegex("""bundled.*""")
-        }
-    }
+    mavenCentral()
     intellijPlatform {
         defaultRepositories()
     }
 }
 
+// Configure Gradle IntelliJ Plugin
+// Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
-        intellijIdeaUltimate("2025.2.6.3") {
+
+        intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
             useInstaller = false
         }
+
         testFramework(TestFrameworkType.Plugin.XML)
         testFramework(TestFrameworkType.Plugin.JavaScript)
         testFramework(TestFrameworkType.Platform)
+
+        // Add necessary plugin dependencies for compilation here, example:
+        // bundledPlugin("com.intellij.java")
+
         bundledPlugins(
             "JavaScript",
             "org.jetbrains.plugins.vue",
@@ -77,35 +47,47 @@ dependencies {
             "JSIntentionPowerPack",
             "JavaScriptDebugger",
         )
+
         platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
         platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
     }
-    testImplementation("junit:junit:4.13.2")
+
+    testImplementation(
+        "junit:junit:4.13.2"
+    )
 }
 
 intellijPlatform {
     pluginConfiguration {
-        ideaVersion { sinceBuild = "251" }
-        changeNotes = "1.2.0 fix: optimize comment extraction logic"
+        ideaVersion {
+            sinceBuild = "251"
+        }
+
+        changeNotes = """
+             1.2.0 fix: optimize comment extraction logic
+    """.trimIndent()
     }
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
 }
 
 tasks {
     test {
         useJUnit()
-        maxHeapSize = "2g"
-        jvmArgs("-Xmx2g", "-XX:MaxMetaspaceSize=512m")
+
         testLogging {
             showStandardStreams = true
-            events("passed", "failed", "skipped", "standardOut", "standardError")
+            events(
+                "passed",
+                "failed",
+                "skipped",
+                "standardOut",
+                "standardError"
+            )
         }
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
