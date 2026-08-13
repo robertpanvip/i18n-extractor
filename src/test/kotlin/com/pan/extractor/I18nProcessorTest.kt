@@ -1048,17 +1048,19 @@ class I18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     fun testTypeScriptTemplateLiteralNamedInterpolation() {
+        val BQ = '`'
+        val DOL = '$'
         val file = myFixture.configureByText(
             "toast.ts",
             """
             const title = "操作提示"
             function toast(userName: string, code: number) {
-              return \`欢迎回来，\${userName}，您的验证码是 \${code}\`
+              return $BQ欢迎回来，$DOL{userName}，您的验证码是 $DOL{code}$BQ
             }
             function toast2(user: string, step: number, total: number) {
-              return \`用户\${user}：第\${step}/\${total}步\`
+              return $BQ用户$DOL{user}：第$DOL{step}/$DOL{total}步$BQ
             }
-            const welcome = \`欢迎回来\`
+            const welcome = $BQ欢迎回来$BQ
             """.trimIndent()
         )
 
@@ -1080,7 +1082,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val result = file.text
         assertFalse(
             "toast 原始硬编码 \`欢迎回来，\${userName}，您的验证码是 \${code}\` 不应残留",
-            result.contains("\$ {userName}，您的验证码是")
+            result.contains("欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}")
         )
     }
 

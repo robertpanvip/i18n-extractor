@@ -2256,9 +2256,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
                 onSubmit() {
                   const ok = confirm("确定要提交吗？")
                   if (ok) {
-                    this.$message?.success("提交成功提示")
+                    this.${'$'}message?.success("提交成功提示")
                   } else {
-                    this.$message?.warning("已取消提交")
+                    this.${'$'}message?.warning("已取消提交")
                   }
                 },
               },
