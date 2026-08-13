@@ -430,6 +430,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
     /**
      * 测试 {{ `模板字符串${变量}` }} 模板字符串表达式
+     *
+     * vue-i18n 不支持 `$t('xxx{0}', { '0': val })` 这种数字键对象写法，
+     * 所以占位符必须改成命名形式 {N0}，调用侧参数对象写成 { N0: val }（标识符 key）。
      */
     fun testVueTemplateLiteralExpression() {
         val file = configureFile(
@@ -445,7 +448,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '你好{0}' but got: ${processor.extractedStrings}",
+            "extractedStrings should contain '你好{N0}'（vue-i18n 不支持 {0} 数字占位）but got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{N0}")
+        )
+        // 不应当出现旧格式 {0}
+        assertFalse(
+            "extractedStrings 不应出现 Vue 不支持的数字占位 {0}, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("你好{0}")
         )
     }
@@ -670,8 +678,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * 测试 Vue 项目中 .tsx 文件的模板字面量插值应使用 Vue 的单括号格式 {key}
-     * 而不是 React 的双括号格式 {{key}}
+     * 测试 Vue 项目中 .tsx 文件的模板字面量插值应使用 Vue 的单括号格式 {N0}
+     * 而不是 React 的双括号格式 {{0}}，且 Vue 不能用纯数字占位（vue-i18n 不认）
      */
     fun testVueProjectTsxTemplateLiteralUsesSingleBrace() {
         val file = configureFile(
@@ -692,14 +700,23 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        // 模板字面量变量插值应使用 Vue 的单括号格式 {0}，而不是 React 的 {{0}}
+        // 模板字面量变量插值应使用 Vue 的单括号命名格式 {N0}，而不是 React 的 {{0}}
+        // vue-i18n 不支持 `$t('{0}', { '0': val })`，必须是命名占位 + 标识符 key。
         assertTrue(
-            "Vue 项目中 TSX 的模板字面量插值应使用单括号格式 {0}, got: ${processor.extractedStrings}",
+            "Vue 项目中 TSX 的模板字面量插值应使用单括号命名格式 {N0}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{N0}")
+        )
+        assertFalse(
+            "Vue 项目中 TSX 的模板字面量插值不应使用 Vue 不支持的数字占位 {0}, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("你好{0}")
         )
         assertFalse(
             "Vue 项目中 TSX 的模板字面量插值不应使用双括号格式 {{0}}, got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("你好{{0}}")
+        )
+        assertFalse(
+            "Vue 项目中 TSX 的模板字面量插值不应使用双括号命名格式 {{N0}}, got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("你好{{N0}}")
         )
     }
 
@@ -1883,11 +1900,10 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "label 的「欢迎使用」应替换为 \$t('欢迎使用'), got:\n$result",
             result.contains("\$t('欢迎使用')")
         )
-        // 「greeting + "你好世界"」是拼接 → 工具会把它整合成带 {0} 占位的消息，
-        // 调用形式是 \$t('{0}你好世界', { "0": greeting }) —— 所以断言改为查
-        // "你好世界" 出现在 \$t 参数字符串里即可。
+        // 「greeting + "你好世界"」是拼接 → 工具会把它整合成带 {N0} 命名占位的消息，
+        // 调用形式是 \$t('{N0}你好世界', { N0: greeting })（Vue 不支持数字键对象写法）
         assertTrue(
-            "sayHello 里「你好世界」应进入 \$t() 的翻译字符串（拼接时会带 {0} 占位，如 \$t('{0}你好世界', …)）, got:\n$result",
+            "sayHello 里「你好世界」应进入 \$t() 的翻译字符串（拼接时 Vue 会带 {N0} 命名占位，如 \$t('{N0}你好世界', …)）, got:\n$result",
             "(?s)\\\$t\\s*\\([^)]*你好世界".toRegex().containsMatchIn(result)
         )
     }
@@ -2000,6 +2016,94 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "<div> 里的「你好世界」纯文本应翻译, got:\n$result",
             "你好世界" !in result.replace("\\s+".toRegex(), "")
                 || "(?s)\\\$t\\s*\\([^)]*你好世界".toRegex().containsMatchIn(result)
+        )
+    }
+
+    // ============================================================
+    // Vue 占位符：{N0}/{N1} + 调用侧 { N0: val, N1: val } 标识符 key
+    // ============================================================
+
+    /**
+     * 用户报告的重大 bug：vue-i18n 不支持数字占位符 + 字符串 key 对象
+     *   $t("默认模型配置{0}子", { '0': "123" })   ← vue-i18n 不认这个形式
+     * 要改成：
+     *   $t("默认模型配置{N0}子", { N0: "123" })   ← 命名占位 + 标识符 key
+     *
+     * 覆盖场景：
+     *   - TS 拼接：greeting + "默认模型配置" + suffix   → {N0}…{N1} + { N0: greeting, N1: suffix }
+     *   - 模板字面量：`默认模型配置${model}子${suffix}`  → 同上
+     *   - 调用侧第二个参数不能出现 `"0":` / `'0':`（字符串数字键一律不能用）
+     */
+    fun testVuePlaceholderUsesNamedN0NotNumericKey() {
+        val file = configureFile(
+            "src/placeholder.ts",
+            """
+            function demo(greeting: string, model: string, suffix: string): string {
+                // 1. 字符串拼接 → 多占位符
+                const a = greeting + "默认模型配置" + suffix
+                // 2. 模板字面量 → 多占位符
+                const b = ${'`'}默认模型配置${'$'}{model}子${'$'}{suffix}${'`'}
+                return a + b
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // extractedStrings 是 Map<key,value>，下面断言 value 侧（实际提取的 i18n 文本）
+        val extractedValues: Collection<String> = processor.extractedStrings.values
+
+        // ① 资源文案：不能出现数字占位 {0}、{1}、{2}
+        val numericPlaceholderPattern = Regex("\\{\\d+\\}")
+        val badMsg = extractedValues.filter { numericPlaceholderPattern.containsMatchIn(it) }
+        assertTrue(
+            "提取出的资源文案不能包含 Vue 不支持的数字占位 {0}/{1}…，违规项: $badMsg\n全部: ${processor.extractedStrings}",
+            badMsg.isEmpty()
+        )
+
+        // ② 资源文案：应当包含命名占位 {N0}、{N1}
+        assertTrue(
+            "应提取出带 {N0} 命名占位的拼接/模板文案，got: ${processor.extractedStrings}",
+            extractedValues.any { it.contains("{N0}") }
+        )
+        assertTrue(
+            "多占位符的拼接/模板文案里应出现 {N1}，got: ${processor.extractedStrings}",
+            extractedValues.any { it.contains("{N1}") }
+        )
+
+        // ③ run 后检查替换结果：不能出现 `"0":` / `'0':` / `"1":` / `'1':`
+        // 注意：这里必须用 processor.execute()（内部包 CommandProcessor + WriteCommandAction），
+        //       直接 processor.run() 会报 PSI 写操作线程越权。
+        processor.execute()
+        val result = file.text
+        val stringNumKeyPattern = Regex("""['"]\d+['"]\s*:""")
+        val badMatches = stringNumKeyPattern.findAll(result).map { it.value }.toList()
+        assertTrue(
+            "Vue 调用侧参数对象不允许字符串数字键（['\"0'\"…]:）vue-i18n 不认。违规匹配: $badMatches\n全文:\n$result",
+            badMatches.isEmpty()
+        )
+
+        // ④ run 后必须出现：{ N0: greeting … } / "{ N0: model … }" 这种标识符 key
+        assertTrue(
+            "Vue 调用侧参数对象应使用标识符 key（N0:、N1:，不带引号），got:\n$result",
+            Regex("""\{\s*N0\s*:""").containsMatchIn(result)
+                && Regex("""N1\s*:""").containsMatchIn(result)
+        )
+
+        // ⑤ 新文案开头不应出现错误的数字占位
+        assertFalse(
+            "提取文案里不应包含「默认模型配置{0}子{N1}」（应当是 N 前缀命名占位），got: ${processor.extractedStrings}",
+            extractedValues.contains("默认模型配置{0}子{N1}")
+        )
+        assertTrue(
+            "提取文案里应包含「默认模型配置{N0}子{N1}」（模板字面量两变量插值），got: ${processor.extractedStrings}",
+            extractedValues.contains("默认模型配置{N0}子{N1}")
+        )
+        // 拼接形式：greeting + "默认模型配置" + suffix → {N0}默认模型配置{N1}
+        assertTrue(
+            "字符串拼接的两占位拼接场景应提取出「{N0}默认模型配置{N1}」，got: ${processor.extractedStrings}",
+            extractedValues.contains("{N0}默认模型配置{N1}")
         )
     }
 }

@@ -1398,6 +1398,14 @@ class I18nProcessor(
 
     private val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
+    /**
+     * Vue-i18n 不支持数字占位符 `$t('默认模型配置{0}子', { '0': "123" })` 这种
+     * 数字 key 对象写法，必须用命名插值。统一把 Vue 侧占位符改成 {N0} / {N1} ...，
+     * 调用侧参数对象写成 `{ N0: "123" }`（无引号，合法 JS identifier）。
+     * React i18next 的 `{{0}}` + `{ "0": val }` 原生支持，保持不变。
+     */
+    private fun vuePlaceholderKey(rawIndex: Int): String = "N$rawIndex"
+
     fun collectJSStringTemplate(
         raw: String,
         changes: MutableList<() -> Unit>,
@@ -1408,26 +1416,25 @@ class I18nProcessor(
         if (isInIndexKeyPosition(ele)) return
         // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
         val content = raw.substring(1, raw.length - 1)
-        val params = LinkedHashMap<String, String>() // 索引 -> ${}内的原始内容
-        var index = 0 // 按出现顺序分配数字索引
+        // key：当 Vue 时为 N0/N1/...；React 时为 "0"/"1"/...（和之前保持一致）
+        val params = LinkedHashMap<String, String>()
+        var index = 0
 
-        // 步骤2：替换所有${任意内容}为${数字索引}，并收集${}内的原始内容
+        // 步骤2：替换所有${任意内容}为占位符，并收集${}内的原始内容
         // react-i18next 使用 {{key}} 双括号插值，vue-i18n 使用 {key} 单括号插值
-        // 通过 JSX 上下文 / react 导入 / package.json 依赖综合判断
         val isReact = Util.isReact(ele)
         val message = templateVarRegex.replace(content) { match ->
-            // 提取${}内的原始内容（groupValues[1] 是正则括号内的匹配结果）
             val innerContent = match.groupValues[1].trim()
             // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
             val pureString = extractPureStringContent(innerContent)
             if (pureString != null) {
                 return@replace pureString
             }
-            // 按顺序分配索引
-            val key = index.toString()
+            // 按顺序分配索引：Vue → 命名占位符 N0/N1/...；React → 数字索引 0/1/...
+            val key = if (isReact) index.toString() else vuePlaceholderKey(index)
             params[key] = innerContent
             index++
-            // 替换为${数字索引}，React 使用双括号，Vue 使用单括号
+            // 占位符写入 message：Vue {N0}，React {{0}}
             if (isReact) "{{$key}}" else "{$key}"
         }
 
@@ -1441,16 +1448,22 @@ class I18nProcessor(
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
-        // 步骤5：预生成 paramsObject（在 lambda 外执行，确保 extractedStrings 在 collect 阶段就完整）
+        // 步骤5：预生成 paramsObject
+        // - Vue：{ N0: xxx, N1: yyy } （无引号，写 identifier key，避免 '0' 字符串键 vue-i18n 不认）
+        // - React：{ "0": xxx, "1": yyy } （与之前一致）
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
         ) { (k, v) ->
-            // 模板字面量带插值：递归构建嵌套 $t() 调用（同时注册到 extractedStrings）
-            if (isJSTemplateLiteral(v)) {
-                "\"$k\": ${buildNestedTExprFromText(v, ele)}"
+            val paramExpr = if (isJSTemplateLiteral(v)) {
+                buildNestedTExprFromText(v, ele)
             } else {
-                "\"$k\": $v"
+                v
+            }
+            if (isReact) {
+                "\"$k\": $paramExpr"
+            } else {
+                "$k: $paramExpr"
             }
         }
 
@@ -1490,7 +1503,8 @@ class I18nProcessor(
 
     /**
      * 从模板字面量文本直接构建嵌套 $t() 表达式（纯文本处理，不操作 PSI）
-     * 例如: `中国${1}` -> $t('中国{0}', { "0": 1 })
+     * - Vue：资源文件占位 `{N0}`，调用侧 `{ N0: val }` 无引号键
+     * - React：资源文件占位 `{{0}}`，调用侧 `{ "0": val }` 保持原样
      */
     fun buildNestedTExprFromText(raw: String, ele: PsiElement): String {
         val content = raw.substring(1, raw.length - 1)
@@ -1502,7 +1516,8 @@ class I18nProcessor(
             val innerContent = match.groupValues[1].trim()
             val pureString = extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
-            val key = index.toString()
+            // Vue → N0/N1/...；React → "0"/"1"/...
+            val key = if (isReact) index.toString() else vuePlaceholderKey(index)
             params[key] = innerContent
             index++
             if (isReact) "{{$key}}" else "{$key}"
@@ -1511,10 +1526,13 @@ class I18nProcessor(
         val key = generateKey(message, ele)
         extractedStrings.putIfAbsent(key, message)
 
+        // 参数对象：Vue 用标识符 key；React 保持字符串 key
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
-        ) { (k, v) -> "\"$k\": $v" }
+        ) { (k, v) ->
+            if (isReact) "\"$k\": $v" else "$k: $v"
+        }
 
         return buildTFunctionExpr(message.trim(), paramsObject)
     }
