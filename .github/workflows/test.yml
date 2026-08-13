@@ -35,18 +35,19 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: 9.0.0
+        # 注：不写死 gradle-version → 自动读取工作目录 gradle-wrapper.properties（9.4.1），
+        # 避免"Setup Gradle 9.0.0 CLI 然后 gradle test 直接跑"导致版本不兼容、exit 1 无日志。
+        # 参考：https://github.com/gradle/actions/tree/main/setup-gradle#use-the-gradle-wrapper
 
 
       - name: Run tests
-        run: gradle test --no-daemon --no-configuration-cache
+        run: ./gradlew test --no-daemon --no-configuration-cache
         continue-on-error: true
         id: test_first
 
       - name: Retry tests on failure
         if: steps.test_first.outcome == 'failure'
-        run: gradle test --no-daemon --no-configuration-cache
+        run: ./gradlew test --no-daemon --no-configuration-cache
 
 
       - name: Upload test report
