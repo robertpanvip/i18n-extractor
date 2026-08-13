@@ -1813,4 +1813,82 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             !(hasUseI18n && hasGlobalConst)
         )
     }
+
+    // ============================================================
+    // 成员变量/索引访问是中文 → 不翻译（用户需求：P['中文'] 这种不翻译）
+    // ============================================================
+
+    /**
+     * 基础：P['中文']、obj['姓名']、arr['第1个'] 都不翻译；
+     * 同一文件中的"普通字符串中文"仍然翻译。
+     */
+    fun testVueTsChineseIndexedAccessKeyNotTranslated() {
+        val file = configureFile(
+            "src/utils/PureTool.ts",
+            """
+            const P: Record<string, string> = {};
+            const obj = { data: { items: [] as any[] } };
+            const arr = [1, 2, 3];
+
+            // ====== 索引/键是中文：**不翻译**（用户强需求） ======
+            const a = P['中文'];
+            const b = P['姓' + '名'];                  // 拼接成中文键也不翻译
+            const c = obj['姓名'];
+            const d = obj.data['出生日期'];
+            const e = arr[0] ? arr['第1个'] : '占位';
+            const f = obj['map'].get('key1')['中文值键'];
+            const g = P[('中文括号')];                  // 括号包一层键也不翻译
+
+            // ====== 这些仍然要翻译（普通中文字符串/变量） ======
+            const label = "欢迎使用";                     // ✅ 普通赋值中文 → 翻译
+            function sayHello(greeting: string) {
+                return greeting + "你好世界";            // ✅ 拼接中文 → 翻译
+            }
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        // 必须至少有 2 个被提取（label、sayHello 里的拼接中文），
+        // 索引键相关的 7 处（P['中文']/拼接/obj/嵌套/arr/链式/括号）绝对不能出现在 extractedStrings
+        assertTrue(
+            "至少有 2 个普通中文要被提取（label=欢迎使用 / 你好世界）, got size=${p.extractedStrings.size}",
+            p.extractedStrings.size >= 2
+        )
+        val allValues = p.extractedStrings.values.toSet()
+        val notAllowed = setOf(
+            "中文", "姓", "名", "姓名", "出生日期", "第1个", "中文值键", "中文括号"
+        )
+        val leaked = notAllowed.filter { allValues.contains(it) }
+        assertTrue(
+            "索引/键访问里的中文不应进入 extractedStrings, 泄露的 key=$leaked\nvalues=$allValues",
+            leaked.isEmpty()
+        )
+        p.execute()
+        val result = file.text
+        // 原始「索引访问的中文 key」必须仍然原样存在（不能被替换成 $t()）
+        listOf("P['中文']", "obj['姓名']", "obj.data['出生日期']",
+            "arr['第1个']", "['中文值键']", "P[('中文括号')]").forEach { snippet ->
+            assertTrue(
+                "文件里应仍保留原文 snippet=$snippet（说明索引中文没被翻译）, got:\n$result",
+                result.contains(snippet)
+            )
+        }
+        // 拼接中文的两部分也不能变成 $t（因为整体在 index 表达式里）
+        assertTrue(
+            "P['姓' + '名'] 作为键的两部分中文都不应被翻译, got:\n$result",
+            result.contains("P['姓'") && result.contains("'名'")
+        )
+        // 普通中文 → 替换成 $t
+        assertTrue(
+            "label 的「欢迎使用」应替换为 \$t('欢迎使用'), got:\n$result",
+            result.contains("\$t('欢迎使用')")
+        )
+        // 「greeting + "你好世界"」是拼接 → 工具会把它整合成带 {0} 占位的消息，
+        // 调用形式是 \$t('{0}你好世界', { "0": greeting }) —— 所以断言改为查
+        // "你好世界" 出现在 \$t 参数字符串里即可。
+        assertTrue(
+            "sayHello 里「你好世界」应进入 \$t() 的翻译字符串（拼接时会带 {0} 占位，如 \$t('{0}你好世界', …)）, got:\n$result",
+            "(?s)\\\$t\\s*\\([^)]*你好世界".toRegex().containsMatchIn(result)
+        )
+    }
 }

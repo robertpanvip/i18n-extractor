@@ -1404,6 +1404,8 @@ class I18nProcessor(
         ele: PsiElement,
         creator: (String) -> String
     ) {
+        // 模板字符串形式的索引键（例：P[`中文键${suffix}`]）→ 也不翻译
+        if (isInIndexKeyPosition(ele)) return
         // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
         val content = raw.substring(1, raw.length - 1)
         val params = LinkedHashMap<String, String>() // 索引 -> ${}内的原始内容
@@ -1652,6 +1654,22 @@ class I18nProcessor(
     private val processedEnums = mutableSetOf<PsiElement>()
 
     // ───────────────────────────────────────────────
+    // 跳过：成员变量/数组下标/index 访问中的中文 key（用户需求）
+    //   例：P['中文']、obj['姓名']、arr['第1个']、P['姓' + '名']、P[`中文键${suffix}`]
+    //   只要元素在 JSIndexedPropertyAccessExpression 的 indexExpr 子树里（即 [...] 方括号内）
+    //   就跳过 —— 并且严格只跳过"index 表达式内部"，不要误把 qualifier 里的中文也砍掉。
+    // ───────────────────────────────────────────────
+    private fun isInIndexKeyPosition(ele: PsiElement): Boolean {
+        // PsiTreeUtil.isAncestor(ancestor, descendant, strict=false)：允许
+        //   ancestor == descendant（非严格祖先）。因为 indexExpr 经常就是
+        //   ele 自己（P['中文'] 里 indexExpr 直接就是 '中文' 字面量）。
+        val indexed = PsiTreeUtil.getParentOfType(ele, JSIndexedPropertyAccessExpression::class.java)
+            ?: return false
+        val ie = indexed.indexExpression ?: return false
+        return PsiTreeUtil.isAncestor(ie, ele, false)
+    }
+
+    // ───────────────────────────────────────────────
 // JS 字符串字面量
 // ───────────────────────────────────────────────
     private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
@@ -1686,6 +1704,11 @@ class I18nProcessor(
         if (ele.parent is JSIndexedPropertyAccessExpression && ele.prevSibling.prevSibling is JSReferenceExpression && ele.prevSibling.prevSibling.reference?.resolve() is TypeScriptEnum) {
             return
         }
+
+        // 通用：索引/键访问里的中文 key 一律不翻译
+        //   例：P['中文']、obj['姓名']、P[("中文括号")]、嵌套链式 arr[0]['第1个']
+        //   （拼接、模板字符串形式的索引在下面的对应入口也做了同样防御）
+        if (isInIndexKeyPosition(ele)) return
 
         if (ele.parent is TypeScriptEnumField) {
             if (processedEnums.add(ele.parent.parent)) {
@@ -1732,6 +1755,8 @@ class I18nProcessor(
 // JS 字符串拼接 (+)
 // ───────────────────────────────────────────────
     private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<() -> Unit>) {
+        // 拼接形式的索引键（例：P['姓' + '名']）→ 也不翻译
+        if (isInIndexKeyPosition(binaryExpr)) return
         if (binaryExpr.parent is JSBinaryExpression) {
             return
         }
