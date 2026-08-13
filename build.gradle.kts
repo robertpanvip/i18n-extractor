@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.3.7"
+version = "1.5.0"
 
 repositories {
     maven {
