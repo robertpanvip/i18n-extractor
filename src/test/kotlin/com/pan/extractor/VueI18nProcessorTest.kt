@@ -2106,4 +2106,352 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             extractedValues.contains("{N0}默认模型配置{N1}")
         )
     }
+
+    // ============================================================
+    // Vue SFC · lang=ts 方向 1：<script setup lang="ts"> + ref/computed
+    //   场景：ref('中文') / computed(() => 中文) / defineProps<Props>()
+    //         + 模板 + script 同用 lang=ts
+    // ============================================================
+
+    fun testVueSfcScriptSetupLangTsRefPropsComputedChineseExtracts() {
+        val file = configureFile(
+            "src/components/UserPanel.vue",
+            """
+            <template>
+              <section class="user-panel">
+                <h2>{{ header }}</h2>
+                <p class="hint">{{ hintTip }}</p>
+                <input :placeholder="placeholderText" />
+                <div v-if="loggedIn">
+                  欢迎回来，{{ userName }}
+                </div>
+                <button>{{ confirmLabel }}</button>
+              </section>
+            </template>
+
+            <script setup lang="ts">
+            import { computed, ref } from 'vue'
+            import type { UserInfo } from '@/types'
+
+            interface Props {
+              userName: string
+              userInfo?: UserInfo
+              mode?: 'edit' | 'view'
+            }
+            const props = withDefaults(defineProps<Props>(), {
+              mode: 'view',
+            })
+
+            const loggedIn = ref(true)
+            // 中文默认值应该提取
+            const header = ref("个人信息面板")
+            const placeholderText = ref("请输入昵称")
+            // 三元 + 中文
+            const confirmLabel = computed(() => props.mode === 'edit' ? "保存修改" : "关闭面板")
+            const hintTip = computed<string>(() => {
+              const prefix = "提示："
+              return props.mode === 'edit'
+                ? prefix + "修改后记得点保存按钮"
+                : prefix + "点击右上角编辑按钮开始修改"
+            })
+            </script>
+
+            <style scoped lang="scss">
+            .user-panel { color: red; }
+            </style>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // should extract:
+        //   header 个人信息面板 / placeholderText 请输入昵称 /
+        //   confirmLabel 保存修改 + 关闭面板 / hint 前缀 "提示：" / "修改后记得点保存按钮" / "点击右上角编辑按钮开始修改"
+        //   模板中 欢迎回来，... 那一段也是中文
+        assertTrue(
+            "ref('个人信息面板') 应提取",
+            processor.extractedStrings.containsValue("个人信息面板")
+        )
+        assertTrue(
+            "ref('请输入昵称') 应提取",
+            processor.extractedStrings.containsValue("请输入昵称")
+        )
+        assertTrue(
+            "confirmLabel 保存修改 应提取",
+            processor.extractedStrings.containsValue("保存修改")
+        )
+        assertTrue(
+            "confirmLabel 关闭面板 应提取",
+            processor.extractedStrings.containsValue("关闭面板")
+        )
+        assertTrue(
+            "hintTip 提示： 应提取",
+            processor.extractedStrings.containsValue("提示：")
+        )
+        assertTrue(
+            "hintTip 修改后记得点保存按钮 应提取",
+            processor.extractedStrings.containsValue("修改后记得点保存按钮")
+        )
+        assertTrue(
+            "hintTip 点击右上角编辑按钮开始修改 应提取",
+            processor.extractedStrings.containsValue("点击右上角编辑按钮开始修改")
+        )
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "<script setup lang=\"ts\"> 头部应保持（不要误删 lang=ts），got:\n$result",
+            result.contains("<script setup lang=\"ts\">")
+        )
+        assertTrue(
+            "withDefaults / defineProps<Props>() 调用应保持，不要误删类型语法",
+            result.contains("withDefaults(defineProps<Props>()")
+        )
+        assertFalse(
+            "ref('个人信息面板') 不应残留硬编码，got:\n$result",
+            result.contains("ref(\"个人信息面板\")") || result.contains("ref('个人信息面板')")
+        )
+        assertTrue(
+            "Vue 替换结果中应包含命名 \$t('保存修改')（短写 / 或命名调用都行），got:\n$result",
+            result.contains("保存修改") && result.contains("\$t(")
+        )
+    }
+
+    // ============================================================
+    // Vue SFC · lang=ts 方向 2：旧写法 <script lang="ts"> + defineComponent
+    //   场景：Options API / defineComponent 时，data() 返回中文默认值、
+    //         computed 对象方法、created/hook 中用到的中文。
+    // ============================================================
+
+    fun testVueSfcScriptLangTsDefineComponentOptionsChineseExtracts() {
+        val file = configureFile(
+            "src/views/OldView.vue",
+            """
+            <template>
+              <div class="page">
+                <h1>{{ title }}</h1>
+                <p>{{ intro }}</p>
+                <button @click="onSubmit">{{ submitText }}</button>
+              </div>
+            </template>
+
+            <script lang="ts">
+            import { defineComponent } from 'vue'
+
+            export default defineComponent({
+              name: 'OldView',
+              data() {
+                return {
+                  title: "旧版标题",
+                  intro: "这是一个使用 defineComponent 的旧写法组件",
+                  submitText: "立即提交",
+                }
+              },
+              computed: {
+                welcomeMsg(): string {
+                  return "欢迎来到旧页面"
+                },
+              },
+              methods: {
+                onSubmit() {
+                  const ok = confirm("确定要提交吗？")
+                  if (ok) {
+                    this.$message?.success("提交成功提示")
+                  } else {
+                    this.$message?.warning("已取消提交")
+                  }
+                },
+              },
+              created() {
+                const init = "初始化旧版视图"
+                console.log(init)
+              },
+            })
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("data 旧版标题 应提取", processor.extractedStrings.containsValue("旧版标题"))
+        assertTrue("data intro 应提取", processor.extractedStrings.containsValue("这是一个使用 defineComponent 的旧写法组件"))
+        assertTrue("data submitText 立即提交 应提取", processor.extractedStrings.containsValue("立即提交"))
+        assertTrue("computed welcomeMsg 欢迎来到旧页面 应提取", processor.extractedStrings.containsValue("欢迎来到旧页面"))
+        assertTrue("methods onSubmit confirm 确定要提交吗？ 应提取", processor.extractedStrings.containsValue("确定要提交吗？"))
+        assertTrue("success 消息 提交成功提示 应提取", processor.extractedStrings.containsValue("提交成功提示"))
+        assertTrue("warning 消息 已取消提交 应提取", processor.extractedStrings.containsValue("已取消提交"))
+        assertTrue("created 初始化旧版视图 应提取", processor.extractedStrings.containsValue("初始化旧版视图"))
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "<script lang=\"ts\"> 声明应保留（不要把 lang=ts 去掉），got:\n$result",
+            result.contains("<script lang=\"ts\">")
+        )
+        assertTrue(
+            "defineComponent({...}) 结构应保留",
+            result.contains("defineComponent({")
+        )
+        assertFalse(
+            "data() title: \"旧版标题\" 不应残留硬编码双引号",
+            result.contains("title: \"旧版标题\"")
+        )
+    }
+
+    // ============================================================
+    // Vue SFC · lang=ts 方向 3：template + lang=ts 动态绑定
+    //     场景：:placeholder="'中文'" / :aria-label="tip || '默认提示'" /
+    //           v-html="'中文描述'" / v-show="a && '显示标签中文' as any"
+    // ============================================================
+
+    fun testVueSfcTemplateLangTsDynamicBindChineseExtracts() {
+        val file = configureFile(
+            "src/components/SearchBox.vue",
+            """
+            <template>
+              <div class="search">
+                <input
+                  type="text"
+                  :placeholder="searchPlaceholder"
+                  :aria-label="'搜索输入框'"
+                  :data-hint="'输入最少3位'"
+                />
+                <select :title="'切换搜索方式'">
+                  <option v-for="m in modes" :key="m.key" :label="m.label">{{ m.label }}</option>
+                </select>
+                <div v-show="(showHint as boolean) && true">
+                  <p v-html="'提示：支持按姓名/手机号搜索，回车确认'"></p>
+                </div>
+                <button :aria-disabled="isInvalid">
+                  {{ isInvalid ? "无效输入" : "确认搜索" }}
+                </button>
+              </div>
+            </template>
+
+            <script setup lang="ts">
+            import { ref, computed } from 'vue'
+            const searchPlaceholder = ref("请输入关键字搜索")
+            const showHint = ref<boolean | string>(true as const)
+            const isInvalid = computed(() => false)
+            const modes = [
+              { key: 'name', label: "按姓名搜索" },
+              { key: 'phone', label: "按手机号搜索" },
+              { key: 'id', label: "按工号搜索" },
+            ] as const
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("searchPlaceholder 请输入关键字搜索 应提取", processor.extractedStrings.containsValue("请输入关键字搜索"))
+        assertTrue(":aria-label='搜索输入框' 应提取", processor.extractedStrings.containsValue("搜索输入框"))
+        assertTrue(":data-hint='输入最少3位' 应提取", processor.extractedStrings.containsValue("输入最少3位"))
+        assertTrue("select :title='切换搜索方式' 应提取", processor.extractedStrings.containsValue("切换搜索方式"))
+        assertTrue("v-html 提示：支持按姓名/手机号搜索... 应提取", processor.extractedStrings.containsValue("提示：支持按姓名/手机号搜索，回车确认"))
+        assertTrue("button 无效输入 分支应提取", processor.extractedStrings.containsValue("无效输入"))
+        assertTrue("button 确认搜索 分支应提取", processor.extractedStrings.containsValue("确认搜索"))
+        assertTrue("modes[0] 按姓名搜索 应提取", processor.extractedStrings.containsValue("按姓名搜索"))
+        assertTrue("modes[1] 按手机号搜索 应提取", processor.extractedStrings.containsValue("按手机号搜索"))
+        assertTrue("modes[2] 按工号搜索 应提取", processor.extractedStrings.containsValue("按工号搜索"))
+
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            ":aria-label=\"'搜索输入框'\" 这种硬编码字符串属性绑定不应残留（应替换成 :aria-label=\"\$t('...')\"）",
+            result.contains(":aria-label=\"'搜索输入框'\"") || result.contains(":aria-label='\"搜索输入框\"'")
+        )
+        assertTrue(
+            "modes 数组尾部 as const 应保留（不要把数组尾部语法删掉），got:\n$result",
+            result.contains("as const")
+        )
+        assertTrue(
+            "替换后应包含命名占位 Vue \$t('请输入关键字搜索') 调用",
+            result.contains("\$t(") && result.contains("请输入关键字搜索")
+        )
+    }
+
+    // ============================================================
+    // Vue SFC · lang=ts 方向 4：自定义 hook（在 src/**.ts）+ 命名参数
+    //           + 返回对象包含中文方法名 key / 中文默认值
+    //   现有已覆盖 useXxx() 名字的 hook，但没覆盖「hook 参数用解构 + 默认值中文」
+    //   以及「返回对象里用 computed 包中文 ref 的 as const」场景
+    // ============================================================
+
+    fun testVueCustomHookTsLangWithDefaultChineseAndAsConstReturn() {
+        val file = configureFile(
+            "src/composables/useLoadingHint.ts",
+            """
+            import { computed, ref } from 'vue'
+            import { useI18n } from 'vue-i18n'
+
+            export type LoadingMode = 'spinner' | 'skeleton' | 'progress'
+
+            interface Options {
+              mode?: LoadingMode
+              okText?: string
+              cancelText?: string
+            }
+
+            export function useLoadingHint({
+              mode = 'spinner',
+              okText = "立即执行",
+              cancelText = "再想想",
+            }: Options = {}) {
+              const loading = ref(false)
+              const prefix = ref("提示：")
+              const msg = computed(() => prefix.value + "正在执行操作，请稍候")
+
+              const actionLabels = {
+                OK: okText,
+                cancel: cancelText,
+                retry: "重试一下",
+              } as const
+
+              function start() {
+                loading.value = true
+              }
+              function stop(ok: boolean) {
+                loading.value = false
+                const tip = ok ? "操作完成提示" : "操作已取消提示"
+                return tip
+              }
+              return {
+                loading,
+                msg,
+                start,
+                stop,
+                actionLabels,
+                mode,
+              }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("okText 默认 立即执行 应提取", processor.extractedStrings.containsValue("立即执行"))
+        assertTrue("cancelText 默认 再想想 应提取", processor.extractedStrings.containsValue("再想想"))
+        assertTrue("prefix 提示： 应提取", processor.extractedStrings.containsValue("提示："))
+        assertTrue("msg computed 正在执行操作，请稍候 应提取", processor.extractedStrings.containsValue("正在执行操作，请稍候"))
+        assertTrue("actionLabels.retry 重试一下 应提取", processor.extractedStrings.containsValue("重试一下"))
+        assertTrue("stop(ok=true) 操作完成提示 应提取", processor.extractedStrings.containsValue("操作完成提示"))
+        assertTrue("stop(ok=false) 操作已取消提示 应提取", processor.extractedStrings.containsValue("操作已取消提示"))
+        assertEquals(7, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "import { useI18n } from 'vue-i18n' 原本就有 → 不能因为 import 冲突被删（保持 1 次），got:\n$result",
+            result.count("import { useI18n } from 'vue-i18n'".toRegex()) == 1
+        )
+        assertTrue(
+            "actionLabels 对象尾部 as const 应保留，got:\n$result",
+            result.contains("as const")
+        )
+        assertFalse(
+            "okText = \"立即执行\" 硬编码不应残留（应为 \$t('立即执行')）",
+            result.contains("okText = \"立即执行\"") || result.contains("okText = '立即执行'")
+        )
+    }
 }
