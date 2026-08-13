@@ -1658,6 +1658,10 @@ class I18nProcessor(
     //   例：P['中文']、obj['姓名']、arr['第1个']、P['姓' + '名']、P[`中文键${suffix}`]
     //   只要元素在 JSIndexedPropertyAccessExpression 的 indexExpr 子树里（即 [...] 方括号内）
     //   就跳过 —— 并且严格只跳过"index 表达式内部"，不要误把 qualifier 里的中文也砍掉。
+    //
+    //   NOTE: JSIndexedPropertyAccessExpression 在 Vue SFC 指令表达式（如 v-if="obj['已启用']"）
+    //   的原生 PSI 中也会被正确构造（见 VueJSEmbeddedExpressionContentImpl 内的 JS…Impl 子树），
+    //   因此"标准路径"在 Vue SFC 场景下同样适用。
     // ───────────────────────────────────────────────
     private fun isInIndexKeyPosition(ele: PsiElement): Boolean {
         // PsiTreeUtil.isAncestor(ancestor, descendant, strict=false)：允许
@@ -1673,6 +1677,11 @@ class I18nProcessor(
 // JS 字符串字面量
 // ───────────────────────────────────────────────
     private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
+
+        // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
+        // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
+        // Vue SFC 指令表达式 v-if="P['中文']" 中注入的 JS 字符串字面量都要被跳过。
+        if (isInIndexKeyPosition(ele)) return
 
         val raw = ele.text
 
