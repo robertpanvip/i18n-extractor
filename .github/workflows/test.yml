@@ -35,19 +35,27 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
-        # 注：不写死 gradle-version → 自动读取工作目录 gradle-wrapper.properties（9.4.1），
-        # 避免"Setup Gradle 9.0.0 CLI 然后 gradle test 直接跑"导致版本不兼容、exit 1 无日志。
-        # 参考：https://github.com/gradle/actions/tree/main/setup-gradle#use-the-gradle-wrapper
+        with:
+          gradle-version: 9.0.0
 
 
       - name: Run tests
-        run: ./gradlew test --no-daemon --no-configuration-cache
+        run: |
+          # 1) 先确认 Gradle/JDK 版本（防止 gradle/actions 启动失败但吞了 stderr）
+          echo "=== JAVA_HOME = $JAVA_HOME ==="
+          echo "=== which gradle = $(which gradle) ==="
+          gradle --version
+          echo "=== Gradle 配置阶段 stdout/stderr 完整打印（--console=plain + --stacktrace）==="
+          # 用 bash -x 追踪到具体哪条命令挂；用 --warning-mode=all 打印 warning
+          bash -xc "gradle test --no-daemon --no-configuration-cache --console=plain --stacktrace --warning-mode=all"
         continue-on-error: true
         id: test_first
 
       - name: Retry tests on failure
         if: steps.test_first.outcome == 'failure'
-        run: ./gradlew test --no-daemon --no-configuration-cache
+        run: |
+          echo "=== 第一次失败，重试：追加 --info 打更多日志（classpath / task 启动）==="
+          bash -xc "gradle test --no-daemon --no-configuration-cache --console=plain --stacktrace --info --warning-mode=all"
 
 
       - name: Upload test report
