@@ -4,7 +4,7 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "1.9.24"
-    id("org.jetbrains.intellij.platform") version "1.17.4"
+    id("org.jetbrains.intellij.platform") version "2.1.0"
 }
 
 group = "com.pan"
@@ -12,27 +12,42 @@ version = "1.5.0"
 
 repositories {
     mavenCentral()
+    gradlePluginPortal()
+    maven("https://www.jetbrains.com/intellij-repository/releases") {
+        name = "JetbrainsReleases"
+        content {
+            includeGroupByRegex("""com\.jetbrains\.intellij.*""")
+            includeGroupByRegex("""com\.jetbrains.*""")
+            includeGroupByRegex("""org\.jetbrains\.intellij.*""")
+            includeGroupByRegex("""bundled.*""")
+        }
+    }
+    maven("https://www.jetbrains.com/intellij-repository/snapshots") {
+        name = "JetbrainsSnapshots"
+        content {
+            includeGroupByRegex("""com\.jetbrains\.intellij.*""")
+            includeGroupByRegex("""com\.jetbrains.*""")
+            includeGroupByRegex("""org\.jetbrains\.intellij.*""")
+            includeGroupByRegex("""bundled.*""")
+        }
+    }
+    maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/") { name = "TencentMavenPublic" }
+    maven("https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/") { name = "TencentGradlePlugins" }
     intellijPlatform {
         defaultRepositories()
     }
 }
 
 // Configure Gradle IntelliJ Plugin
-// Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
         jetbrainsRuntime()
 
-        intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
-            useInstaller = false
-        }
+        intellijIdeaUltimate("2025.1", useInstaller = false)
 
-        testFramework(TestFrameworkType.Plugin.XML)
+        testFramework(TestFrameworkType.Bundled)
         testFramework(TestFrameworkType.Plugin.JavaScript)
         testFramework(TestFrameworkType.Platform)
-
-        // Add necessary plugin dependencies for compilation here, example:
-        // bundledPlugin("com.intellij.java")
 
         bundledPlugins(
             "JavaScript",
@@ -52,9 +67,7 @@ dependencies {
         platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
     }
 
-    testImplementation(
-        "junit:junit:4.13.2"
-    )
+    testImplementation("junit:junit:4.13.2")
 }
 
 intellijPlatform {
