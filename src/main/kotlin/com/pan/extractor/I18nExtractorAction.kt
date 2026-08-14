@@ -78,18 +78,25 @@ class I18nExtractorAction : AnAction() {
 
         if (mode == Util.OutputMode.OVERWRITE_ENTRY_FILE && entryVf != null) {
             val ext = entryVf.extension?.lowercase()
-            val newText: String? = try {
+            val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
-                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)
-                    "ts", "tsx", "js", "jsx" -> Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)
+                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                    "ts", "tsx", "js", "jsx" -> {
+                        // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
+                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson)
+                        if (spread != null) spread
+                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                    }
                     else -> null
                 }
             } catch (t: Throwable) {
                 null
             }
-            if (newText != null) {
+            if (writes != null) {
                 try {
-                    Util.writeVirtualFileText(entryVf, newText)
+                    for ((vf, newText) in writes) {
+                        Util.writeVirtualFileText(vf, newText)
+                    }
                     return OutputResult(
                         copiedToClipboard = false,
                         overwroteEntryFile = true,

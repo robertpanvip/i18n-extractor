@@ -1818,6 +1818,173 @@ object Util {
     }
 
     // ==========================================================================
+    // Spread 引用解析：export default { ...common } 中 common 指向同文件 const 或本地 import。
+    // 支持：同文件 const 对象、本地 import 的 TS/JS、本地 import 的 JSON（非 node_modules）。
+    // 路由规则：新 key 写进 spread 变量指向的文件，入口对象只更新自身已有的 key。
+    // ==========================================================================
+    private data class ResolvedSpreadTarget(
+        val file: VirtualFile,        // 要写入的文件（同文件 const 时 = 入口文件）
+        val objRangeInText: IntRange, // 目标对象在 file 文本中的区间（JSON 目标占位 0..-1）
+        val existingKeys: Map<String, Any?>,
+        val kind: String              // "const" | "ts" | "json"
+    )
+
+    /** 从对象字面量文本中提取顶层 spread 变量名（如 `...common` → common）。 */
+    private fun findSpreadVarNames(objBody: String): List<String> {
+        val body = objBody.trim().let {
+            if (it.startsWith("{") && it.endsWith("}")) it.substring(1, it.length - 1) else it
+        }
+        return splitTopLevelProperties(body).mapNotNull { prop ->
+            val t = prop.trim()
+            if (t.startsWith("...")) {
+                val name = t.removePrefix("...").trim()
+                if (name.matches(Regex("""[A-Za-z_$][\w$]*"""))) name else null
+            } else null
+        }
+    }
+
+    private fun readVirtualFileText(project: Project?, vf: VirtualFile): String? {
+        return try {
+            if (project != null) {
+                val psi = ApplicationManager.getApplication().runReadAction<PsiFile?> {
+                    PsiManager.getInstance(project).findFile(vf)
+                }
+                if (psi != null) psi.text else String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+            } else {
+                String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** 解析一个 spread 变量指向的目标对象。 */
+    private fun resolveSpreadTarget(
+        project: Project,
+        entryVf: VirtualFile,
+        entryText: String,
+        varName: String
+    ): ResolvedSpreadTarget? {
+        // 1) 同文件 const：const <varName> = { ... }
+        val constRe = Regex("""\bconst\s+${Regex.escape(varName)}\s*=\s*\{""")
+        val cm = constRe.find(entryText)
+        if (cm != null) {
+            val braceIdx = cm.value.indexOfLast { it == '{' } + cm.range.first
+            val objEnd = findBalancedCloseBrace(entryText, braceIdx) ?: return null
+            val objBody = entryText.substring(braceIdx, objEnd)
+            return ResolvedSpreadTarget(entryVf, braceIdx until objEnd, parseObjectLiteralBody(objBody), "const")
+        }
+        // 2) import：import <varName> from '...' 或 import <varName>, { ... } from '...'
+        val importRe = Regex("""import\s+(${Regex.escape(varName)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
+        val im = importRe.find(entryText) ?: return null
+        val targetVf = resolveLocalImportFile(entryVf, im.groupValues[2]) ?: return null
+        val targetText = readVirtualFileText(project, targetVf) ?: return null
+        return when (targetVf.extension?.lowercase()) {
+            "json" -> {
+                val root = try { JsonParser.parseString(targetText) } catch (_: Exception) { return null }
+                val existing = jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))
+                ResolvedSpreadTarget(targetVf, 0 until 0, existing, "json")
+            }
+            else -> {
+                val info = parseTsExportedObject(targetText) ?: return null
+                ResolvedSpreadTarget(targetVf, info.objectRange, info.staticKV, "ts")
+            }
+        }
+    }
+
+    /** 把相对/绝对导入路径解析为本地 VirtualFile；裸包名（node_modules）等非本地返回 null。 */
+    private fun resolveLocalImportFile(fromFile: VirtualFile, spec: String): VirtualFile? {
+        val clean = spec.trim()
+        if (clean.isEmpty() || !(clean.startsWith(".") || clean.startsWith("/"))) return null
+        val base = fromFile.parent ?: return null
+        val rel = if (clean.startsWith("/")) clean.removePrefix("/") else clean
+        val candidates = buildList {
+            add(rel)
+            if (!rel.substringAfterLast('/').contains('.')) {
+                add("$rel.ts"); add("$rel.tsx"); add("$rel.js"); add("$rel.jsx"); add("$rel.json")
+            }
+            add("$rel/index.ts"); add("$rel/index.js"); add("$rel/index.json")
+        }.distinct()
+        for (p in candidates) {
+            val vf = base.findFileByRelativePath(p) ?: continue
+            if (vf.isDirectory) continue
+            return vf
+        }
+        return null
+    }
+
+    /** 计算某个对象区间在给定文本中的新文本（基于合并后的扁平 key）。 */
+    private fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>): String {
+        val merged = mergeFlatIntoNested(existing, newFlat)
+        val oldObjBody = text.substring(objRange.first, objRange.endExclusive)
+        return regenerateObjectLiteralBody(oldObjBody, merged)
+    }
+
+    /** 对同一文本应用多处区间替换（按区间从后往前，避免偏移漂移）。 */
+    private fun applyRangeReplacements(text: String, replacements: List<Pair<IntRange, String>>): String {
+        var result = text
+        for ((range, newText) in replacements.sortedByDescending { it.first.last }) {
+            result = result.substring(0, range.first) + newText + result.substring(range.endExclusive)
+        }
+        return result
+    }
+
+    /**
+     * 识别入口 TS/JS 对象里的 spread 引用（如 `...common`），并把新 key 路由写到该变量指向的文件。
+     * 返回要写盘的 (VirtualFile, newText) 列表；返回 null 表示未处理（无 spread 或无可解析目标），
+     * 调用方应回退到 regenerateTsFileWithNewJson。
+     */
+    fun regenerateTsFileWithSpreadRouting(
+        project: Project,
+        entryVf: VirtualFile,
+        newFlatJson: Map<String, String>
+    ): List<Pair<VirtualFile, String>>? {
+        val entryText = readVirtualFileText(project, entryVf) ?: return null
+        val entryInfo = parseTsExportedObject(entryText) ?: return null
+        val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.endExclusive)
+        val spreadVars = findSpreadVarNames(entryObjBody)
+        if (spreadVars.isEmpty()) return null
+        val entryKeys = entryInfo.staticKV.keys.toSet()
+
+        for (varName in spreadVars) {
+            val target = resolveSpreadTarget(project, entryVf, entryText, varName) ?: continue
+            val toEntry = newFlatJson.filterKeys { it in entryKeys }
+            val toTarget = newFlatJson.filterKeys { it !in entryKeys }
+            if (toTarget.isEmpty()) {
+                // 新 key 全在条目里 → 只重写条目
+                return listOf(entryVf to applyRangeReplacements(entryText, listOf(
+                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
+                )))
+            }
+            if (target.kind == "json") {
+                val newTarget = regenerateJsonFileWithNewJson(target.file, toTarget) ?: return null
+                val newEntry = applyRangeReplacements(entryText, listOf(
+                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
+                ))
+                return listOf(entryVf to newEntry, target.file to newTarget)
+            }
+            // const / ts：可能同文件（const），也可能不同文件（import）
+            val sameFile = target.file.path == entryVf.path
+            val targetText = if (sameFile) entryText else readVirtualFileText(project, target.file) ?: return null
+            val newEntry = applyRangeReplacements(entryText, listOf(
+                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
+            ))
+            if (sameFile) {
+                val combined = applyRangeReplacements(entryText, listOf(
+                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV),
+                    target.objRangeInText to newRegionText(targetText, target.objRangeInText, toTarget, target.existingKeys)
+                ))
+                return listOf(entryVf to combined)
+            }
+            val newTarget = applyRangeReplacements(targetText, listOf(
+                target.objRangeInText to newRegionText(targetText, target.objRangeInText, toTarget, target.existingKeys)
+            ))
+            return listOf(entryVf to newEntry, target.file to newTarget)
+        }
+        return null
+    }
+
+    // ==========================================================================
     // 把 VirtualFile 内容替换为新文本（Write 安全封装）。
     // 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
     // ==========================================================================
