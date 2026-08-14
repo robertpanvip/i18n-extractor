@@ -23,6 +23,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -958,7 +959,7 @@ object Util {
         // 1) 用户持久化的路径
         val stored = getStoredEntryPath(project)
         if (stored != null) {
-            val f = LocalFileSystem.getInstance().findFileByPath(stored)
+            val f = resolveStoredEntryPath(stored)
             if (f != null && f.isValid && !f.isDirectory) return f
         }
         val root = if (contextPsiFile != null) findProjectRoot(contextPsiFile) else {
@@ -1000,6 +1001,19 @@ object Util {
                 vf
             } else null
         }
+    }
+
+    /**
+     * 解析用户持久化的入口路径。
+     * 兼容：
+     *   · URL（含 file://、temp:// 等 scheme）→ 用 VirtualFileManager 解析（任意 VFS 均可命中）
+     *   · 真实本地路径 → LocalFileSystem（先 refresh 以识别新建文件）
+     */
+    private fun resolveStoredEntryPath(stored: String): VirtualFile? {
+        if (stored.contains("://")) {
+            VirtualFileManager.getInstance().findFileByUrl(stored)?.let { return it }
+        }
+        return LocalFileSystem.getInstance().refreshAndFindFileByPath(stored)
     }
 
     /**
@@ -1685,7 +1699,9 @@ object Util {
                 val isBlock = valuePart.startsWith("{") || valuePart.startsWith("[")
                 val blockEnd = if (isBlock) findBlockEndIndex(lines, idx) else idx
                 for (j in idx + 1..blockEnd) consumed[j] = true
-                if (isBlock && key in mergedKeys) {
+                val blockText = lines.subList(idx, blockEnd + 1).joinToString("\n")
+                val staticBlock = isBlock && !containsNonStaticCollection(blockText)
+                if (staticBlock && key in mergedKeys) {
                     val keyColonInRow = indent.length + colonPosInTrimmed
                     val keyRowPrefix = rawLine.substring(0, keyColonInRow + 1)  // "  key:"
                     blockRewrites.add(BlockRewrite(idx, blockEnd, key, keyRowPrefix))
@@ -1831,8 +1847,8 @@ object Util {
                 (t.startsWith("\"") && t.endsWith("\"")) ||
                 (t.startsWith("'") && t.endsWith("'")) ||
                 (t.startsWith("`") && t.endsWith("`") && !t.substring(1, t.length - 1).contains("\${")) ||
-                (t.startsWith("{") && matchingBraces(t)) ||
-                (t.startsWith("[") && matchingBraces(t)))
+                (t.startsWith("{") && matchingBraces(t) && !containsNonStaticCollection(t)) ||
+                (t.startsWith("[") && matchingBraces(t) && !containsNonStaticCollection(t)))
         return isPrimitive
     }
 
@@ -1855,6 +1871,46 @@ object Util {
             }
         }
         return depth == 0
+    }
+
+    /**
+     * 判断一个对象/数组字面量是否含非静态内容（spread `...`、方法、引用、调用等）。
+     * 含则返回 true：这类值重新生成会丢失原始表达式（如 `sub: { ...deeper }` 会被压成 `{}`），
+     * 必须原样保留，不能走静态重写。
+     */
+    private fun containsNonStaticCollection(text: String): Boolean {
+        var v = text.trim().trimEnd(',')
+        v = if (v.endsWith("as const")) v.removeSuffix("as const").trim() else v
+        var t = v
+        // 带 key 前缀的整行/整块（如 "sub: { ...deeper }"）→ 剥掉 key 部分只分析值，
+        // 否则会被误判为静态而把动态表达式压成 {}（见 testTargetWithOwnNestedSpreadIsResilient）。
+        val colon = findTopLevelColon(t)
+        if (colon != null) {
+            val valPart = t.substring(colon + 1).trim()
+            if (valPart.startsWith("{") || valPart.startsWith("[")) t = valPart
+        }
+        // 不是 {…}/{…} 集合字面量（如纯字符串/数字/引用）→ 不在此判定范围，按静态处理
+        val inner = if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]")))
+            t.substring(1, t.length - 1) else return false
+        if (inner.isBlank()) return false
+        for (prop in splitTopLevelProperties(inner)) {
+            val p = prop.trim()
+            if (p.startsWith("...")) return true
+            val colon = findTopLevelColon(p)
+            if (colon == null) {
+                // 数组元素：无冒号不是对象属性
+                if (!isSingleLineStaticValue(p)) return true
+                continue
+            }
+            val pv = p.substring(colon + 1).trim()
+            if (pv.startsWith("...") || pv.contains("=>") || pv.startsWith("function")) return true
+            if (pv.startsWith("{") || pv.startsWith("[")) {
+                if (containsNonStaticCollection(pv)) return true
+            } else if (!isSingleLineStaticValue(pv)) {
+                return true
+            }
+        }
+        return false
     }
 
     /** 把静态值渲染为 TS 字面量字符串（value 段）。nestingDepth = 当前对象嵌套层数（1 = 对象首层级）。 */

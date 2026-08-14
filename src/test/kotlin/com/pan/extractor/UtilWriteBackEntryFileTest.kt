@@ -204,4 +204,77 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
             found.path.endsWith("config/resources/zh-cn.ts")
         )
     }
+
+    // ─────────────────────────────────────────
+    // 探测边界：持久化路径优先 / 无配置时全项目兜底 / locale 配置优先于 zh 风味 key
+    // ─────────────────────────────────────────
+
+    /** 用户持久化的路径应优先于预设目录扫描。 */
+    fun testPersistedEntryPathTakesPriority() {
+        myFixture.addFileToProject("package.json", "{}")
+        // 预设目录里有一个 zh.ts（步骤 2 本会命中）
+        createEntry("src/locales/zh.ts", "export default { '首页': '首页' }")
+        // 用户上次手动选择并持久化了一个非预设目录的 json 入口
+        createEntry("src/messages/zh-CN.json", "{}")
+        // 生产里 persistEntryPathIfNeeded 存 entryVf 的标识（真实项目为 file:// 路径）；
+        // addFileToProject 的 VirtualFile.path 是 temp:// 虚拟裸路径（LocalFileSystem 无法解析），
+        // 用 .url（含 scheme）持久化，使 resolveStoredEntryPath 能在任意 VFS 命中。
+        val persistedReal = myFixture.findFileInTempDir("src/messages/zh-CN.json")!!
+        Util.setStoredEntryPath(project, persistedReal.url)
+
+        try {
+            val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+            val found = Util.findChineseLocaleEntryFile(project, context)
+            assertNotNull("应命中持久化路径", found)
+            assertTrue(
+                "应优先返回持久化的 zh-CN.json，实际：${found!!.path}",
+                found.path.endsWith("messages/zh-CN.json")
+            )
+        } finally {
+            Util.setStoredEntryPath(project, null)
+        }
+    }
+
+    /** 无 createI18n / i18n.init 配置、预设目录也无 zh 时，走全项目 walk 兜底。 */
+    fun testNoConfigFallsBackToProjectWalk() {
+        myFixture.addFileToProject("package.json", "{}")
+        // 只有深层一个 zh 文件，不在预设目录，也没有任何 i18n 初始化文件
+        createEntry("src/config/messages/zh.ts", "export default { '首页': '首页' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("无配置时应通过全项目 walk 找到中文入口", found)
+        assertTrue(
+            "应命中深层 zh.ts，实际：${found!!.path}",
+            found.path.endsWith("config/messages/zh.ts")
+        )
+    }
+
+    /** locale/lng 配置对应引用应优先于 zh 风味 key（即使两者都存在）。 */
+    fun testLocaleConfigPreferredOverZhFlavorKey() {
+        myFixture.addFileToProject("package.json", "{}")
+        createEntry(
+            "src/locales/index.ts",
+            """
+            import zhHans from '../messages/zh-Hans'
+            import zhCN from '../messages/zh-CN'
+            export default createI18n({
+              legacy: false,
+              locale: 'zh-CN',
+              messages: { 'zh-Hans': zhHans, 'zh-CN': zhCN }
+            })
+            """.trimIndent()
+        )
+        // zh 文件放在非预设目录 src/messages，步骤 2（预设目录扫描）不会命中，强制走配置解析
+        createEntry("src/messages/zh-Hans.ts", "export default { '标题': '繁体' }")
+        createEntry("src/messages/zh-CN.ts", "export default { '标题': '简体' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("应通过配置探测到中文入口", found)
+        assertTrue(
+            "locale=zh-CN 时应优先命中 zh-CN.ts，实际：${found!!.path}",
+            found.path.endsWith("messages/zh-CN.ts")
+        )
+    }
 }

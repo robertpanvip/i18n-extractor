@@ -264,4 +264,120 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
         assertTrue("nav 内应包含 '退出'，result:\n$exportBlock", exportBlock.contains("'退出'"))
         assertTrue("应保留原有 '标题'，result:\n$exportBlock", exportBlock.contains("'标题'"))
     }
+
+    // ─────────────────────────────────────────
+    // 9) 多个 spread 变量（嵌套容器）分别路由到各自目标文件
+    // ─────────────────────────────────────────
+    fun testMultipleSpreadVarsRouteToSeparateFiles() {
+        createEntry(
+            "src/common.ts",
+            """
+            export default {
+              '标题': '标题',
+            }
+            """.trimIndent()
+        )
+        createEntry(
+            "src/extra.ts",
+            """
+            export default {
+              '菜单': '菜单',
+            }
+            """.trimIndent()
+        )
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            import common from './common'
+            import extra from './extra'
+            export default {
+              nav: { ...common },
+              menu: { ...extra },
+            }
+            """.trimIndent()
+        )
+        val newFlat = linkedMapOf("nav.退出" to "退出", "menu.设置" to "设置")
+        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        assertNotNull("应识别多个 spread 并分别路由", writes)
+
+        // nav 下的新 key 应路由到 common.ts
+        val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
+        assertNotNull("应写盘 common.ts", commonWrite)
+        assertTrue("common.ts 应包含 '退出'，result:\n${commonWrite!!.second}", commonWrite.second.contains("'退出'"))
+        // menu 下的新 key 应路由到 extra.ts
+        val extraWrite = writes.firstOrNull { it.first.path.endsWith("extra.ts") }
+        assertNotNull("应写盘 extra.ts", extraWrite)
+        assertTrue("extra.ts 应包含 '设置'，result:\n${extraWrite!!.second}", extraWrite.second.contains("'设置'"))
+        // 入口容器不应重复写入
+        val entryWrite = writes.firstOrNull { it.first.path.endsWith("zh.ts") }!!
+        val exportBlock = entryWrite.second.substringAfter("export default")
+        assertEquals("入口不应重复新增 nav/menu 下的 key，result:\n$exportBlock", 0,
+            countOccurrences(exportBlock, "'退出'") + countOccurrences(exportBlock, "'设置'"))
+    }
+
+    // ─────────────────────────────────────────
+    // 10) 同名变量：const 声明优先于 import（遮蔽），新 key 路由进 const 块而非 import 目标
+    // ─────────────────────────────────────────
+    fun testConstShadowsImportForSpread() {
+        createEntry(
+            "src/common.ts",
+            """
+            export default {
+              '标题': '标题',
+            }
+            """.trimIndent()
+        )
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            import common from './common'
+            const common = {
+              '本地': '本地',
+            }
+            export default {
+              ...common,
+            }
+            """.trimIndent()
+        )
+        val newFlat = linkedMapOf("退出" to "退出")
+        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        assertNotNull("应解析到 const 声明（优先于 import）", writes)
+        // 只写盘入口（const 与入口同文件），common.ts 不被写
+        assertEquals("const 遮蔽：只写盘入口一次", 1, writes!!.size)
+        assertEquals("写盘目标应为入口文件", entry.path, writes[0].first.path)
+        val constBlock = writes[0].second.substringAfter("const common").substringBefore("export default")
+        assertTrue("const 块应包含新 key '退出'，result:\n${writes[0].second}", constBlock.contains("'退出'"))
+    }
+
+    // ─────────────────────────────────────────
+    // 11) 韧性：目标文件自带嵌套 spread（无法继续解析）时不应崩溃，仍能正常路由
+    // ─────────────────────────────────────────
+    fun testTargetWithOwnNestedSpreadIsResilient() {
+        createEntry(
+            "src/common.ts",
+            """
+            export default {
+              '标题': '标题',
+              sub: { ...deeper },
+            }
+            """.trimIndent()
+        )
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            import common from './common'
+            export default {
+              ...common,
+            }
+            """.trimIndent()
+        )
+        val newFlat = linkedMapOf("退出" to "退出")
+        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        assertNotNull("目标自带嵌套 spread 不应崩溃", writes)
+        val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
+        assertNotNull("应写盘 common.ts", commonWrite)
+        assertTrue("common.ts 应包含新 key '退出'，result:\n${commonWrite!!.second}", commonWrite.second.contains("'退出'"))
+        // 原有 sub: { ...deeper } 动态表达式应原样保留（不崩溃、不丢失）
+        assertTrue("应保留 sub 动态表达式，result:\n${commonWrite.second}", commonWrite.second.contains("...deeper"))
+    }
 }

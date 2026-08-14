@@ -113,4 +113,95 @@ class CommonPrefixSuffixFactorizerTest {
         // 公共前后缀合并同样能产出 测试{N0}（前缀 测试）
         assertTrue("应存在公共前后缀候选，实际 affix=$affix", affix.any { it.skeleton == "测试{N0}" })
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 追加覆盖：占位提示 / 后缀-only / 数字边界 / 完全重复提示
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 无数字骨架、无公共前后缀、但站点数 >=2 时，应生成一条 selected=false 的
+     * "无可自动抽取"占位提示候选（factorize() 第 102-111 行），而不是空列表。
+     */
+    @Test
+    fun testNoMergePlaceholderShowWhenSitesTwo() {
+        val sites = siteRefs("苹果", "香蕉")
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+        assertTrue("无公共前后缀且无数字，应生成占位提示候选，实际 affix=$affix digit=$digit", digit.any { !it.selected && it.skeleton.contains("没有可自动抽取") })
+    }
+
+    /**
+     * 前后缀同时存在时应整体抽取。
+     * "测试1团结"/"测试2团结"：前缀 测试(2字) + 后缀 团结(2字) → 骨架 测试{N0}团结。
+     * 注意：算法按「首字符」分桶，跨首字符的纯后缀场景（如 桶A团结/箱B团结）不会合并，
+     * 因此这里用同首字符输入验证后缀确实被提取进骨架。
+     */
+    @Test
+    fun testSuffixOnlyGroupMerges() {
+        val sites = siteRefs("测试1团结", "测试2团结")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val group = affix.firstOrNull { it.skeleton == "测试{N0}团结" }
+        assertTrue("同首字符下后缀应被提取为骨架后缀，实际 affix=$affix", group != null)
+        assertEquals("测试{N0}团结", group!!.skeleton)
+    }
+
+    /**
+     * 数字抽取：小数（带小数点）应被识别为数字段，骨架保留其他汉字部分。
+     */
+    @Test
+    fun testDigitGroupSupportsDecimal() {
+        val sites = siteRefs("长度1.5米", "长度2.5米")
+        val (_, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val dg = digit.firstOrNull { it.skeleton == "长度{N0}米" }
+        assertTrue("应生成小数数字抽取候选，实际 digit=$digit", dg != null)
+        assertEquals(setOf("1.5", "2.5"), dg!!.perSites.map { it.digitValues.first() }.toSet())
+        assertTrue("纯小数数字差异应标记 allNonChinese=true", dg.perSites.all { it.allNonChinese })
+    }
+
+    /**
+     * 汉字不足 2 字的句子不参与数字抽取（"页1"/"页2" 只有 1 个汉字）。
+     */
+    @Test
+    fun testDigitGroupRequiresMinHanCount() {
+        val sites = siteRefs("页1", "页2")
+        val (_, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+        // 汉字不足 2 字不参与数字抽取；只允许出现 selected=false 的「无可抽取」占位提示
+        assertTrue("汉字不足 2 字不应生成可应用的数字抽取，实际 digit=$digit", digit.none { it.selected })
+    }
+
+    /**
+     * 数字段只在单句出现（entries.size < 2）时不生成抽取候选。
+     */
+    @Test
+    fun testDigitGroupRequiresAtLeastTwoSites() {
+        val sites = siteRefs("状态1")
+        val (_, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+        assertTrue("单站点数字不应抽取，实际 digit=$digit", digit.isEmpty())
+    }
+
+    /**
+     * 完全相同文本多次出现 → 生成一条 selected=false 的"同 key 合并去重"提示候选，
+     * 且变体 diff 即原句本身。
+     */
+    @Test
+    fun testExactDuplicateHintGroup() {
+        val sites = siteRefs("重复文案", "重复文案")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val hint = affix.firstOrNull { it.id.startsWith("AG_EXACT_DUP_") }
+        assertTrue("完全相同文本应生成提示候选，实际 affix=$affix", hint != null)
+        assertTrue("提示候选默认不选中", !hint!!.selected)
+        assertEquals("重复文案", hint.skeleton)
+        assertEquals("重复文案", hint.variants.single().diff)
+    }
+
+    /**
+     * 完全相同的多句文本：即使公共前后缀算法也能合并，exact-dup 提示与 affix 组
+     * 应通过 distinctBy 去重（按 skeleton+diff 集合），不出现重复候选。
+     */
+    @Test
+    fun testExactDuplicateHintDeduplicatedAgainstAffix() {
+        val sites = siteRefs("重复文案", "重复文案")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val sameSkeleton = affix.filter { it.skeleton == "重复文案" }
+        assertTrue("相同骨架候选应去重，实际数量=${sameSkeleton.size}", sameSkeleton.size <= 1)
+    }
 }

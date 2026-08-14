@@ -186,4 +186,122 @@ class MergeApplierTest : BasePlatformTestCase() {
             containsSkeleton
         )
     }
+
+    // ─────────────────────────────────────────────────────────
+    // 追加覆盖：跨文件合并 / affix+digit 组合 / skeletonKey 编辑
+    // ─────────────────────────────────────────────────────────
+
+    /** 跨文件构建两个 processor，collect 后 factorize，返回 processor 列表。 */
+    private fun crossFileProcessors(vararg fileTexts: Pair<String, String>): List<I18nProcessor> =
+        fileTexts.map { (name, text) ->
+            val file = configureFile(name, text)
+            I18nProcessor(project, file).also { it.collect() }
+        }
+
+    /**
+     * 跨文件合并：文件 A 和文件 B 各处贡献 site，merged 骨架应同时写入两个文件。
+     * "测试完成A"/"测试完成B"(A文件) + "测试完成C"(B文件) → 前缀 "测试完成" → 骨架 测试完成{N0}。
+     */
+    fun testApplyMergesAcrossFiles() {
+        val processors = crossFileProcessors(
+            "src/A.vue" to "<template><div><span>测试完成A</span><span>测试完成B</span></div></template>",
+            "src/B.vue" to "<template><div><span>测试完成C</span></div></template>",
+        )
+        val (affix, _) = MergeApplier.factorizeSites(processors)
+        val skeletonGroup = affix.firstOrNull { it.skeleton == "测试完成{N0}" }
+        assertNotNull("跨文件应生成 测试完成{N0} 骨架组", skeletonGroup)
+
+        val plan = ExtractedStringsDialog.MergePlan(listOf(skeletonGroup!!), emptyList())
+        val extracted = LinkedHashMap<String, String>()
+        val holder = arrayOfNulls<MutableMap<String, String>>(1)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            holder[0] = MergeApplier.apply(processors, extracted, plan)
+        }
+        val resultRes = holder[0] ?: emptyMap()
+        assertTrue("跨文件骨架 key 应写入最终资源", resultRes.containsKey("测试完成{N0}"))
+
+        // 两个文件里的原始句都应被替换为带 {N0} 的 $t 调用（读 PSI 内存文本，反映已应用的改动）
+        val textA = myFixture.findFileInTempDir("src/A.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        val textB = myFixture.findFileInTempDir("src/B.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        // 只匹配骨架文本，避免正则里出现 $t 触发 Kotlin 字符串插值
+        assertTrue("A 文件应被重写为骨架调用，实际:\n$textA", textA.contains("测试完成{N0}"))
+        assertTrue("B 文件应被重写为骨架调用，实际:\n$textB", textB.contains("测试完成{N0}"))
+    }
+
+    /**
+     * affix + digit 两组同时选中：最终资源同时包含两组骨架 key。
+     * affix: "名称可用"/"名称占用" → 名称{N0}；digit: "序号1"/"序号2" → 序号{N0}。
+     */
+    fun testApplyCombinesAffixAndDigit() {
+        val file = configureFile(
+            "src/Demo.vue",
+            """
+            <template>
+                <div>
+                    <span>名称可用</span>
+                    <span>名称占用</span>
+                    <span>序号1</span>
+                    <span>序号2</span>
+                </div>
+            </template>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val (affix, digit) = MergeApplier.factorizeSites(listOf(processor))
+        val affixGroup = affix.firstOrNull { it.skeleton == "名称{N0}用" }
+        val digitGroup = digit.firstOrNull { it.skeleton == "序号{N0}" }
+        assertNotNull("应生成 名称{N0}用 affix 组", affixGroup)
+        assertNotNull("应生成 序号{N0} digit 组", digitGroup)
+
+        val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup!!), listOf(digitGroup!!))
+        val extracted = LinkedHashMap(processor.extractedStrings)
+        val holder = arrayOfNulls<MutableMap<String, String>>(1)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
+        }
+        val resultRes = holder[0] ?: emptyMap()
+        assertTrue("affix 骨架 key 应存在", resultRes.containsKey("名称{N0}用"))
+        assertTrue("digit 骨架 key 应存在", resultRes.containsKey("序号{N0}"))
+    }
+
+    /**
+     * 用户编辑了骨架 key（skeletonKey 非默认）：最终资源应写入自定义 key，
+     * 且 $t 调用使用该自定义 key。
+     */
+    fun testApplyUsesEditedSkeletonKey() {
+        val file = configureFile(
+            "src/Demo.vue",
+            """
+            <template>
+                <div>
+                    <span>名称可用</span>
+                    <span>名称占用</span>
+                </div>
+            </template>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val (affix, _) = MergeApplier.factorizeSites(listOf(processor))
+        val affixGroup = affix.firstOrNull { it.skeleton == "名称{N0}用" } ?: throw IllegalStateException("未找到 affix 组")
+        affixGroup.skeletonKey = "custom.merged.label"   // 用户编辑
+
+        val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup), emptyList())
+        val extracted = LinkedHashMap(processor.extractedStrings)
+        val holder = arrayOfNulls<MutableMap<String, String>>(1)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
+        }
+        val resultRes = holder[0] ?: emptyMap()
+        assertTrue("自定义骨架 key 应写入最终资源，keys=${resultRes.keys}", resultRes.containsKey("custom.merged.label"))
+        val resultText = myFixture.findFileInTempDir("src/Demo.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        assertTrue("\$t 调用应使用自定义 key，实际:\n$resultText", resultText.contains("custom.merged.label"))
+    }
 }
