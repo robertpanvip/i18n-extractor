@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.5.0"
+version = "1.5.4"
 
 repositories {
     mavenCentral()
@@ -71,7 +71,7 @@ intellijPlatform {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
@@ -92,7 +92,7 @@ tasks {
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
     }
 }
