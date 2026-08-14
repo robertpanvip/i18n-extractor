@@ -1054,13 +1054,27 @@ object Util {
         var i = openIdx
         var inString: Char? = null
         var escapeNext = false
+        var inLineComment = false
+        var inBlockComment = false
         while (i < text.length) {
             val c = text[i]
             when {
+                inLineComment -> if (c == '\n') inLineComment = false
+                inBlockComment -> {
+                    if (c == '*' && i + 1 < text.length && text[i + 1] == '/') {
+                        inBlockComment = false
+                        i++
+                    }
+                }
                 escapeNext -> escapeNext = false
                 inString != null -> when (c) {
                     '\\' -> escapeNext = true
                     inString -> inString = null
+                }
+                c == '/' && i + 1 < text.length && text[i + 1] == '/' -> inLineComment = true
+                c == '/' && i + 1 < text.length && text[i + 1] == '*' -> {
+                    inBlockComment = true
+                    i++
                 }
                 else -> when (c) {
                     '"', '\'', '`' -> inString = c
@@ -1151,13 +1165,16 @@ object Util {
 
     /** 解析单个属性，返回 (key, valueExpr)；若解析不了返回 null。 */
     private fun parseOneProperty(prop: String): Pair<String, String>? {
+        // 【Bug A6 修复】属性片段可能以注释开头（splitTopLevelProperties 只按顶层逗号切分，
+        // 注释行会和紧随其后的属性拼在一起）。先剥离前导注释，避免把注释当 key 解析失败。
+        val body = stripLeadingComments(prop)
         var inString: Char? = null
         var escapeNext = false
         var depth = 0
         var colonIdx = -1
         var i = 0
-        while (i < prop.length) {
-            val c = prop[i]
+        while (i < body.length) {
+            val c = body[i]
             when {
                 escapeNext -> escapeNext = false
                 inString != null -> when (c) {
@@ -1177,10 +1194,29 @@ object Util {
             i++
         }
         if (colonIdx < 0) return null  // shorthand property / 方法简写 → 跳过
-        val keyPart = prop.substring(0, colonIdx).trim()
-        val valuePart = prop.substring(colonIdx + 1).trim()
+        val keyPart = body.substring(0, colonIdx).trim()
+        val valuePart = body.substring(colonIdx + 1).trim()
         val key = parsePropertyKey(keyPart) ?: return null
         return key to valuePart
+    }
+
+    /** 【Bug A6】剥离属性片段前导的 // 行注释或 /* */ 块注释（可含多行）。 */
+    private fun stripLeadingComments(s: String): String {
+        var text = s.trimStart()
+        var changed = true
+        while (changed && text.isNotEmpty()) {
+            changed = false
+            if (text.startsWith("//")) {
+                val nl = text.indexOf('\n')
+                text = if (nl < 0) "" else text.substring(nl + 1).trimStart()
+                changed = true
+            } else if (text.startsWith("/*")) {
+                val end = text.indexOf("*/")
+                text = if (end < 0) "" else text.substring(end + 2).trimStart()
+                changed = true
+            }
+        }
+        return text
     }
 
     private fun parsePropertyKey(keyPart: String): String? {
@@ -1440,6 +1476,9 @@ object Util {
         )
         val rewrites = ArrayList<PropRewriteInfo>()
         val processedLineIdxs = HashSet<Int>()
+        // 【Bug A5 修复】收集所有已解析出的顶层 key（含多行 value 的 key），
+        // 这样多行嵌套对象/数组的 key 也能被识别为"已存在"，避免被当作新 key 重复追加。
+        val parsedTopKeys = HashSet<String>()
 
         for ((idx, rawLine) in lines.withIndex()) {
             val indentMatch = Regex("""^(\s*)""").find(rawLine)
@@ -1451,6 +1490,7 @@ object Util {
             val colonPosInTrimmed = findTopLevelColon(line) ?: continue
             val keyExpr = line.substring(0, colonPosInTrimmed).trim()
             val key = parsePropertyKey(keyExpr) ?: continue
+            parsedTopKeys.add(key)
             // value 段：检查是否在同一行内有匹配的闭合（即 value 是单行静态值，无跨行对象/数组）
             // 对于跨行 value，我们就不尝试重写该行了（用户的多行对象/数组保留原样）。
             val valuePart = line.substring(colonPosInTrimmed + 1).trim()
@@ -1478,7 +1518,8 @@ object Util {
         }
 
         // 收集已在旧对象里出现过的顶层 key（避免重复追加）
-        val existingTopKeys = rewrites.map { it.key }.toMutableSet()
+        // 【Bug A5 修复】用 parsedTopKeys（含多行 value 的 key）而非仅 rewrites，避免多行 key 重复追加
+        val existingTopKeys = parsedTopKeys.toMutableSet()
         // 注意 processedLineIdxs 中也可能有非静态行，但它们没有 key，所以只从 rewrites 收集
         // （用户写了非静态属性，我们保留，无需关心其 key）
 

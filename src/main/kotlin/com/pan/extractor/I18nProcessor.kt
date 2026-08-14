@@ -1866,10 +1866,53 @@ class I18nProcessor(
         return PsiTreeUtil.isAncestor(ie, ele, false)
     }
 
+    /**
+     * 【Bug A1】判断 ele 是否位于「纯字符串拼接」内：自 ele 向上找到最顶层的 `+` 表达式，
+     * 并递归检查整条拼接链的所有叶子操作数是否都是字符串字面量（无变量/引用/数字/嵌套调用）。
+     * 若为 true，此时 collectJSBinaryExpressionChange 会把整条拼接合并成一个 key，
+     * ele 应交给它而不再单独提取。
+     */
+    private fun isWithinPureStringConcat(ele: PsiElement): Boolean {
+        // 向上找到最顶层的 PLUS 表达式
+        var top: PsiElement? = ele
+        while (true) {
+            val parent = top?.parent as? JSBinaryExpression
+            if (parent == null || parent.operationSign != JSTokenTypes.PLUS) break
+            top = parent
+        }
+        val topBin = top as? JSBinaryExpression ?: return false
+        // 递归检查整条链的所有操作数是否都是纯字符串
+        return isPureStringOperand(topBin.lOperand) && isPureStringOperand(topBin.rOperand)
+    }
+
+    /** 判断某操作数是否为可被整体合并的纯字符串（字面量、纯模板，或嵌套的纯字符串拼接）。 */
+    private fun isPureStringOperand(e: PsiElement?): Boolean {
+        return when (e) {
+            null -> false
+            is JSLiteralExpression -> true
+            is JSStringTemplateExpression -> {
+                // 纯字符串模板（无 ${} 插值）可整体合并；有插值则不是纯字符串
+                !e.text.contains("${'$'}{")
+            }
+            is JSBinaryExpression -> {
+                // 嵌套的 + 拼接：仅当左右操作数也都是纯字符串时才视为纯字符串
+                e.operationSign == JSTokenTypes.PLUS &&
+                        isPureStringOperand(e.lOperand) && isPureStringOperand(e.rOperand)
+            }
+            else -> false
+        }
+    }
+
     // ───────────────────────────────────────────────
 // JS 字符串字面量
 // ───────────────────────────────────────────────
     private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<CollectedChange>) {
+        // 【Bug A1 修复】仅当字面量位于「纯字符串拼接」(`"a" + "b" + ...`，所有操作数都是字符串字面量)
+        // 中时，其提取交由 collectJSBinaryExpressionChange 统一合并成一个 key，这里必须跳过，
+        // 否则操作数会被重复提取，且 binary change 先替换整节点后操作数 change 会作用在失效 PSI 上。
+        // 注意：若拼接中有变量/引用（如 `prefix.value + "正在执行操作，请稍候"`），则该字面量仍需单独提取，
+        // 不能被跳过（collectJSBinaryExpressionChange 会把它包进 \${}，语义不同）。
+        if (ele.parent is JSBinaryExpression && isWithinPureStringConcat(ele)) return
 
         // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
         // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
