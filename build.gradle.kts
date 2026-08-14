@@ -3,8 +3,8 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.4.0"
-    id("org.jetbrains.intellij.platform") version "2.18.1"
+    id("org.jetbrains.kotlin.jvm") version "1.9.24"
+    id("org.jetbrains.intellij.platform") version "1.17.4"
 }
 
 group = "com.pan"
@@ -71,7 +71,7 @@ intellijPlatform {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(17))
     }
 }
 
@@ -92,7 +92,7 @@ tasks {
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
     }
 }

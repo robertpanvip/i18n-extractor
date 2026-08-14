@@ -27,16 +27,30 @@ class I18nExtractorAction : AnAction() {
     }
 
     // ── 问题 6：成功提取后的用户回馈（Notification balloon） ──
+    data class OutputResult(
+        val copiedToClipboard: Boolean,
+        val overwroteEntryFile: Boolean,
+        val entryFileName: String? = null,
+        val fallbackReason: String? = null,
+    )
+
     private fun notifyExtractSuccess(
         project: com.intellij.openapi.project.Project,
         title: String,
         extractedCount: Int,
         processedFiles: Int,
-        jsonWritten: Boolean,
+        output: OutputResult,
     ) {
         val filesPart = if (processedFiles <= 1) "" else "（扫描 $processedFiles 个文件）"
-        val jsonPart = if (jsonWritten) "，JSON 已复制到剪贴板" else ""
-        val subtitle = "提取 $extractedCount 条 key$filesPart$jsonPart"
+        val outputPart = when {
+            output.overwroteEntryFile && output.entryFileName != null ->
+                "，已合并写回入口文件「${output.entryFileName}」"
+            output.copiedToClipboard && output.fallbackReason != null ->
+                "，JSON 已复制到剪贴板（写回入口失败：${output.fallbackReason}）"
+            output.copiedToClipboard -> "，JSON 已复制到剪贴板"
+            else -> ""
+        }
+        val subtitle = "提取 $extractedCount 条 key$filesPart$outputPart"
 
         val notificationGroup = NotificationGroupManager.getInstance()
             .getNotificationGroup("Vue i18n 提取提示")
@@ -44,6 +58,76 @@ class I18nExtractorAction : AnAction() {
             notificationGroup.createNotification(title, subtitle, NotificationType.INFORMATION),
             project
         )
+    }
+
+    /**
+     * 最终输出：根据 dialog.outputMode + selectedEntryFile，
+     * 要么写回入口文件（TS/JSON），要么拷贝到剪贴板。
+     * 都在调用线程执行；写 VirtualFile 的操作必须在 EDT + WriteCommandAction 内部
+     * （调用方负责包裹 invokeAndWait + WCA 或直接当前线程已拿写锁）。
+     */
+    private fun applyFinalOutput(
+        project: com.intellij.openapi.project.Project,
+        dialog: ExtractedStringsDialog,
+        finalFlatJson: Map<String, String>,
+    ): OutputResult {
+        val prettyGson = com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
+        val mode = dialog.outputMode
+        val entryVf = dialog.selectedEntryFile
+        val jsonPretty = prettyGson.toJson(finalFlatJson)
+
+        if (mode == Util.OutputMode.OVERWRITE_ENTRY_FILE && entryVf != null) {
+            val ext = entryVf.extension?.lowercase()
+            val newText: String? = try {
+                when (ext) {
+                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)
+                    "ts", "tsx", "js", "jsx" -> Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)
+                    else -> null
+                }
+            } catch (t: Throwable) {
+                null
+            }
+            if (newText != null) {
+                try {
+                    Util.writeVirtualFileText(entryVf, newText)
+                    return OutputResult(
+                        copiedToClipboard = false,
+                        overwroteEntryFile = true,
+                        entryFileName = entryVf.name,
+                    )
+                } catch (t: Throwable) {
+                    // 写文件失败：fallback 到剪贴板，并在通知里提示原因
+                    val content = getJsonContent(jsonPretty)
+                    CopyPasteManager.getInstance().setContents(StringSelection(content))
+                    return OutputResult(
+                        copiedToClipboard = true,
+                        overwroteEntryFile = false,
+                        fallbackReason = t.message?.take(40) ?: "写文件异常"
+                    )
+                }
+            } else {
+                // 解析/生成失败：fallback 剪贴板
+                val reason = when (ext) {
+                    "ts", "tsx", "js", "jsx" -> "TS/JS 入口未找到 export default/export const 对象字面量，或包含无法解析结构"
+                    "json" -> "JSON 解析失败"
+                    else -> "不支持的入口文件后缀"
+                }
+                val content = getJsonContent(jsonPretty)
+                CopyPasteManager.getInstance().setContents(StringSelection(content))
+                return OutputResult(
+                    copiedToClipboard = true,
+                    overwroteEntryFile = false,
+                    fallbackReason = reason
+                )
+            }
+        }
+
+        // 否则：拷贝到剪贴板（默认/用户主动选 clipboard/入口文件为空）
+        if (dialog.json != null) {
+            val content = getJsonContent(dialog.json!!)
+            CopyPasteManager.getInstance().setContents(StringSelection(content))
+        }
+        return OutputResult(copiedToClipboard = true, overwroteEntryFile = false)
     }
 
     // 当没有中文可提取时，通知用户"取消"的原因，避免以为插件没反应
@@ -142,31 +226,28 @@ class I18nExtractorAction : AnAction() {
         allStrings.putAll(existing)
         allStrings.putAll(extracted)
 
-        val dialog = ExtractedStringsDialog(project, allStrings)
+        val dialog = ExtractedStringsDialog(
+            project, allStrings,
+            contextPsiFile = psiFile  // 用于推断中文入口文件
+        )
         if (dialog.showAndGet()) {
             // 【问题 1 修复：写入过程加进度提示，避免点确定后"卡住没反馈"】
             //   单文件可能有几十上百处替换 + import/const 注入，之前直接在 EDT 同步调
             //   processor.execute()，表现就是"点了 OK 后对话框消失，但 UI 完全没变化几秒"。
             //   改用 Task.Backgroundable（非模态后台任务）+ 进度条 + 阶段文本：
-            //     "阶段 1/2：写入 PSI 替换" → 2/2：复制 JSON / 发通知
+            //     "阶段 1/2：写入 PSI 替换" → 2/2：覆盖入口文件 / 复制 JSON / 发通知
             ProgressManager.getInstance().run(
                 object : Task.Backgroundable(
                     project,
                     "i18n 提取单文件写入中…",
                     true
                 ) {
-                    private var jsonCopied = false
+                    private lateinit var output: OutputResult
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = false
-                        val totalSteps = 2
                         // —— 阶段 1：写入 PSI 替换（processor.execute 内部会走 writeCommand）
                         indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
                         indicator.fraction = 0.1
-                        // processor.execute 内部需要 Write 锁，但它内部并没有自建
-                        // WriteCommandAction.execute()——实际看 processor.execute()：
-                        //   effects.forEach { it.run() }，里面的 effect.run 有
-                        //   WriteCommandAction 包裹。保险起见，这里再包一层
-                        //   runWriteAction 保证线程合规（进度线程不是 EDT）。
                         ApplicationManager.getApplication().invokeAndWait {
                             WriteCommandAction.runWriteCommandAction(
                                 project,
@@ -175,16 +256,28 @@ class I18nExtractorAction : AnAction() {
                                 { processor.execute() } // Runnable
                             )
                         }
-                        indicator.fraction = 0.8
+                        indicator.fraction = 0.75
                         indicator.text2 = psiFile.name
 
-                        // —— 阶段 2：复制 JSON 到剪贴板
-                        if (dialog.json !== null) {
-                            indicator.text = "复制 JSON 到剪贴板"
-                            indicator.fraction = 0.9
-                            val content = getJsonContent(dialog.json!!)
-                            CopyPasteManager.getInstance().setContents(StringSelection(content))
-                            jsonCopied = true
+                        // —— 阶段 2：根据用户配置 → 覆盖入口文件 OR 拷贝到剪贴板
+                        indicator.text = when (dialog.outputMode) {
+                            Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
+                            else -> "复制 JSON 到剪贴板"
+                        }
+                        indicator.fraction = 0.9
+                        // 写 VirtualFile 需要 WriteCommandAction 包裹（内部或外部都行，包外层保险）
+                        val finalJson: Map<String, String> = allStrings
+                        ApplicationManager.getApplication().invokeAndWait {
+                            CommandProcessor.getInstance().executeCommand(
+                                project,
+                                {
+                                    WriteCommandAction.runWriteCommandAction(project) {
+                                        output = applyFinalOutput(project, dialog, finalJson)
+                                    }
+                                },
+                                "I18n Extract Single: Output",
+                                null
+                            )
                         }
                         indicator.fraction = 1.0
                     }
@@ -196,7 +289,8 @@ class I18nExtractorAction : AnAction() {
                             title = "单文件国际化提取完成",
                             extractedCount = allStrings.size,
                             processedFiles = 1,
-                            jsonWritten = jsonCopied
+                            output = if (::output.isInitialized) output
+                                     else OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
                         )
                     }
                 }
@@ -256,19 +350,24 @@ class I18nExtractorAction : AnAction() {
 
         if (processors.isEmpty()) return
 
-        val dialog = ExtractedStringsDialog(project, extracted)
+        // 给 Dialog 传一个"上下文 PsiFile"（第一个 processor 的文件，用于推断项目根找入口）
+        val contextFileForDialog: PsiFile? = processors.firstOrNull()?.let { p ->
+            (p.targetPsiFile as? PsiFile) ?: p.targetPsiFile.containingFile
+        }
+
+        val dialog = ExtractedStringsDialog(project, extracted, contextPsiFile = contextFileForDialog)
         if (dialog.showAndGet()) {
             // 【问题 1 修复：目录写入阶段加进度条 + 逐文件反馈】
             // 之前 processDirectory OK 之后是同步串行 processors.forEach{it.run()}，
             // 目录文件多时 UI 冻结没任何进度反馈。
-            // 改用 Task.Backgroundable + 进度 0.0~0.9 逐文件写、0.9~1.0 复制 JSON。
+            // 改用 Task.Backgroundable + 进度 0.0~0.85 逐文件写、0.85~1.0 覆盖入口/复制 JSON。
             ProgressManager.getInstance().run(
                 object : Task.Backgroundable(
                     project,
                     "i18n 目录批量写入中…",
                     true
                 ) {
-                    private var jsonCopied = false
+                    private lateinit var output: OutputResult
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = false
                         indicator.text = "批量写入中：处理 $processors.size 个文件"
@@ -280,7 +379,7 @@ class I18nExtractorAction : AnAction() {
                                 {
                                     WriteCommandAction.runWriteCommandAction(project) {
                                         for ((idx, processor) in processors.withIndex()) {
-                                            indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.9
+                                            indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
                                             val pf = (processor.targetPsiFile as? PsiFile)
                                             indicator.text2 = pf?.name
                                                 ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
@@ -293,15 +392,26 @@ class I18nExtractorAction : AnAction() {
                                 null
                             )
                         }
-                        indicator.fraction = 0.9
+                        indicator.fraction = 0.85
                         indicator.text2 = ""
-                        // —— 阶段 2：复制 JSON 到剪贴板
-                        if (dialog.json !== null) {
-                            indicator.text = "复制 JSON 到剪贴板"
-                            indicator.fraction = 0.95
-                            val content = getJsonContent(dialog.json!!)
-                            CopyPasteManager.getInstance().setContents(StringSelection(content))
-                            jsonCopied = true
+                        // —— 阶段 2：根据用户配置 → 覆盖入口文件 OR 复制 JSON 到剪贴板
+                        indicator.text = when (dialog.outputMode) {
+                            Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
+                            else -> "复制 JSON 到剪贴板"
+                        }
+                        indicator.fraction = 0.92
+                        val finalJson: Map<String, String> = extracted
+                        ApplicationManager.getApplication().invokeAndWait {
+                            CommandProcessor.getInstance().executeCommand(
+                                project,
+                                {
+                                    WriteCommandAction.runWriteCommandAction(project) {
+                                        output = applyFinalOutput(project, dialog, finalJson)
+                                    }
+                                },
+                                "I18n Extract Batch: Output",
+                                null
+                            )
                         }
                         indicator.fraction = 1.0
                     }
@@ -312,7 +422,8 @@ class I18nExtractorAction : AnAction() {
                             title = "目录批量国际化提取完成",
                             extractedCount = extracted.size,
                             processedFiles = files.size,
-                            jsonWritten = jsonCopied
+                            output = if (::output.isInitialized) output
+                                     else OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
                         )
                     }
                 }
