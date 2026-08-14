@@ -1464,117 +1464,110 @@ object Util {
      * - 新 key → 在 } 之前追加，按 key 字典序追加
      */
     fun regenerateObjectLiteralBody(oldObjBody: String, mergedNested: Map<String, Any?>): String {
-        // 把 mergedNested 扁平化为 key→value 字符串形式的 "渲染结果"（对嵌套对象我们直接写嵌套对象字面量）
-        // 即：map 每个 key → renderStaticValue(mergedNested[key], indent)
-        // 这样可以避免"深度更新中间段"，直接按顶层 key 来做行级重写。
-        // 先扫描旧对象，识别每个顶层静态属性的 (key, 行range)
+        // 方式：先扫描旧对象，识别每个顶层属性；单行静态值 → 行内重写；
+        // 多行对象/数组块且 key 在合并结果中 → 整块重写（从而能合入"点式"新增的嵌套子 key）；
+        // 非静态行（spread/方法/引用）→ 原样保留。最后追加全新顶层 key。
         val oldBody = oldObjBody.trim().let {
             if (it.startsWith("{") && it.endsWith("}")) it.substring(1, it.length - 1) else it
         }
-        val lines = mutableListOf<String>()
-        val sb = StringBuilder()
-        for (c in oldBody) {
-            if (c == '\n') {
-                lines.add(sb.toString())
-                sb.clear()
-            } else sb.append(c)
-        }
-        if (sb.isNotEmpty()) lines.add(sb.toString())
-
-        // 扫描顶层静态属性：记录 (key, keyExpr, lineIdx, valueStartColonIdxInLine, trailingComma)
-        data class PropRewriteInfo(
-            val lineIdx: Int,
-            val key: String,
-            val keyExpr: String,
-            val colonPosInLine: Int,  // ':' 在 line 中的位置（之后即 value）
-            val trailingComma: Boolean,
-            val indent: String       // 行前空白
-        )
-        val rewrites = ArrayList<PropRewriteInfo>()
-        val processedLineIdxs = HashSet<Int>()
-        // 【Bug A5 修复】收集所有已解析出的顶层 key（含多行 value 的 key），
-        // 这样多行嵌套对象/数组的 key 也能被识别为"已存在"，避免被当作新 key 重复追加。
-        val parsedTopKeys = HashSet<String>()
-
-        for ((idx, rawLine) in lines.withIndex()) {
-            val indentMatch = Regex("""^(\s*)""").find(rawLine)
-            val indent = indentMatch?.groupValues?.get(1).orEmpty()
-            val line = rawLine.trimStart()
-            // 空行或纯注释行 → 跳过
-            if (line.isBlank() || line.startsWith("//") || line.startsWith("/*")) continue
-            // 找顶层 ':'（不在字符串/嵌套 {}[] 中）
-            val colonPosInTrimmed = findTopLevelColon(line) ?: continue
-            val keyExpr = line.substring(0, colonPosInTrimmed).trim()
-            val key = parsePropertyKey(keyExpr) ?: continue
-            parsedTopKeys.add(key)
-            // value 段：检查是否在同一行内有匹配的闭合（即 value 是单行静态值，无跨行对象/数组）
-            // 对于跨行 value，我们就不尝试重写该行了（用户的多行对象/数组保留原样）。
-            val valuePart = line.substring(colonPosInTrimmed + 1).trim()
-            val isSingleLineStatic = isSingleLineStaticValue(valuePart)
-            if (!isSingleLineStatic) {
-                // 非单行静态（跨行对象 / 数组 / 表达式）→ 不重写，但标记该行已处理（避免尾部追加）
-                // （因为这个 key 在旧文件里已有"内容占位"，尽管我们不改它）
-                processedLineIdxs.add(idx)
-                continue
-            }
-            // 末尾逗号？
-            val trimmed = valuePart.trimEnd()
-            val trailingComma = trimmed.endsWith(",")
-            rewrites.add(
-                PropRewriteInfo(
-                    lineIdx = idx,
-                    key = key,
-                    keyExpr = keyExpr,
-                    colonPosInLine = indent.length + colonPosInTrimmed,
-                    trailingComma = trailingComma,
-                    indent = indent
-                )
-            )
-            processedLineIdxs.add(idx)
-        }
-
-        // 收集已在旧对象里出现过的顶层 key（避免重复追加）
-        // 【Bug A5 修复】用 parsedTopKeys（含多行 value 的 key）而非仅 rewrites，避免多行 key 重复追加
-        val existingTopKeys = parsedTopKeys.toMutableSet()
-        // 注意 processedLineIdxs 中也可能有非静态行，但它们没有 key，所以只从 rewrites 收集
-        // （用户写了非静态属性，我们保留，无需关心其 key）
+        val lines = oldBody.split("\n").toMutableList()
+        val mergedKeys = mergedNested.keys.toSet()
 
         // 推断默认缩进单位（首行有内容的 indent）
-        val innerIndentUnit = rewrites.firstOrNull()?.indent
-            ?: lines.firstOrNull { it.isNotBlank() }?.takeWhile { it == ' ' || it == '\t' }.orEmpty()
+        val innerIndentUnit = lines.firstOrNull { it.isNotBlank() }?.takeWhile { it == ' ' || it == '\t' }.orEmpty()
             .ifBlank { "  " }
 
-        // 对每个 rewrite：计算新 value 字符串，替换 lines[lineIdx] 的 value 部分
-        val mergedKeys = mergedNested.keys.toSet()
-        for (rw in rewrites) {
-            if (rw.key !in mergedKeys) {
-                // 旧 key 在新合并结果里没有了？ → 保留旧值（不删，防止用户手动写的 key 被清）
-                continue
+        // 第一遍扫描：
+        //  - singleRewrites: 单行静态值可重写（记录原始 lineIdx）
+        //  - blockRewrites: 多行对象/数组块（key 在 mergedNested 中才重写）
+        //  - consumed[i]: 该行属于某个多行块，不应再被当作独立顶层行处理（避免嵌套行被误判为顶层属性）
+        data class SingleRewrite(val lineIdx: Int, val key: String, val colonPosInLine: Int, val trailingComma: Boolean)
+        val singleRewrites = ArrayList<SingleRewrite>()
+        data class BlockRewrite(val start: Int, val end: Int, val key: String, val keyRowPrefix: String)
+        val blockRewrites = ArrayList<BlockRewrite>()
+        val parsedTopKeys = HashSet<String>()
+        val consumed = BooleanArray(lines.size)
+
+        var idx = 0
+        while (idx < lines.size) {
+            if (consumed[idx]) { idx++; continue }
+            val rawLine = lines[idx]
+            val indent = Regex("""^(\s*)""").find(rawLine)?.groupValues?.get(1).orEmpty()
+            val line = rawLine.trimStart()
+            // 空行或纯注释行 → 跳过
+            if (line.isBlank() || line.startsWith("//") || line.startsWith("/*")) { idx++; continue }
+            // 找顶层 ':'（不在字符串/嵌套 {}[] 中）
+            val colonPosInTrimmed = findTopLevelColon(line) ?: run { idx++; continue }
+            val keyExpr = line.substring(0, colonPosInTrimmed).trim()
+            val key = parsePropertyKey(keyExpr) ?: run { idx++; continue }
+            parsedTopKeys.add(key)
+            val valuePart = line.substring(colonPosInTrimmed + 1).trim()
+
+            if (isSingleLineStaticValue(valuePart)) {
+                val trailingComma = valuePart.trimEnd().endsWith(",")
+                singleRewrites.add(SingleRewrite(idx, key, indent.length + colonPosInTrimmed, trailingComma))
+            } else {
+                // 多行对象/数组块：始终定位其范围并"消费"，避免嵌套行被误判为顶层属性；
+                // 只有 key 在合并结果中才整块重写（从而合入新增的嵌套子 key）。
+                val isBlock = valuePart.startsWith("{") || valuePart.startsWith("[")
+                val blockEnd = if (isBlock) findBlockEndIndex(lines, idx) else idx
+                for (j in idx + 1..blockEnd) consumed[j] = true
+                if (isBlock && key in mergedKeys) {
+                    val keyColonInRow = indent.length + colonPosInTrimmed
+                    val keyRowPrefix = rawLine.substring(0, keyColonInRow + 1)  // "  key:"
+                    blockRewrites.add(BlockRewrite(idx, blockEnd, key, keyRowPrefix))
+                }
             }
-            val newVal = mergedNested[rw.key]
-            val valueStr = renderStaticValue(newVal, innerIndentUnit, nestingDepth = 1)
-            val line = lines[rw.lineIdx]
-            val prefix = line.substring(0, rw.colonPosInLine + 1)  // "  key:"
-            val suffix = if (rw.trailingComma) "," else ""
-            // 把 value 段去掉（取原 line 在 colon 之后到最后非空白之前的内容）
-            lines[rw.lineIdx] = "$prefix $valueStr$suffix"
+            idx++
         }
 
-        // 追加新 key（mergedNested 里有，但 existingTopKeys 没有的）
-        val newKeys = mergedKeys.filter { it !in existingTopKeys }.sorted()
+        // 第二遍：按序重建输出；块重写整体替换，单行重写行内替换，其余原样保留
+        val blockByStart = blockRewrites.associateBy { it.start }
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < lines.size) {
+            val block = blockByStart[i]
+            if (block != null) {
+                val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2)
+                val rLines = rendered.split("\n")
+                if (rLines.size == 1) {
+                    // 标量：整块替换成单行
+                    out.add("${block.keyRowPrefix} $rendered,")
+                } else {
+                    out.add("${block.keyRowPrefix} ${rLines.first()}")
+                    out.addAll(rLines.subList(1, rLines.lastIndex))
+                    out.add(rLines.last() + ",")
+                }
+                i = block.end + 1
+                continue
+            }
+            // 单行重写
+            val rw = singleRewrites.firstOrNull { it.lineIdx == i }
+            if (rw != null && rw.key in mergedKeys) {
+                val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1)
+                val prefix = lines[i].substring(0, rw.colonPosInLine + 1)  // "  key:"
+                val suffix = if (rw.trailingComma) "," else ""
+                out.add("$prefix $valueStr$suffix")
+                i++
+                continue
+            }
+            out.add(lines[i])
+            i++
+        }
+
+        // 追加新 key（mergedNested 里有，但旧对象没有的）
+        val newKeys = mergedKeys.filter { it !in parsedTopKeys }.sorted()
         if (newKeys.isNotEmpty()) {
-            // 找最后一行非空/非 } 行的位置，在其后面追加
-            var insertAt = lines.size
-            // 如果最后一行是 "}"（对象字面量被整段替换时，oldObjBody 可能是完整的 { ... }），先不考虑
-            for (i in lines.indices.reversed()) {
-                val t = lines[i].trim()
-                if (t.isNotBlank()) {
-                    insertAt = i + 1
-                    // 如果当前最后一行非空行没有逗号，给它补一个逗号（更合法）
-                    val last = lines[i]
-                    val trimmed = last.trimEnd()
-                    if (trimmed.isNotEmpty() && !trimmed.endsWith(",") && !trimmed.endsWith("{") && !trimmed.endsWith("[")) {
-                        lines[i] = last.substring(0, trimmed.length) + "," + last.substring(trimmed.length)
+            // 找最后一行非空行的位置，在其后面追加
+            var insertPos = out.size
+            for (k in out.indices.reversed()) {
+                if (out[k].isNotBlank()) {
+                    insertPos = k + 1
+                    val last = out[k]
+                    val lastTrimmed = last.trimEnd()
+                    val endsWithOpen = lastTrimmed.endsWith(",") || lastTrimmed.endsWith("{") || lastTrimmed.endsWith("[")
+                    if (lastTrimmed.isNotEmpty() && !endsWithOpen) {
+                        out[k] = last.substring(0, lastTrimmed.length) + "," + last.substring(lastTrimmed.length)
                     }
                     break
                 }
@@ -1584,11 +1577,49 @@ object Util {
                 val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1)
                 "$innerIndentUnit$keyExpr: $valueStr,"
             }
-            lines.addAll(insertAt, additions)
+            out.addAll(insertPos, additions)
         }
 
+        // 去掉首尾空行（来自对象字面量首尾换行产生的空元素），避免 } 前出现多余空行
+        while (out.isNotEmpty() && out.first().isBlank()) out.removeAt(0)
+        while (out.isNotEmpty() && out.last().isBlank()) out.removeAt(out.lastIndex)
+
         // 重新组合对象字面量
-        return "{" + lines.joinToString("\n") + "\n}"
+        return "{" + out.joinToString("\n") + "\n}"
+    }
+
+    /** 从 startIdx 行开始，找到与行首开括号匹配的闭合行索引（含）。 */
+    private fun findBlockEndIndex(lines: List<String>, startIdx: Int): Int {
+        var depth = 0
+        var inString: Char? = null
+        var escapeNext = false
+        var inBlockComment = false
+        for (i in startIdx until lines.size) {
+            val row = lines[i]
+            var j = 0
+            while (j < row.length) {
+                val c = row[j]
+                when {
+                    inBlockComment -> {
+                        if (c == '*' && j + 1 < row.length && row[j + 1] == '/') { inBlockComment = false; j++ }
+                    }
+                    escapeNext -> escapeNext = false
+                    inString != null -> when (c) {
+                        '\\' -> escapeNext = true
+                        inString -> inString = null
+                    }
+                    c == '/' && j + 1 < row.length && row[j + 1] == '/' -> break  // 行注释：忽略本行剩余
+                    c == '/' && j + 1 < row.length && row[j + 1] == '*' -> { inBlockComment = true; j++ }
+                    else -> when (c) {
+                        '"', '\'', '`' -> inString = c
+                        '{', '[' -> depth++
+                        '}', ']' -> { depth--; if (depth == 0) return i }
+                    }
+                }
+                j++
+            }
+        }
+        return startIdx
     }
 
     private fun findTopLevelColon(line: String): Int? {
@@ -1725,9 +1756,11 @@ object Util {
         } catch (_: Exception) { return null }
         val info = parseTsExportedObject(text) ?: return null
         val merged = mergeFlatIntoNested(info.staticKV, newFlatJson)
-        val oldObjBody = text.substring(info.objectRange.first, info.objectRange.last)
+        // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
+        // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
+        val oldObjBody = text.substring(info.objectRange.first, info.objectRange.endExclusive)
         val newObjBody = regenerateObjectLiteralBody(oldObjBody, merged)
-        return text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.last)
+        return text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
     }
 
     // ==========================================================================
