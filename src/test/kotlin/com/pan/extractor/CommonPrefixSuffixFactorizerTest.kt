@@ -93,4 +93,24 @@ class CommonPrefixSuffixFactorizerTest {
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
         assertTrue("1 字前缀+1 字后缀不应合并，实际: $affix", affix.isEmpty())
     }
+
+    /**
+     * 回归：测试1/测试2 应被合并成 骨架 = 测试{N0}，数字 1/2 作为差异值。
+     * 用户反馈"测试1、测试2 没被提取成 \$t('测试{N0}', {N0:1})"——
+     * 该用例固化"合并算法确实会生成此候选"，若将来回归失败即说明被改坏。
+     */
+    @Test
+    fun testSimilarTextWithDigitIsFactorized() {
+        val sites = siteRefs("测试1", "测试2")
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+
+        // 数字抽取：骨架 = 测试{N0}，每站数字值 1 / 2
+        val dg = digit.firstOrNull()
+        assertTrue("应生成数字抽取候选，实际 digit=$digit", dg != null)
+        assertEquals("测试{N0}", dg!!.skeleton)
+        assertEquals(setOf("1", "2"), dg.perSites.map { it.digitValues.first() }.toSet())
+
+        // 公共前后缀合并同样能产出 测试{N0}（前缀 测试）
+        assertTrue("应存在公共前后缀候选，实际 affix=$affix", affix.any { it.skeleton == "测试{N0}" })
+    }
 }
