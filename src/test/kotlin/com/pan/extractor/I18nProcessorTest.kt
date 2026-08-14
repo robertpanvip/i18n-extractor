@@ -1316,4 +1316,55 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val totalT = Regex("""\$\s*t\s*\(""").findAll(result).count()
         assertEquals("用户期望：外层已有 ${'$'}t( 表达式 )，内部不要再包第二层 ${'$'}t", 1, totalT)
     }
+
+    // ============================================================
+    // 幂等性：已提取过的文件再次提取，JSON 应保持一致
+    // ============================================================
+
+    /**
+     * 模拟「提取 → 应用 → 再次提取」的完整往返，验证两次得到的 JSON key→value 完全一致。
+     *
+     * 原理：第一次提取后文件里出现 $t('你好')，再次提取时 collectExistingTKeys() 会把这段
+     * 已翻译调用收进 existingStrings，pureCollect() 也会因 DIRECT_ARG 跳过它，所以
+     * 第二次不再产生新的 extractedStrings，最终 JSON（existing ∪ extracted）保持不变。
+     */
+    fun testReExtractProducesSameJson() {
+        // —— 第一次提取 ——
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = "你好"
+            const other = '你好'
+            """.trimIndent()
+        )
+        val p1 = I18nProcessor(project, file)
+        p1.collect()
+        val json1 = mutableMapOf<String, String>()
+        json1.putAll(p1.existingStrings)
+        json1.putAll(p1.extractedStrings)
+
+        // 应用改动（写入 PSI），得到已提取后的文件
+        p1.execute()
+        val transformedText = file.text
+        assertTrue("第一次提取后应出现 \$t(...)", transformedText.contains("\$t("))
+
+        // —— 第二次提取（对已提取后的文件） ——
+        val file2 = myFixture.configureByText("test2.ts", transformedText)
+        val p2 = I18nProcessor(project, file2)
+        p2.collect()
+        val json2 = mutableMapOf<String, String>()
+        json2.putAll(p2.existingStrings)
+        json2.putAll(p2.extractedStrings)
+
+        assertEquals(
+            "再次提取不应产生新的 extractedStrings（已翻译调用被跳过）",
+            emptyMap<String, String>(),
+            p2.extractedStrings
+        )
+        assertEquals(
+            "两次提取得到的 JSON 应完全一致，但 json1=$json1 json2=$json2",
+            json1,
+            json2
+        )
+    }
 }
