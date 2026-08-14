@@ -1729,60 +1729,55 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, stringExpr) { value -> value }
     }
 
-    fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean {
-        // 兼容两种 PSI 结构：
-        // 1. JSCallExpression -> JSLiteralExpression（新版 IntelliJ，无 JSArgumentList）
-        // 2. JSCallExpression -> JSArgumentList -> JSLiteralExpression（旧版结构）
+    /**
+     * 检查字符串字面量是否已经处于某一层 i18n 翻译调用的作用域内。
+     *
+     * 返回分三档，收集/替换阶段走不同策略：
+     *   - NONE             : 完全不在任何 t/$t/i18n.global.t 调用里 → 正常：加 key + 替换为 $t('key')
+     *   - DIRECT_ARG       : 字符串字面量直接就是某条 t/$t(...) 的第一个参数 → 完全跳过（已有完整 $t('x')，不需再处理）
+     *   - OUTER_T_EXPRESSION: 外层祖先有 t/$t/... 调用，但本字符串不是其**直接单字符串参数**，
+     *                        而是嵌套在参数表达式里（典型：$t(isPinned ? '取消置顶' : '置顶') 三元分支内
+     *                        的两个独立字符串）。
+     *                        此时仍要提取到 extractedStrings（国际化字典要有「取消置顶 / 置顶」两条），
+     *                        但替换时只替换字符串字面量为 'key'，不再包一层 $t('key')，
+     *                        避免出现双重 $t：$t(isPinned ? $t(...) : $t(...))。
+     */
+    enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION }
+
+    fun detectTSemantic(stringExpr: JSLiteralExpression): TSem {
+        // 1) 直接参数
         val parent = stringExpr.parent
         val directCall = when {
             parent is JSCallExpression -> parent
             parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
-        if (directCall != null) {
-            val method = directCall.methodExpression
+        fun isTCall(call: JSCallExpression): Boolean {
+            val method = call.methodExpression
             if (method is JSReferenceExpression) {
                 val name = method.referenceName
-                // $t / t / $tc / tc 调用
                 if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
             }
-            // 支持 i18n.global.t / i18n.t 等链式调用
             val calleeText = method?.text
             if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
+            return false
         }
+        if (directCall != null && isTCall(directCall)) return TSem.DIRECT_ARG
 
-        // ──────────────────────────────────────────────────────────────
-        // 修复 Bug4：$t(isPinned ? '取消置顶' : '置顶') 这类外层 $t 参数是
-        //   表达式（不是字符串字面量）的情况，内部两个字符串被错误地再包
-        //   了一层 $t，结果变成：
-        //     $t(isPinned ? $t('取消置顶') : $t('置顶'))  （嵌套 $t）
-        //   用户期望：外层已经写了 $t( 表达式 )，内部字符串保持不动。
-        //
-        // 做法：沿 parent 链向上找，若字符串字面量所在最内层的
-        //   JSCallExpression 的 method 正好命中 $t / t / $tc / tc /
-        //   i18n.global.t / i18n.t（即使它的第一个参数不是本字符串字面量），
-        //   也视为"已在 $t() 作用域内"，不再二次提取/替换。
-        // ──────────────────────────────────────────────────────────────
+        // 2) 外层祖先 $t 调用（参数不是字符串字面量 → 表达式形式）
         var cursor: PsiElement? = stringExpr.parent
-        val visitedDirect = directCall
         while (cursor != null) {
-            if (cursor is JSCallExpression && cursor !== visitedDirect) {
-                val method = cursor.methodExpression
-                var hit = false
-                if (method is JSReferenceExpression) {
-                    val name = method.referenceName
-                    if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") hit = true
-                }
-                if (!hit) {
-                    val calleeText = method?.text
-                    if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) hit = true
-                }
-                if (hit) return true
-            }
+            if (cursor is JSCallExpression && cursor !== directCall && isTCall(cursor)) return TSem.OUTER_T_EXPRESSION
             cursor = cursor.parent
         }
-        return false
+        return TSem.NONE
     }
+
+    /** 旧名兼容：其他地方只需要「DIRECT_ARG 就跳过」——保留 true/false 语义：
+     *  仅 DIRECT_ARG 返回 true（完全跳过）；OUTER_T_EXPRESSION 返回 false（仍然进入收集/替换分支，
+     *  但在 collectJSStringChange 内部再走 key-text-only 替换分支）。 */
+    fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean =
+        detectTSemantic(stringExpr) == TSem.DIRECT_ARG
 
     /**
      * 核心方法：提取 XmlText 中的纯文本（过滤注释、空白符、换行符）
@@ -1938,15 +1933,25 @@ class I18nProcessor(
         if (text.isEmpty()) return
         //print("$text,contains${raw.contains("\$t(")}\n")
 
-        // 先检查是否已在 $t() 调用中，避免误添加到 extractedStrings
-        if (isTransformedCalled(ele)) {
+        // ── 先检查是否处于 i18n 翻译调用作用域（3 档）
+        val tSem = detectTSemantic(ele)
+        if (tSem == TSem.DIRECT_ARG) {
+            // 字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
             return
         }
 
         val key = collectExtractedStrings(ele)
 
-        // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
-        val newExprText = buildTFunctionExpr(key, "{}")
+        // Bug4 修复：外层祖先有 $t(...)，但参数是表达式不是字符串字面量，
+        //  内层字符串不能再包一层 $t(...)，否则出现 $t(isPinned ? $t(...) : $t(...))。
+        //  正确：直接把字符串字面量替换为 'key' 文本 → $t(isPinned ? 'key1' : 'key2')
+        val newExprText: String = if (tSem == TSem.OUTER_T_EXPRESSION) {
+            val quote = if (raw.startsWith("'")) "'" else "\""
+            "$quote$key$quote"
+        } else {
+            // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
+            buildTFunctionExpr(key, "{}")
+        }
         if (ele.text == newExprText) return
 
         recordChange(
