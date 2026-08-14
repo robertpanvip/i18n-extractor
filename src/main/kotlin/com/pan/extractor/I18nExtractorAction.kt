@@ -226,8 +226,13 @@ class I18nExtractorAction : AnAction() {
         allStrings.putAll(existing)
         allStrings.putAll(extracted)
 
+        // 单文件也计算公共前后缀/数字抽取候选，填充 Dialog Tab2
+        val (affixGroups, digitGroups) = ApplicationManager.getApplication().runReadAction<Pair<List<AffixGroupCandidate>, List<DigitGroupCandidate>>> {
+            MergeApplier.factorizeSites(listOf(processor))
+        }
+
         val dialog = ExtractedStringsDialog(
-            project, allStrings,
+            project, allStrings, affixGroups, digitGroups,
             contextPsiFile = psiFile  // 用于推断中文入口文件
         )
         if (dialog.showAndGet()) {
@@ -245,37 +250,34 @@ class I18nExtractorAction : AnAction() {
                     private lateinit var output: OutputResult
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = false
-                        // —— 阶段 1：写入 PSI 替换（processor.execute 内部会走 writeCommand）
+                        // —— 阶段 1：写入 PSI 替换（含合并计划应用）
                         indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
                         indicator.fraction = 0.1
-                        ApplicationManager.getApplication().invokeAndWait {
-                            WriteCommandAction.runWriteCommandAction(
-                                project,
-                                "I18n Extract Single",  // command name (显示在 Undo 里)
-                                null,                   // group id
-                                { processor.execute() } // Runnable
-                            )
-                        }
-                        indicator.fraction = 0.75
-                        indicator.text2 = psiFile.name
-
-                        // —— 阶段 2：根据用户配置 → 覆盖入口文件 OR 拷贝到剪贴板
-                        indicator.text = when (dialog.outputMode) {
-                            Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
-                            else -> "复制 JSON 到剪贴板"
-                        }
-                        indicator.fraction = 0.9
-                        // 写 VirtualFile 需要 WriteCommandAction 包裹（内部或外部都行，包外层保险）
-                        val finalJson: Map<String, String> = allStrings
+                        val mergePlan = dialog.mergePlan
+                        val hasMerge =
+                            mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
                         ApplicationManager.getApplication().invokeAndWait {
                             CommandProcessor.getInstance().executeCommand(
                                 project,
                                 {
                                     WriteCommandAction.runWriteCommandAction(project) {
+                                        val finalJson: Map<String, String> =
+                                            if (hasMerge) {
+                                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
+                                                MergeApplier.apply(
+                                                    processors = listOf(processor),
+                                                    extracted = allStrings,
+                                                    mergePlan = mergePlan,
+                                                    indicator = indicator,
+                                                )
+                                            } else {
+                                                processor.run()
+                                                allStrings
+                                            }
                                         output = applyFinalOutput(project, dialog, finalJson)
                                     }
                                 },
-                                "I18n Extract Single: Output",
+                                "I18n Extract Single",
                                 null
                             )
                         }
@@ -355,7 +357,15 @@ class I18nExtractorAction : AnAction() {
             (p.targetPsiFile as? PsiFile) ?: p.targetPsiFile.containingFile
         }
 
-        val dialog = ExtractedStringsDialog(project, extracted, contextPsiFile = contextFileForDialog)
+        // 目录批量也计算公共前后缀/数字抽取候选，填充 Dialog Tab2
+        val (affixGroups, digitGroups) = ApplicationManager.getApplication().runReadAction<Pair<List<AffixGroupCandidate>, List<DigitGroupCandidate>>> {
+            MergeApplier.factorizeSites(processors)
+        }
+
+        val dialog = ExtractedStringsDialog(
+            project, extracted, affixGroups, digitGroups,
+            contextPsiFile = contextFileForDialog
+        )
         if (dialog.showAndGet()) {
             // 【问题 1 修复：目录写入阶段加进度条 + 逐文件反馈】
             // 之前 processDirectory OK 之后是同步串行 processors.forEach{it.run()}，
@@ -372,44 +382,39 @@ class I18nExtractorAction : AnAction() {
                         indicator.isIndeterminate = false
                         indicator.text = "批量写入中：处理 $processors.size 个文件"
                         indicator.fraction = 0.0
-                        // —— 阶段 1：processors 逐文件执行 Write（写锁必须拿在 EDT 上）
+                        // —— 阶段 1：逐文件写入 + 应用合并计划（写锁必须拿在 EDT 上）
+                        val mergePlan = dialog.mergePlan
+                        val hasMerge =
+                            mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
                         ApplicationManager.getApplication().invokeAndWait {
                             CommandProcessor.getInstance().executeCommand(
                                 project,
                                 {
                                     WriteCommandAction.runWriteCommandAction(project) {
-                                        for ((idx, processor) in processors.withIndex()) {
-                                            indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
-                                            val pf = (processor.targetPsiFile as? PsiFile)
-                                            indicator.text2 = pf?.name
-                                                ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
-                                            if (indicator.isCanceled) break
-                                            processor.run()
-                                        }
-                                    }
-                                },
-                                "I18n Extract Batch",
-                                null
-                            )
-                        }
-                        indicator.fraction = 0.85
-                        indicator.text2 = ""
-                        // —— 阶段 2：根据用户配置 → 覆盖入口文件 OR 复制 JSON 到剪贴板
-                        indicator.text = when (dialog.outputMode) {
-                            Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
-                            else -> "复制 JSON 到剪贴板"
-                        }
-                        indicator.fraction = 0.92
-                        val finalJson: Map<String, String> = extracted
-                        ApplicationManager.getApplication().invokeAndWait {
-                            CommandProcessor.getInstance().executeCommand(
-                                project,
-                                {
-                                    WriteCommandAction.runWriteCommandAction(project) {
+                                        val finalJson: Map<String, String> =
+                                            if (hasMerge) {
+                                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
+                                                MergeApplier.apply(
+                                                    processors = processors,
+                                                    extracted = extracted,
+                                                    mergePlan = mergePlan,
+                                                    indicator = indicator,
+                                                )
+                                            } else {
+                                                for ((idx, processor) in processors.withIndex()) {
+                                                    indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
+                                                    val pf = (processor.targetPsiFile as? PsiFile)
+                                                    indicator.text2 = pf?.name
+                                                        ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
+                                                    if (indicator.isCanceled) break
+                                                    processor.run()
+                                                }
+                                                extracted
+                                            }
                                         output = applyFinalOutput(project, dialog, finalJson)
                                     }
                                 },
-                                "I18n Extract Batch: Output",
+                                "I18n Extract Batch",
                                 null
                             )
                         }
