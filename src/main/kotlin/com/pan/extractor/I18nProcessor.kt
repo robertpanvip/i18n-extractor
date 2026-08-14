@@ -25,6 +25,7 @@ import com.intellij.notification.Notifications
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.*
 import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.intellij.psi.tree.IElementType
@@ -37,10 +38,44 @@ class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
+    // ─────────────────────────────────────────────────────────────
+    // 结构化 site（供跨文件公共前后缀合并 + 差异段嵌套 $t 重写使用）
+    // ─────────────────────────────────────────────────────────────
+    /** 一次提取命中：要被替换为 $t(key) 的中文 site */
+    data class CollectedSite(
+        val id: String,
+        val originalMessage: String,
+        val replaceRootPointer: SmartPsiElementPointer<PsiElement>,
+        val containingFile: VirtualFile?,
+        val isVue: Boolean,
+        val isReact: Boolean,
+    ) {
+        /** 给 Dialog/摘要展示用（只读，失败返回 1）。ReadAction 内调用更安全。 */
+        val startLine: Int
+            get() = runCatching {
+                val e = replaceRootPointer.element ?: return@runCatching 1
+                val file = containingFile ?: return@runCatching 1
+                val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                    .getDocument(file) ?: return@runCatching 1
+                val range = e.textRange ?: return@runCatching 1
+                if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
+                doc.getLineNumber(range.startOffset) + 1
+            }.getOrDefault(1)
+    }
+
+    /** 原来的 effects/change 包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
+    class CollectedChange(val siteId: String, private val runnable: () -> Unit) {
+        fun run() = runnable()
+    }
+
     /** 公开只读访问器，供进度条 UI 显示文件名（progress 线程里调用） */
     val targetPsiFile: PsiElement get() = psiFile
 
-    var effects = mutableListOf<() -> Unit>()
+    var effects = mutableListOf<CollectedChange>()
+    val collectedSites = mutableListOf<CollectedSite>()
+    val blockedSiteIds = mutableSetOf<String>()
+    private var siteCounter = 0
+    private fun nextSiteId() = "S${++siteCounter}"
 
     /** 新提取的 key -> 原文本 */
     val extractedStrings = mutableMapOf<String, String>()
@@ -116,7 +151,31 @@ class I18nProcessor(
             .replace("}}", "}")
     }
 
-    fun collectXmlText(element: PsiElement, changes: MutableList<() -> Unit>) {
+    /** 统一登记 site + 包装 change，返回新的 change 列表条目 */
+    private fun recordChange(
+        message: String,
+        replaceRoot: PsiElement,
+        anchor: PsiElement,
+        changes: MutableList<CollectedChange>,
+        replaceAction: () -> Unit
+    ) {
+        val id = nextSiteId()
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
+        val f = (anchor.containingFile ?: (this.psiFile as? PsiFile))
+        val isVue = f != null && isVueFile(f) || Util.isVue(anchor)
+        val isReact = !isVue && Util.isReact(anchor)
+        collectedSites += CollectedSite(
+            id = id,
+            originalMessage = message.trim(),
+            replaceRootPointer = ptr,
+            containingFile = f?.virtualFile,
+            isVue = isVue,
+            isReact = isReact,
+        )
+        changes += CollectedChange(id, replaceAction)
+    }
+
+    fun collectXmlText(element: PsiElement, changes: MutableList<CollectedChange>) {
         if (isComment(element)) {
             return
         }
@@ -198,8 +257,8 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
-    fun pureCollect(psiFile: PsiElement): MutableList<() -> Unit> {
-        val changes = mutableListOf<() -> Unit>();
+    fun pureCollect(psiFile: PsiElement): MutableList<CollectedChange> {
+        val changes = mutableListOf<CollectedChange>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
                 //println("${element.text},${element.javaClass.simpleName}")
@@ -234,7 +293,7 @@ class I18nProcessor(
         return changes
     }
 
-    fun collect(): MutableList<() -> Unit> {
+    fun collect(): MutableList<CollectedChange> {
         // Bug 2: 语言包/翻译资源文件（en-US.ts、i18n/zh-CN.js、messages.ja.ts、locales/xxx）
         // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
         val containingFile = psiFile.containingFile
@@ -448,7 +507,7 @@ class I18nProcessor(
         val containingFile = psiFile.containingFile
         if (containingFile != null && Util.isTranslationResourceFile(containingFile)) return
 
-        this.effects.forEach { it() }
+        this.effects.forEach { if (it.siteId !in blockedSiteIds) it.run() }
         val isVue = isVueFile(psiFile.containingFile) || Util.isVue(psiFile)
         val isReact = Util.isReact(psiFile)
         // 需要全局 i18n 实例 import 的场景：
@@ -1238,7 +1297,7 @@ class I18nProcessor(
 
     // Template 文本节点
     // ───────────────────────────────────────────────
-    private fun collectTemplateTextChange(textNode: XmlElement, changes: MutableList<() -> Unit>) {
+    private fun collectTemplateTextChange(textNode: XmlElement, changes: MutableList<CollectedChange>) {
         val original = textNode.text
         val trimmed = original.trim()
         if (trimmed === "") {
@@ -1263,7 +1322,12 @@ class I18nProcessor(
 
         val key = collectExtractedStrings(textNode)
 
-        changes.add {
+        recordChange(
+            message = pureText,
+            replaceRoot = textNode,
+            anchor = textNode,
+            changes = changes
+        ) {
             // 只找“同一个父节点”下的 XmlText（非常关键）
             val textChild = getCharactersText(textNode)
             val textNodes = textChild.ifEmpty { listOf(textNode) }
@@ -1348,7 +1412,7 @@ class I18nProcessor(
 
     // 属性值（重点处理 <slot name="中文"> → :name）
     // ───────────────────────────────────────────────
-    private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<() -> Unit>) {
+    private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<CollectedChange>) {
         val originalText = attrValue.value.trim();
         //println("jsx${Util.isJSX(attrValue)}")
         //println("XmlAttributeValue-${originalText}-${attrValue.text}")
@@ -1372,18 +1436,24 @@ class I18nProcessor(
         val isDirective = isVueDirective(attr.name);
 
         var newText = originalText;
+        var key: String? = null;
 
         if (!(isDirective && !attr.text.startsWith("\"")
                     && !attr.text.startsWith("'")
                     && !attr.text.startsWith("`"))
         ) {
-            val key = collectExtractedStrings(attrValue);
+            key = collectExtractedStrings(attrValue);
             newText = "${tFunctionName}('$key')"
         }
 
         if (newText == originalText) return
 
-        changes.add {
+        recordChange(
+            message = originalText,
+            replaceRoot = attrValue,
+            anchor = attrValue,
+            changes = changes
+        ) {
             var quote = if (attrValue.text.startsWith('"')) "" else "'"
             val prefix = if (isJSX || isVueDirective(attr.name)) "" else ":";
             var endQuote = quote;
@@ -1408,7 +1478,7 @@ class I18nProcessor(
 
     fun collectJSStringTemplate(
         raw: String,
-        changes: MutableList<() -> Unit>,
+        changes: MutableList<CollectedChange>,
         ele: PsiElement,
         creator: (String) -> String
     ) {
@@ -1479,8 +1549,13 @@ class I18nProcessor(
             if (paramKeyNeedsQuote) "\"$k\": $paramExpr" else "$k: $paramExpr"
         }
 
-        // 步骤6：添加替换逻辑
-        changes.add {
+        // 步骤6：添加替换逻辑（包装为 CollectedChange，允许后续因子化阻止旧替换）
+        recordChange(
+            message = message,
+            replaceRoot = ele,
+            anchor = ele,
+            changes = changes
+        ) {
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val text = creator(newExprText)
             val newElement = createStringExpressionNode(text, ele)
@@ -1510,6 +1585,36 @@ class I18nProcessor(
             "$fn($quote$escapedMsg$quote)"
         } else {
             "$fn($quote$escapedMsg$quote, $paramsObject)"
+        }
+    }
+
+    /**
+     * 纯文本构建 t() 调用，不依赖当前 processor 已探测到的 tFunctionName 注入上下文，
+     * 直接按 isVue/isReact 生成最稳妥形式（和现有探测一致：都用 \$t，减少复杂度）。
+     * - 若 skeletonKeyOverride 非空：key 用这个覆盖而不是 message.trim()（供合并骨架时使用）
+     */
+    fun buildTExprForRawText(
+        message: String,
+        paramsObject: String,
+        isVue: Boolean,
+        isReact: Boolean,
+        skeletonKeyOverride: String? = null,
+    ): String {
+        val trimmedMsg = message.trim()
+        val escapedMsg = if (trimmedMsg.contains("\n")) {
+            trimmedMsg.replace("`", "\\`")
+        } else {
+            trimmedMsg.replace("'", "\\'")
+        }
+        val quote = if (trimmedMsg.contains("\n")) "`" else "'"
+        val key = skeletonKeyOverride?.trim()?.ifBlank { null } ?: trimmedMsg
+        // 用户要求：统一用 \$t 减少复杂度（不需要再切 i18n.global.t / i18n.t 长形式）
+        val fn = "\$t"
+        val keyEscaped = if (key.contains("\n")) key.replace("`", "\\`") else key.replace("'", "\\'")
+        return if (paramsObject.replace(" ", "") == "{}") {
+            "$fn($quote$keyEscaped$quote)"
+        } else {
+            "$fn($quote$keyEscaped$quote, $paramsObject)"
         }
     }
 
@@ -1598,7 +1703,7 @@ class I18nProcessor(
         return child ?: dummyFile.firstChild
     }
 
-    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<() -> Unit>) {
+    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<CollectedChange>) {
         val raw = stringExpr.text
         if (raw.isEmpty()) return
         if (isTransformedCalled(stringExpr)) {
@@ -1721,7 +1826,7 @@ class I18nProcessor(
     // ───────────────────────────────────────────────
 // JS 字符串字面量
 // ───────────────────────────────────────────────
-    private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<() -> Unit>) {
+    private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<CollectedChange>) {
 
         // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
         // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
@@ -1796,7 +1901,12 @@ class I18nProcessor(
         val newExprText = buildTFunctionExpr(key, "{}")
         if (ele.text == newExprText) return
 
-        changes.add {
+        recordChange(
+            message = key,
+            replaceRoot = ele,
+            anchor = ele,
+            changes = changes
+        ) {
             val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
             if (newExpr != null) {
                 val newElement = newExpr.psi
@@ -1808,7 +1918,7 @@ class I18nProcessor(
     // ───────────────────────────────────────────────
 // JS 字符串拼接 (+)
 // ───────────────────────────────────────────────
-    private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<() -> Unit>) {
+    private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<CollectedChange>) {
         // 拼接形式的索引键（例：P['姓' + '名']）→ 也不翻译
         if (isInIndexKeyPosition(binaryExpr)) return
         if (binaryExpr.parent is JSBinaryExpression) {

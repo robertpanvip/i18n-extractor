@@ -27,6 +27,15 @@ import kotlin.io.path.Path
 import kotlin.io.path.relativeToOrNull
 
 object Util {
+    private val HAN_RE = Regex("""[\u4e00-\u9fff]""")
+
+    /** 常见 helper：文本中是否包含至少 1 个汉字（UTF-16 BMP 范围的中日韩统一表意文字基本区）。
+     *  - 用于判断差异段是否要嵌套 `$t('差异')`（含中文→嵌套；纯英文/数字→直接写字符串字面量）。*/
+    fun hasChinese(text: CharSequence?): Boolean {
+        if (text == null) return false
+        return HAN_RE.containsMatchIn(text)
+    }
+
     fun isJSX(element: PsiElement): Boolean {
         // 第二步：向上遍历父节点，检查 JS 语法上下文（核心逻辑）
         var currentParent = element.parent

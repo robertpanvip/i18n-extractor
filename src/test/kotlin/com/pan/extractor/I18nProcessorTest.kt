@@ -808,4 +808,433 @@ class I18nProcessorTest : BasePlatformTestCase() {
             processor.existingStrings.containsValue("缺陷")
         )
     }
+
+    // ============================================================
+    // 10. TS 专属方向 1：`as const` 数组 / 元组
+    // ============================================================
+
+    /**
+     * 测试 `as const` 字面量数组中的中文应正常提取；
+     * run() 后应替换为 i18n 调用，as const 保留在最外层（数组整体 as const 不动）。
+     */
+    fun testTypeScriptAsConstArrayChineseExtracts() {
+        val file = myFixture.configureByText(
+            "status.ts",
+            """
+            export const STATUSES = ["待审批", "已通过", "已拒绝", "已撤回"] as const
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals("STATUSES 中 4 个中文都应提取", 4, processor.extractedStrings.size)
+        assertTrue(processor.extractedStrings.containsValue("待审批"))
+        assertTrue(processor.extractedStrings.containsValue("已通过"))
+        assertTrue(processor.extractedStrings.containsValue("已拒绝"))
+        assertTrue(processor.extractedStrings.containsValue("已撤回"))
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "替换后应包含 \$t('待审批') / \$t('已通过') / \$t('已拒绝') / \$t('已撤回')，got:\n$result",
+            result.contains("\$t(\"待审批\")") || result.contains("\$t('待审批')") || result.contains("\$t(`待审批`)")
+        )
+        assertTrue(
+            "替换后 as const 仍保留在数组外层（不要把 as const 删掉），got:\n$result",
+            result.trim().endsWith("as const")
+        )
+        // NOTE：不能用 assertFalse(result.contains("\"待审批\"")) 来判断——因为 $t("待审批") 本身也会命中
+        //       该字符串。正确判断是「不存在『裸的独立字符串字面量』」，即它的前面不是 $t(。
+        assertFalse(
+            "替换后不应残留裸的硬编码 '待审批'（应被包进 \$t(\"待审批\") 形式），got:\n$result",
+            listOf("待审批", "已通过", "已拒绝", "已撤回").any { chinese ->
+                (result.contains("\"$chinese\"") && !result.contains("\$t(\"$chinese\"")) ||
+                    (result.contains("'$chinese'") && !result.contains("\$t('$chinese')"))
+            }
+        )
+    }
+
+    /**
+     * 测试 TS 元组（固定长度类型）的 `as const` 场景，中文应分别提取；
+     * 替换后应保持元组长度与顺序。
+     */
+    fun testTypeScriptAsConstTupleExtracts() {
+        val file = myFixture.configureByText(
+            "labels.ts",
+            """
+            const pair: readonly ["开始时间", "结束时间"] = ["开始时间", "结束时间"] as const
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals(2, processor.extractedStrings.size)
+        assertTrue(processor.extractedStrings.containsValue("开始时间"))
+        assertTrue(processor.extractedStrings.containsValue("结束时间"))
+
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            "替换后字符串元组值不应仍硬编码双引号开始时间/结束时间，got:\n$result",
+            result.contains("\", \"开始时间\"") && result.contains(", \"结束时间\"")
+        )
+    }
+
+    // ============================================================
+    // 11. TS 专属方向 2：enum 字符串枚举
+    // ============================================================
+
+    /**
+     * 测试字符串枚举（string enum）中的中文 value 应被提取；
+     * 替换后保留 enum 结构，value 换成 \$t(...)。
+     */
+    fun testTypeScriptStringEnumChineseExtracts() {
+        val file = myFixture.configureByText(
+            "OrderState.ts",
+            """
+            enum OrderState {
+              Pending = "待支付",
+              Paid = "已支付",
+              Shipped = "已发货",
+              Done = "已完成",
+              Canceled = "已取消",
+            }
+            export default OrderState
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // NOTE：processor 明确跳过 TypeScriptEnumField（原因是 enum 初始化值必须是编译期常量，
+        //       不能放 $t(...) 调用，会引发 TS18033）。所以提取数量应为 0，且枚举原始内容保持不动。
+        assertEquals("enum 字符串枚举不做 i18n 提取（避免 TS18033 编译错误）", 0, processor.extractedStrings.size)
+        assertFalse(processor.extractedStrings.containsValue("待支付"))
+        assertFalse(processor.extractedStrings.containsValue("已完成"))
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "enum 定义保留",
+            result.contains("enum OrderState")
+        )
+        assertTrue(
+            "enum 原字符串值保持原样（不替换为 \$t 调用，TS 编译期常量约束），got:\n$result",
+            result.contains("Pending = \"待支付\"") || result.contains("Pending = '待支付'")
+        )
+    }
+
+    // ============================================================
+    // 12. TS 专属方向 3：接口字段注释 / 类型别名 default 值 对象字面量（含方法）
+    // ============================================================
+
+    /**
+     * 接口 (interface) 内字段：只有默认值对象（非 interface 定义本身）中的中文 value 才应提取；
+     * interface 定义里的字段名（非字符串）不应被提取。
+     */
+    fun testTypeScriptInterfaceDefaultObjectChineseOnlyValueExtracted() {
+        val file = myFixture.configureByText(
+            "User.ts",
+            """
+            interface UserProfile {
+              nickname: string;
+              bio: string;
+              status: "在线" | "忙碌" | "离开";
+            }
+
+            export const defaultUser: UserProfile = {
+              nickname: "新用户",
+              bio: "这个人很懒，什么都没留下",
+              status: "在线",
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // defaultUser 中 3 个 value + 类型字面量类型中我们不扫描（因为那是 TS type 语法的字符串字面量类型）
+        // → 实际提取的是 defaultUser 的 nickname/bio/status 共 3 个硬编码字符串值
+        assertTrue(
+            "defaultUser 里 '新用户' 应被提取，got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("新用户")
+        )
+        assertTrue(
+            "defaultUser 里 '这个人很懒，什么都没留下' 应被提取，got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("这个人很懒，什么都没留下")
+        )
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "替换后 defaultUser.bio 应为 \$t('这个人很懒...')，got:\n$result",
+            result.contains("这个人很懒") && result.contains("\$t(")
+        )
+        assertTrue(
+            "interface UserProfile 定义应保持不变（不要改），got:\n$result",
+            result.contains("interface UserProfile") && result.contains("nickname: string;")
+        )
+    }
+
+    /**
+     * 对象里有 method（函数属性）时，方法体内的中文字符串也应提取；
+     * 不要把方法名 `sayHello` 误识别为对象属性字符串。
+     */
+    fun testTypeScriptObjectWithMethodBodyChineseExtracts() {
+        val file = myFixture.configureByText(
+            "service.ts",
+            """
+            const svc = {
+              title: "提示标题",
+              sayHello(name: string): string {
+                const prefix = "你好呀"
+                return prefix + name
+              },
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(processor.extractedStrings.containsValue("提示标题"))
+        assertTrue(processor.extractedStrings.containsValue("你好呀"))
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "svc.title + sayHello body 两处中文都应被 \$t(...) 替换，got:\n$result",
+            result.contains("\$t(`你好呀`)") || result.contains("\$t(\"你好呀\")") || result.contains("\$t('你好呀')")
+        )
+    }
+
+    // ============================================================
+    // 13. TS 专属方向 4：三元表达式（条件?中文分支A:中文分支B）
+    // ============================================================
+
+    /**
+     * 三元表达式两个分支都是中文 → 两个都要提取（各自独立）。
+     * 这个场景在 TS 里非常多（`const tip = ok ? "成功" : "失败"`）。
+     */
+    fun testTypeScriptTernaryBothChineseExtractsIndependently() {
+        val file = myFixture.configureByText(
+            "tips.ts",
+            """
+            function show(ok: boolean) {
+              const tip = ok ? "提交成功" : "提交失败"
+              const title = ok ? "好消息" : "坏消息"
+              return { tip, title }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals(4, processor.extractedStrings.size)
+        assertTrue(processor.extractedStrings.containsValue("提交成功"))
+        assertTrue(processor.extractedStrings.containsValue("提交失败"))
+        assertTrue(processor.extractedStrings.containsValue("好消息"))
+        assertTrue(processor.extractedStrings.containsValue("坏消息"))
+
+        processor.execute()
+        val result = file.text
+        // NOTE：$t("提交成功") 本身就是字符串字面量包含提交成功 → 所以不能直接 assertFalse(result.contains("\"提交成功\""))
+        //       而是「如果提交成功字面量出现，必须紧邻包在 $t( 调用里）」。
+        assertFalse(
+            "硬编码 '提交成功' 不应残留裸字符串（应包在 \$t(\"提交成功\") 形式里），got:\n$result",
+            (result.contains("\"提交成功\"") && !result.contains("\$t(\"提交成功\"")) ||
+                (result.contains("'提交成功'") && !result.contains("\$t('提交成功')"))
+        )
+        assertFalse(
+            "硬编码 '提交失败' 不应残留裸字符串（应包在 \$t(\"提交失败\") 形式里），got:\n$result",
+            (result.contains("\"提交失败\"") && !result.contains("\$t(\"提交失败\"")) ||
+                (result.contains("'提交失败'") && !result.contains("\$t('提交失败')"))
+        )
+        assertFalse(
+            "硬编码 '好消息' 不应残留裸字符串，got:\n$result",
+            (result.contains("\"好消息\"") && !result.contains("\$t(\"好消息\"")) ||
+                (result.contains("'好消息'") && !result.contains("\$t('好消息')"))
+        )
+        assertFalse(
+            "硬编码 '坏消息' 不应残留裸字符串，got:\n$result",
+            (result.contains("\"坏消息\"") && !result.contains("\$t(\"坏消息\"")) ||
+                (result.contains("'坏消息'") && !result.contains("\$t('坏消息')"))
+        )
+        assertTrue(
+            "至少应有一个三元表达式保留 `${'`'}ok ? ${'$'}t(...)${'`'}` 结构，got:\n$result",
+            result.contains("?") && result.contains(":") && result.contains("${'$'}t(")
+        )
+    }
+
+    // ============================================================
+    // 14. TS 专属方向 5：模板字面量 `${name}` 带命名插值（中文 + 命名变量组合）
+    //     buildTExpr Vue: {N0}  之前已知通过，这里补纯 TS 侧 3 条独立模板字面量场景。
+    // ============================================================
+
+    fun testTypeScriptTemplateLiteralNamedInterpolation() {
+        val BQ = '`'
+        val DOL = '$'
+        val file = myFixture.configureByText(
+            "toast.ts",
+            """
+            const title = "操作提示"
+            function toast(userName: string, code: number) {
+              return ${BQ}欢迎回来，${DOL}{userName}，您的验证码是 ${DOL}{code}${BQ}
+            }
+            function toast2(user: string, step: number, total: number) {
+              return ${BQ}用户${DOL}{user}：第${DOL}{step}/${DOL}{total}步${BQ}
+            }
+            const welcome = ${BQ}欢迎回来${BQ}
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // title = 操作提示 / toast = 欢迎回来，${x}，您的验证码是 ${y} / toast2 = 用户${x}：第${y}/${z}步 / welcome=欢迎回来
+        assertTrue("title 应提取 '操作提示'", processor.extractedStrings.containsValue("操作提示"))
+        assertTrue("welcome 应提取 '欢迎回来'", processor.extractedStrings.containsValue("欢迎回来"))
+        assertTrue(
+            "toast 整段模板字面量应提取为包含 欢迎回来 / 验证码 is 的骨架（含 2 个命名插值）",
+            processor.extractedStrings.values.any { it.contains("欢迎回来") && it.contains("验证码是") }
+        )
+        assertTrue(
+            "toast2 整段骨架包含 用户 / 第 / 步 三个中文段",
+            processor.extractedStrings.values.any { it.contains("用户") && it.contains("第") && it.contains("步") }
+        )
+
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            "toast 原始硬编码 `${'`'}欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}${'`'}` 不应残留",
+            result.contains("欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}")
+        )
+    }
+
+    // ============================================================
+    // 15. TS 专属方向 6：namespace + 类成员/静态方法
+    // ============================================================
+
+    fun testTypeScriptNamespacePlusClassMembersChineseExtracts() {
+        val file = myFixture.configureByText(
+            "api.ts",
+            """
+            namespace Api.ErrorMsg {
+              export class Network {
+                static readonly tip = "网络连接失败"
+                static readonly retry = "点击重试"
+                static reason(): string {
+                  const hint = "请检查网络设置"
+                  return hint
+                }
+              }
+              export const defaultTitle = "请求发生错误"
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(processor.extractedStrings.containsValue("网络连接失败"))
+        assertTrue(processor.extractedStrings.containsValue("点击重试"))
+        assertTrue(processor.extractedStrings.containsValue("请检查网络设置"))
+        assertTrue(processor.extractedStrings.containsValue("请求发生错误"))
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "namespace / class 定义应保留，got:\n$result",
+            result.contains("namespace Api.ErrorMsg") && result.contains("export class Network")
+        )
+        assertFalse(
+            "static readonly tip 的硬编码 '网络连接失败' 不应残留",
+            result.contains("tip = \"网络连接失败\"")
+        )
+    }
+
+    // ============================================================
+    // 16. TS 专属方向 7：解构赋值（含重命名 / 默认值）
+    // ============================================================
+
+    fun testTypeScriptDestructuringDefaultChineseExtracts() {
+        val file = myFixture.configureByText(
+            "config.ts",
+            """
+            interface Props {
+              label?: string
+              placeholder?: string
+              okText?: string
+            }
+            function Button({
+              label: title,
+              placeholder = "请输入关键字",
+              okText = "立即搜索",
+            }: Props) {
+              return { title, placeholder, okText }
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("placeholder 默认值 请输入关键字 应提取", processor.extractedStrings.containsValue("请输入关键字"))
+        assertTrue("okText 默认值 立即搜索 应提取", processor.extractedStrings.containsValue("立即搜索"))
+
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            "placeholder 默认值硬编码不应残留",
+            result.contains("placeholder = \"请输入关键字\"")
+        )
+        assertFalse(
+            "okText 默认值硬编码不应残留",
+            result.contains("okText = \"立即搜索\"")
+        )
+        assertTrue(
+            "解构 + 重命名语法 label: title 应保留（不要把它当字符串替换了），got:\n$result",
+            result.contains("label: title")
+        )
+    }
+
+    // ============================================================
+    // 17. TS 专属方向 8：Class 字段 + 静态初始化块 + 导出对象 as const
+    //     （项目里常见：静态字典 static {} 块、const exports.dict = {...} as const）
+    // ============================================================
+
+    fun testTypeScriptClassFieldsStaticBlockExportAsConstChineseExtracts() {
+        val file = myFixture.configureByText(
+            "dict.ts",
+            """
+            export class Constants {
+              readonly greeting = "欢迎使用"
+              static defaultMsg: string
+              static {
+                Constants.defaultMsg = "加载中..."
+              }
+            }
+
+            export const PAGE_TITLES = {
+              home: "首页",
+              about: "关于我们",
+              contact: "联系我们",
+            } as const
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(processor.extractedStrings.containsValue("欢迎使用"))
+        assertTrue(processor.extractedStrings.containsValue("加载中..."))
+        assertTrue(processor.extractedStrings.containsValue("首页"))
+        assertTrue(processor.extractedStrings.containsValue("关于我们"))
+        assertTrue(processor.extractedStrings.containsValue("联系我们"))
+        assertEquals(5, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "PAGE_TITLES 末尾 as const 应保留，got:\n$result",
+            result.trim().endsWith("as const")
+        )
+        assertFalse(
+            "static {} 块中硬编码 '加载中...' 不应残留双引号，got:\n$result",
+            result.contains("= \"加载中...\"")
+        )
+    }
 }

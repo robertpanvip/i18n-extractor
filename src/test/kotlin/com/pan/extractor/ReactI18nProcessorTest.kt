@@ -1302,4 +1302,285 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             values.containsAll(expected)
         )
     }
+
+    // ============================================================
+    // React TSX 方向 1：属性（props）中的中文 + 显式 TypeScript 类型 props
+    //           —— `<Button title="提示" />` 这种 `title="提示"` 场景之前只断言
+    //              extracted 中有值，但没跑 execute 替换；这里补完整链路，
+    //              并且额外覆盖显式类型 Props 的场景（`type Props = { title: string }`）
+    // ============================================================
+
+    fun testReactTsxPropStringChineseFullReplaceWithTypeProps() {
+        val file = configureFile(
+            "src/ConfirmButton.tsx",
+            """
+            import React from 'react'
+
+            type Props = {
+              size?: 'sm' | 'md' | 'lg'
+              title: string
+            }
+
+            function ConfirmButton(props: Props) {
+              return (
+                <button
+                  title="确认提示"
+                  aria-label="确认操作"
+                  data-ok-text="确定"
+                >
+                  {props.title}
+                </button>
+              )
+            }
+
+            export default function App() {
+              return (
+                <div>
+                  <ConfirmButton title="确认" />
+                  <ConfirmButton title="取消确认" />
+                </div>
+              )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        // title="确认提示" / aria-label="确认操作" / data-ok-text="确定"
+        // 注意：<ConfirmButton title="确认" /> / title="取消确认" → 它们的值也是中文硬编码 prop
+        assertTrue(
+            "button 静态属性 title='确认提示' 应提取，got=${processor.extractedStrings.values}",
+            processor.extractedStrings.containsValue("确认提示")
+        )
+        assertTrue(
+            "aria-label='确认操作' 应提取",
+            processor.extractedStrings.containsValue("确认操作")
+        )
+        assertTrue(
+            "data-ok-text='确定' 应提取",
+            processor.extractedStrings.containsValue("确定")
+        )
+        assertTrue(
+            "ConfirmButton title='确认' / title='取消确认' 两个 JSX 字符串 props 都应提取",
+            processor.extractedStrings.containsValue("确认") && processor.extractedStrings.containsValue("取消确认")
+        )
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "替换后属性中应包含 t(...)（React 格式），got:\n$result",
+            result.contains("t(")
+        )
+        // React 属性替换后应把 `title="确认提示"` 这种字符串 → `title={t('确认提示')}` / title={t("...")}
+        assertFalse(
+            "button title='确认提示' 静态字符串不应残留，got:\n$result",
+            result.contains("title=\"确认提示\"") || result.contains("title='确认提示'")
+        )
+        assertFalse(
+            "ConfirmButton title=\"确认\" 不应残留硬编码双引号，got:\n$result",
+            result.contains("title=\"确认\"") || result.contains("title='确认'")
+        )
+    }
+
+    // ============================================================
+    // React TSX 方向 2：泛型组件 `<T extends ...>`
+    //     场景： `<Select<string> label="选择国家" value={...} />`
+    //     如果泛型语法没正确识别，会导致 JSX attribute 中文漏提 +
+    //     children 里中文漏提。
+    // ============================================================
+
+    fun testReactTsxGenericComponentLabelAndChildrenChineseExtracts() {
+        val file = configureFile(
+            "src/GenericSelect.tsx",
+            """
+            import React from 'react'
+
+            function App() {
+              return (
+                <div>
+                  <select<string>
+                    placeholder="请选择国家"
+                    label="国家地区"
+                  >
+                    <option value="cn">中国</option>
+                    <option value="us">美国</option>
+                    <option value="jp">日本</option>
+                  </select<string>>
+                  <List<number> header="数字列表" footer="列表结束">
+                    <div>第一项描述</div>
+                    <div>第二项描述</div>
+                  </List<number>>
+                </div>
+              )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "泛型 select 的 placeholder 请选择国家 应提取",
+            processor.extractedStrings.containsValue("请选择国家")
+        )
+        assertTrue(
+            "泛型 select 的 label 国家地区 应提取",
+            processor.extractedStrings.containsValue("国家地区")
+        )
+        assertTrue("option 中文 中国 应提取", processor.extractedStrings.containsValue("中国"))
+        assertTrue("option 中文 美国 应提取", processor.extractedStrings.containsValue("美国"))
+        assertTrue("option 中文 日本 应提取", processor.extractedStrings.containsValue("日本"))
+        assertTrue("泛型 List header 数字列表 应提取", processor.extractedStrings.containsValue("数字列表"))
+        assertTrue("泛型 List footer 列表结束 应提取", processor.extractedStrings.containsValue("列表结束"))
+        assertTrue("List children 第一项描述 应提取", processor.extractedStrings.containsValue("第一项描述"))
+        assertTrue("List children 第二项描述 应提取", processor.extractedStrings.containsValue("第二项描述"))
+        assertEquals(9, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "泛型语法 `select<string>` 应保留（不要把它当字符串删了），got:\n$result",
+            result.contains("select<string>") && result.contains("List<number>")
+        )
+        assertFalse(
+            "placeholder=\"请选择国家\" 不应残留硬编码，got:\n$result",
+            result.contains("placeholder=\"请选择国家\"")
+        )
+        assertFalse(
+            "<option>中国</option> 不应残留硬编码中文文本，got:\n$result",
+            result.contains(">中国<")
+        )
+    }
+
+    // ============================================================
+    // React TSX 方向 3：spread attrs 中使用的中文字符串 +
+    //           as const 数组作为 JSX children（`{[ 'A','B'] as const}`）
+    //           —— spread 在 TSX 中常用来传 object，object value 的中文也要抽
+    // ============================================================
+
+    fun testReactTsxSpreadObjectPlusAsConstArrayChildrenExtracts() {
+        val file = configureFile(
+            "src/Mix.tsx",
+            """
+            import React from 'react'
+
+            const commonProps = {
+              tip: "鼠标悬停提示",
+              ariaLabel: "可点击控件",
+            }
+
+            function App() {
+              const tabs = ["首页", "发现页", "我的"] as const
+              return (
+                <div>
+                  <Button {...commonProps} label="主按钮" />
+                  <ul>
+                    {tabs}
+                  </ul>
+                </div>
+              )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("commonProps.tip 鼠标悬停提示 应提取", processor.extractedStrings.containsValue("鼠标悬停提示"))
+        assertTrue("commonProps.ariaLabel 可点击控件 应提取", processor.extractedStrings.containsValue("可点击控件"))
+        assertTrue("tabs[0] 首页 应提取", processor.extractedStrings.containsValue("首页"))
+        assertTrue("tabs[1] 发现页 应提取", processor.extractedStrings.containsValue("发现页"))
+        assertTrue("tabs[2] 我的 应提取", processor.extractedStrings.containsValue("我的"))
+        assertTrue("Button label=\"主按钮\" 应提取", processor.extractedStrings.containsValue("主按钮"))
+        assertEquals(6, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "tabs 尾部 as const 应保留（不要把数组尾删了），got:\n$result",
+            result.contains("as const")
+        )
+        assertTrue(
+            "spread {...commonProps} 语法应保留，got:\n$result",
+            result.contains("{...commonProps}")
+        )
+        assertFalse(
+            "commonProps.tip 不应残留硬编码 \"鼠标悬停提示\"，got:\n$result",
+            result.contains("tip: \"鼠标悬停提示\"")
+        )
+        // NOTE：如果替换形式是 $t("首页") → result.contains("\"首页\"") 会 TRUE，所以判断是
+        //       「如果命中字符串字面量，就必须紧邻包在 $t( 调用里」，而不是字面量 0 出现。
+        assertFalse(
+            "tabs 数组中 '首页' 不应残留裸硬编码（应包进 \$t(\"首页\") 形式），got:\n$result",
+            (result.contains("\"首页\"") && !result.contains("\$t(\"首页\"")) ||
+                (result.contains("'首页'") && !result.contains("\$t('首页')"))
+        )
+        assertFalse(
+            "tabs 数组中 '发现页' 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"发现页\"") && !result.contains("\$t(\"发现页\"")) ||
+                (result.contains("'发现页'") && !result.contains("\$t('发现页')"))
+        )
+        assertFalse(
+            "tabs 数组中 '我的' 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"我的\"") && !result.contains("\$t(\"我的\"")) ||
+                (result.contains("'我的'") && !result.contains("\$t('我的')"))
+        )
+        assertFalse(
+            "Button label=\"主按钮\" 不应残留裸硬编码，got:\n$result",
+            (result.contains("\"主按钮\"") && !result.contains("\$t(\"主按钮\"")) ||
+                (result.contains("'主按钮'") && !result.contains("\$t('主按钮')"))
+        )
+    }
+
+    // ============================================================
+    // React TSX 方向 4：纯 TS 工具文件（非组件）里用 declare namespace 声明类型
+    //           + 实际运行时对象里的中文字符串——类型层不能扫、只扫 runtime 层
+    // ============================================================
+
+    fun testReactTsToolNamespaceDeclarationShouldNotAffectRuntimeChineseExtract() {
+        val file = configureFile(
+            "src/utils/error.ts",
+            """
+            import { getI18n } from 'react-i18next'
+
+            declare global {
+              namespace NodeJS {
+                interface ProcessEnv {
+                  readonly NODE_ENV: "development" | "production"
+                }
+              }
+            }
+
+            export const ERRORS = {
+              E001: "用户名或密码错误",
+              E002: "验证码已过期",
+              E003: "用户未登录",
+            } as const
+
+            export function msgOf(code: keyof typeof ERRORS) {
+              return ERRORS[code]
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(processor.extractedStrings.containsValue("用户名或密码错误"))
+        assertTrue(processor.extractedStrings.containsValue("验证码已过期"))
+        assertTrue(processor.extractedStrings.containsValue("用户未登录"))
+        assertEquals(3, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        assertTrue(
+            "declare global / namespace NodeJS 声明应保留（不要删除 TS 类型层），got:\n$result",
+            result.contains("declare global") && result.contains("namespace NodeJS")
+        )
+        assertTrue(
+            "ERRORS 末尾 as const 应保留",
+            result.contains("as const")
+        )
+        assertFalse(
+            "ERRORS.E001 硬编码 \"用户名或密码错误\" 不应残留",
+            result.contains("E001: \"用户名或密码错误\"")
+        )
+    }
 }
