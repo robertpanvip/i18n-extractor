@@ -1729,7 +1729,7 @@ object Util {
     // ==========================================================================
     fun writeVirtualFileText(entryVf: VirtualFile, newText: String) {
         val bytes = newText.toByteArray(StandardCharsets.UTF_8)
-        entryVf.setBinaryContent(bytes, 0, bytes.size, null)
+        entryVf.setBinaryContent(bytes, 0L, bytes.size.toLong(), null)
     }
 
     /** 把虚拟文件路径作为"候选"持久化，供下次优先命中。 */
