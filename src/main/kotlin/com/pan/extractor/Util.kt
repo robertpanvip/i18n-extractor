@@ -801,7 +801,11 @@ object Util {
                 .toString()
                 .replace("\\", "/")
 
-            if (regexList.any { it.matches(relativePath) }) {
+            // 排除 node_modules 与构建产物目录，避免把依赖源码当成翻译源
+            if (relativePath.split("/").contains("node_modules")) return@forEach
+
+            // include 为空时视为"全项目扫描"（回退），否则按 glob 模式匹配
+            if (regexList.isEmpty() || regexList.any { it.matches(relativePath) }) {
                 LocalFileSystem.getInstance()
                     .findFileByIoFile(file)
                     ?.let { result.add(it) }
