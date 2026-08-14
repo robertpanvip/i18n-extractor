@@ -605,7 +605,11 @@ object Util {
      */
     fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? {
         val projectRoot = findProjectRoot(currentPsiFile) ?: return null
+        return findVueI18nInstanceFileInRoot(projectRoot)
+    }
 
+    /** [findVueI18nInstanceFile] 的 root 版本：给定项目根，查找调用了 createI18n( 的文件。 */
+    fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
         val commonDirs = listOf(
             "src/locales",
             "locales",
@@ -947,7 +951,9 @@ object Util {
             }
             if (hit != null) return hit
         }
-        // 3) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
+        // 3) 预设目录未命中：统一像 Vue 全局导入那样探测 createI18n 实例，再根据其配置项查中文入口
+        findChineseEntryViaVueConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
+        // 4) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
         val excludeDirs = setOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
         return walkVirtualFile(root, maxDepth = 5, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isDirectory || !vf.isValid) return@walkVirtualFile null
@@ -961,6 +967,74 @@ object Util {
                 vf
             } else null
         }
+    }
+
+    /**
+     * 统一像 Vue 全局导入那样探测：找到 createI18n 实例文件，然后根据其配置项
+     * （`locale` / `messages`）查出实际的中文 message 来源文件。
+     *
+     * 例如：
+     *   import zhLocales from '../config/messages/zh-locales'
+     *   createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zhLocales, en: enLocales } })
+     * → 解析出 locale='zh-CN'，在 messages 里命中 'zh-CN' → zhLocales → 解析 import 得到该文件。
+     */
+    fun findChineseEntryViaVueConfig(root: VirtualFile): VirtualFile? {
+        val i18nVFile = findVueI18nInstanceFileInRoot(root) ?: return null
+        val text = try { String(i18nVFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return null }
+
+        // 1) 定位 createI18n( 的配置对象
+        val createIdx = Regex("""createI18n\s*\(""").find(text)?.range?.first ?: return null
+        val brace = text.indexOf('{', createIdx)
+        if (brace < 0) return null
+        val optionsEnd = findBalancedCloseBrace(text, brace) ?: return null
+        val options = text.substring(brace, optionsEnd)
+
+        // 2) 读取 locale 配置值（如 'zh-CN'）
+        val localeCode = Regex("""locale\s*:\s*['"]([^'"]+)['"]""").find(options)?.groupValues?.get(1)
+
+        // 3) 解析 messages: { ... } 里的语言->引用 映射
+        val messagesMatch = Regex("""messages\s*:\s*\{""").find(options) ?: return null
+        val mBrace = messagesMatch.range.last
+        val mEnd = findBalancedCloseBrace(options, mBrace) ?: return null
+        val refs = parseMessagesRefs(options.substring(mBrace, mEnd))
+        if (refs.isEmpty()) return null
+
+        // 4) 选目标：优先 locale 配置对应的引用，其次 zh 风味的语言 key，最后第一个
+        val preferred = localeCode
+        val target = refs.firstOrNull { it.first == preferred }
+            ?: refs.firstOrNull { isChineseLocaleBasename(it.first) }
+            ?: refs.firstOrNull { it.first.lowercase().startsWith("zh") }
+            ?: refs.first()
+        val valueExpr = target.second.trim()
+        if (valueExpr.isEmpty() || valueExpr.startsWith("{") || valueExpr.startsWith("[")) return null
+
+        // 5) 把引用名解析成 import 路径并定位文件
+        val importPath = resolveImportPathForIdentifier(text, valueExpr) ?: return null
+        return resolveLocalImportFile(i18nVFile, importPath)
+    }
+
+    /** 解析 messages 对象体，返回 [(语言 key, 引用表达式)]，兼容 keyed 与 shorthand 写法。 */
+    private fun parseMessagesRefs(mBody: String): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        for (prop in splitTopLevelProperties(mBody)) {
+            val t = prop.trim()
+            if (t.isEmpty()) continue
+            val kv = parseOneProperty(t)
+            if (kv != null) {
+                val v = stripValueSuffixes(kv.second).trim()
+                if (v.startsWith("{") || v.startsWith("[")) continue // 内联对象/数组，非文件引用
+                result.add(kv.first to v)
+            } else if (t.matches(Regex("""[A-Za-z_$][\w$]*"""))) {
+                result.add(t to t) // shorthand：`zh,` → key 与引用同名
+            }
+        }
+        return result
+    }
+
+    /** 在文本中查找导入指定标识符的 import 语句，返回其模块路径。 */
+    private fun resolveImportPathForIdentifier(text: String, identifier: String): String? {
+        val re = Regex("""import\s+(${Regex.escape(identifier)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
+        return re.find(text)?.groupValues?.get(2)
     }
 
     // ==========================================================================

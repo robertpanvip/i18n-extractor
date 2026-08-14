@@ -122,4 +122,49 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         assertNotNull("非法 JSON 应兜底返回格式化后的新 JSON", newText)
         assertTrue("兜底结果应包含新 key '首页'，result:\n$newText", newText!!.contains("首页"))
     }
+
+    // ─────────────────────────────────────────
+    // 中文入口探测：按 Vue createI18n 配置查（预设目录无 zh 文件时）
+    // ─────────────────────────────────────────
+    fun testChineseEntryDetectedViaVueConfig() {
+        // 预设目录 src/locales 里只有 index.ts（无 zh 基名文件），预设扫描不会命中；
+        // 真正的中文来源在 src/config/messages/zh-locales.ts，只能通过 createI18n 配置反向解析出来。
+        myFixture.addFileToProject("package.json", "{}")
+        createEntry(
+            "src/locales/index.ts",
+            """
+            import zhLocales from '../config/messages/zh-locales'
+            import enLocales from '../config/messages/en-locales'
+            export default createI18n({
+              legacy: false,
+              locale: 'zh-CN',
+              fallbackLocale: 'en-US',
+              messages: {
+                'zh-CN': zhLocales,
+                'en-US': enLocales,
+              }
+            })
+            """.trimIndent()
+        )
+        createEntry("src/config/messages/zh-locales.ts", "export default { '标题': '标题' }")
+        createEntry("src/config/messages/en-locales.ts", "export default { 'Title': 'Title' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("应通过 Vue 配置探测到中文入口", found)
+        assertTrue(
+            "应命中 zh-locales.ts，实际：${found!!.path}",
+            found.path.endsWith("config/messages/zh-locales.ts")
+        )
+    }
+
+    // 预设目录直接命中时，仍优先走性能快的常见目录扫描（不依赖 createI18n）
+    fun testChineseEntryPrefersPresetDir() {
+        myFixture.addFileToProject("package.json", "{}")
+        createEntry("src/locales/zh.ts", "export default { '首页': '首页' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("预设目录应优先命中", found)
+        assertTrue("应命中 src/locales/zh.ts，实际：${found!!.path}", found.path.endsWith("locales/zh.ts"))
+    }
 }
