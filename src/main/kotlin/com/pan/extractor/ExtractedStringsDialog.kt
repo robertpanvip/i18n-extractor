@@ -5,10 +5,18 @@ import com.intellij.json.JsonFileType
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.FlowLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
 import java.util.*
 import javax.swing.*
 import javax.swing.table.DefaultTableModel
@@ -18,6 +26,8 @@ class ExtractedStringsDialog(
     private val extracted: Map<String, String>,
     private val affixGroups: List<AffixGroupCandidate> = emptyList(),
     private val digitGroups: List<DigitGroupCandidate> = emptyList(),
+    /** 上下文 PSI 文件，用于推断项目根查找中文入口文件 */
+    private val contextPsiFile: com.intellij.psi.PsiFile? = null,
 ) : DialogWrapper(project) {                   // 正確傳給 super
 
     /** 用户确认 Dialog 后对外暴露的合并执行计划（勾选项） */
@@ -30,6 +40,20 @@ class ExtractedStringsDialog(
     var json: String? = null
     var mergePlan: MergePlan = MergePlan(emptyList(), emptyList())
         private set
+
+    /** OK 后对外暴露：用户选择的输出方式 */
+    var outputMode: Util.OutputMode = Util.OutputMode.COPY_TO_CLIPBOARD
+        private set
+    /** OK 后对外暴露：用户选择的中文入口文件（若选择了覆盖） */
+    var selectedEntryFile: VirtualFile? = null
+        private set
+
+    // UI 控件
+    private lateinit var radioClipboard: JRadioButton
+    private lateinit var radioOverwrite: JRadioButton
+    private lateinit var entryPathField: JTextField
+    private lateinit var btnPickEntry: JButton
+    private lateinit var lblEntryStatus: JLabel
 
     // Swing 默认列：Boolean / String / String / String / String / Int / String
     private class AffixModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
@@ -80,18 +104,186 @@ class ExtractedStringsDialog(
         editor.isViewer = true
         editor.settings.isLineNumbersShown = true
         editor.settings.isUseSoftWraps = true
-        editor.component.preferredSize = Dimension(900, 620)
+        editor.component.preferredSize = Dimension(900, 560)
         this.editor = editor
 
         val tabs = JTabbedPane()
         tabs.addTab("翻译 JSON 预览", editor.component)
         tabs.addTab("合并建议（公共前后缀 + 汉字+数字抽取）", buildMergeTab())
 
-        return tabs
+        // 外层：tabs 在 NORTH/CENTER，配置面板在 SOUTH
+        val root = JPanel(BorderLayout(0, 10))
+        root.preferredSize = Dimension(1000, 760)
+        root.add(tabs, BorderLayout.CENTER)
+        root.add(buildOutputConfigPanel(), BorderLayout.SOUTH)
+
+        // 初始化配置控件（根据用户上次保存的值 + 自动探测入口文件）
+        initConfigControls()
+
+        return root
+    }
+
+    /** 构造输出方式配置面板（底部）。 */
+    private fun buildOutputConfigPanel(): JComponent {
+        val panel = JPanel(GridBagLayout())
+        panel.border = BorderFactory.createTitledBorder("输出方式（偏好会记住到项目级别）")
+
+        val gbc0 = GridBagConstraints().apply {
+            gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST
+            insets = Insets(4, 8, 4, 8)
+        }
+        val gbc1 = GridBagConstraints().apply {
+            gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; fill = GridBagConstraints.HORIZONTAL
+            weightx = 1.0; insets = Insets(4, 0, 4, 4)
+        }
+        val gbc2 = GridBagConstraints().apply {
+            gridx = 2; gridy = 0; anchor = GridBagConstraints.WEST
+            insets = Insets(4, 0, 4, 8)
+        }
+        val gbcStatus = GridBagConstraints().apply {
+            gridx = 0; gridy = 1; gridwidth = 3; anchor = GridBagConstraints.WEST
+            fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
+            insets = Insets(0, 8, 6, 8)
+        }
+
+        // 行 0 左：单选按钮组
+        val radioPanel = JPanel()
+        radioPanel.layout = BoxLayout(radioPanel, BoxLayout.Y_AXIS)
+        val group = ButtonGroup()
+        radioClipboard = JRadioButton("拷贝到剪贴板（默认：复制 JSON key-value，需手动贴到语言包里）")
+        radioOverwrite = JRadioButton("覆盖入口中文多语言文件（自动把新 key 合并写回 .ts/.json 入口）")
+        group.add(radioClipboard); group.add(radioOverwrite)
+        radioPanel.add(radioClipboard)
+        radioPanel.add(radioOverwrite)
+        radioClipboard.addActionListener { syncEntryControlsEnabled() }
+        radioOverwrite.addActionListener { syncEntryControlsEnabled() }
+        panel.add(radioPanel, gbc0)
+
+        // 行 0 中：入口文件路径文本框
+        entryPathField = JTextField()
+        entryPathField.toolTipText = "中文语言包入口文件（zh-CN.ts / zh_CN.json / messages.zhs.ts 等）"
+        panel.add(entryPathField, gbc1)
+
+        // 行 0 右：选择文件按钮
+        btnPickEntry = JButton("选择…")
+        btnPickEntry.addActionListener { onPickEntryFile() }
+        panel.add(btnPickEntry, gbc2)
+
+        // 行 1：状态/提示 Label
+        lblEntryStatus = JLabel()
+        lblEntryStatus.putClientProperty("html.disable", null)
+        panel.add(lblEntryStatus, gbcStatus)
+
+        return panel
+    }
+
+    /** 初始化：读取用户偏好 + 自动探测中文入口文件。 */
+    private fun initConfigControls() {
+        // 1) 输出方式
+        val savedMode = Util.getOutputMode(project)
+        radioClipboard.isSelected = savedMode == Util.OutputMode.COPY_TO_CLIPBOARD
+        radioOverwrite.isSelected = savedMode == Util.OutputMode.OVERWRITE_ENTRY_FILE
+
+        // 2) 入口文件：先读持久化路径，其次自动探测
+        val storedPath = Util.getStoredEntryPath(project)
+        var candidate: VirtualFile? = storedPath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+        if (candidate == null || !candidate.isValid) {
+            candidate = try {
+                Util.findChineseLocaleEntryFile(project, contextPsiFile)
+            } catch (_: Throwable) { null }
+        }
+        if (candidate != null) {
+            entryPathField.text = candidate.path
+            lblEntryStatus.text = "<html><span style=\"color:#2e7d32\">✓ 已定位中文入口：${candidate.name}（${candidate.extension?.uppercase()}）</span></html>"
+        } else {
+            lblEntryStatus.text = "<html><span style=\"color:#c62828\">未自动找到中文入口文件，请点击「选择…」手动指定 zh-CN.ts / zh_CN.json</span></html>"
+            if (radioOverwrite.isSelected) {
+                // 没找到入口 → 自动退回 clipboard，避免用户误选覆盖
+                radioClipboard.isSelected = true
+            }
+        }
+
+        syncEntryControlsEnabled()
+    }
+
+    private fun syncEntryControlsEnabled() {
+        val enable = radioOverwrite.isSelected
+        entryPathField.isEnabled = enable
+        btnPickEntry.isEnabled = enable
+    }
+
+    /** 用户手动选入口文件。 */
+    private fun onPickEntryFile() {
+        val descriptor = FileChooserDescriptor(
+            true,   /* chooseFiles */
+            false,  /* chooseFolders */
+            false,  /* chooseJars */
+            false,  /* chooseJarsAsFiles */
+            false,  /* chooseLibraryContents */
+            false   /* forSaving */
+        ).withFileFilter { vf ->
+            val ext = vf.extension?.lowercase()
+            ext in setOf("ts", "tsx", "js", "jsx", "json")
+        }
+        descriptor.title = "选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等）"
+        descriptor.description = "只接受 .ts / .tsx / .js / .jsx / .json 后缀"
+
+        val initialFile = entryPathField.text?.takeIf { it.isNotBlank() }
+            ?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
+
+        val chosen = FileChooser.chooseFile(descriptor, project, initialFile)
+        if (chosen != null) {
+            entryPathField.text = chosen.path
+            val ext = chosen.extension?.lowercase()
+            lblEntryStatus.text = if (ext in setOf("ts", "tsx", "js", "jsx")) {
+                "<html><span style=\"color:#1565c0\">✓ 选中 TS/JS 入口：${chosen.name}（将解析 export default / export const 对象字面量，表达式部分原样保留）</span></html>"
+            } else if (ext == "json") {
+                "<html><span style=\"color:#2e7d32\">✓ 选中 JSON 入口：${chosen.name}（直接合并 JSON 写回）</span></html>"
+            } else {
+                "<html><span style=\"color:#c62828\">⚠ 文件后缀 ${chosen.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json</span></html>"
+            }
+        }
     }
 
     override fun doOKAction() {
-        // 把勾选项 & 用户编辑后的骨架 key 写回每个 group 对象（mutable）+ 合并到 mergePlan
+        // ── ① 校验：若选覆盖模式，入口文件路径必须有效 ──
+        val wantOverwrite = radioOverwrite.isSelected
+        val entryFile: VirtualFile? = if (wantOverwrite) {
+            val pathText = entryPathField.text?.trim().orEmpty()
+            if (pathText.isEmpty()) {
+                JOptionPane.showMessageDialog(
+                    this.contentPanel,
+                    "请选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等），或切换为「拷贝到剪贴板」模式。",
+                    "入口文件未指定",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return
+            }
+            val f = LocalFileSystem.getInstance().findFileByPath(pathText)
+            if (f == null || !f.isValid || f.isDirectory) {
+                JOptionPane.showMessageDialog(
+                    this.contentPanel,
+                    "入口文件不存在或无效：$pathText\n请重新选择，或切换为「拷贝到剪贴板」模式。",
+                    "入口文件无效",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return
+            }
+            val ext = f.extension?.lowercase()
+            if (ext !in setOf("ts", "tsx", "js", "jsx", "json")) {
+                JOptionPane.showMessageDialog(
+                    this.contentPanel,
+                    "入口文件后缀 ${f.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json。",
+                    "入口文件类型不支持",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return
+            }
+            f
+        } else null
+
+        // ── ② 写回勾选项 + 合并计划 ──
         val pickedAffix = mutableListOf<AffixGroupCandidate>()
         for (row in 0 until affixModel.rowCount) {
             val checked = affixModel.getValueAt(row, 0) as? Boolean == true
@@ -109,6 +301,16 @@ class ExtractedStringsDialog(
             if (checked) pickedDigit += group
         }
         mergePlan = MergePlan(pickedAffix, pickedDigit)
+
+        // ── ③ 持久化用户偏好 & 暴露结果 ──
+        val mode = if (wantOverwrite) Util.OutputMode.OVERWRITE_ENTRY_FILE else Util.OutputMode.COPY_TO_CLIPBOARD
+        Util.setOutputMode(project, mode)
+        outputMode = mode
+        selectedEntryFile = entryFile
+        if (entryFile != null) {
+            Util.persistEntryPathIfNeeded(project, entryFile)
+        }
+
         super.doOKAction()
     }
 

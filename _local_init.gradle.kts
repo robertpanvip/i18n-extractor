@@ -103,5 +103,44 @@ allprojects {
         tencentList.forEach { repositories.add(it) }
         others.forEach { repositories.add(it) }
         jbList.forEach { repositories.add(it) }
+
+        // ---------- 本地环境覆盖（只作用于本地 init 脚本执行时，不会写入线上 build.gradle.kts） ----------
+        //   · main 上 java.toolchain.languageVersion = Java 21，但本地容器只安装了 Java 17，
+        //     否则 Gradle 会尝试自动下载 Java 21 toolchain（外网不通或慢）。
+        //   · Kotlin 编译 jvmTarget 也同步降到 17，保持字节码与本地 JDK 一致。
+        //   · 检测到本地 JAVA_HOME 指向 Java 21+ 时不强制降级，避免误伤开发机。
+        try {
+            val localJvmVer = System.getProperty("java.specification.version")?.toIntOrNull()
+            val project = this@afterEvaluate
+            if (localJvmVer != null && localJvmVer < 21) {
+                project.plugins.withType(org.gradle.api.plugins.JavaPlugin::class.java) {
+                    project.extensions.configure(org.gradle.api.plugins.JavaPluginExtension::class.java) {
+                        toolchain {
+                            it.languageVersion.set(JavaLanguageVersion.of(Math.max(localJvmVer, 17)))
+                        }
+                    }
+                }
+                try {
+                    val kotlinJvmClass = Class.forName("org.jetbrains.kotlin.gradle.dsl.JvmTarget")
+                    val target = if (localJvmVer >= 17) {
+                        kotlinJvmClass.getField("JVM_17").get(null)
+                    } else {
+                        kotlinJvmClass.getField("JVM_${localJvmVer * 10}").takeIf { it != null }?.get(null)
+                            ?: kotlinJvmClass.getField("JVM_17").get(null)
+                    }
+                    project.tasks.withType(Class.forName("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")) { task ->
+                        try {
+                            val coClass = Class.forName("org.jetbrains.kotlin.gradle.dsl.KotlinJvmCompilerOptions")
+                            val opts = (task as org.gradle.api.tasks.compile.AbstractCompile).extensions
+                                .findByName("compilerOptions")
+                            if (opts != null && coClass.isInstance(opts)) {
+                                val m = coClass.getMethod("setJvmTarget", Object::class.java)
+                                m.invoke(opts, target)
+                            }
+                        } catch (_: Throwable) { /* 任务没配置 compilerOptions 就跳过 */ }
+                    }
+                } catch (_: Throwable) { /* 没应用 Kotlin 插件也正常，忽略 */ }
+            }
+        } catch (_: Throwable) { /* 保护：任何本地覆盖失败都不影响主构建 */ }
     }
 }

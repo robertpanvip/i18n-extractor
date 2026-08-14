@@ -1,6 +1,7 @@
 package com.pan.extractor
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -147,23 +148,98 @@ class AllI18nExtractorAction : AnAction() {
         return ActionUpdateThread.BGT
     }
 
+    data class OutputResult(
+        val copiedToClipboard: Boolean,
+        val overwroteEntryFile: Boolean,
+        val entryFileName: String? = null,
+        val fallbackReason: String? = null,
+    )
+
     // ── 问题 6：全项目提取成功提示 ──
     private fun notifyExtractSuccess(
         project: Project,
         title: String,
         extractedCount: Int,
         processedFiles: Int,
-        jsonWritten: Boolean,
+        output: OutputResult,
     ) {
         val filesPart = "（扫描 $processedFiles 个文件）"
-        val jsonPart = if (jsonWritten) "，JSON 已复制到剪贴板" else ""
-        val subtitle = "提取 $extractedCount 条 key$filesPart$jsonPart"
+        val outputPart = when {
+            output.overwroteEntryFile && output.entryFileName != null ->
+                "，已合并写回入口文件「${output.entryFileName}」"
+            output.copiedToClipboard && output.fallbackReason != null ->
+                "，JSON 已复制到剪贴板（写回入口失败：${output.fallbackReason}）"
+            output.copiedToClipboard -> "，JSON 已复制到剪贴板"
+            else -> ""
+        }
+        val subtitle = "提取 $extractedCount 条 key$filesPart$outputPart"
         val notificationGroup = NotificationGroupManager.getInstance()
             .getNotificationGroup("Vue i18n 提取提示")
         Notifications.Bus.notify(
             notificationGroup.createNotification(title, subtitle, NotificationType.INFORMATION),
             project
         )
+    }
+
+    private fun applyFinalOutput(
+        project: Project,
+        dialog: ExtractedStringsDialog,
+        finalFlatJson: Map<String, String>,
+    ): OutputResult {
+        val prettyGson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
+        val mode = dialog.outputMode
+        val entryVf = dialog.selectedEntryFile
+        val jsonPretty = prettyGson.toJson(finalFlatJson)
+
+        if (mode == Util.OutputMode.OVERWRITE_ENTRY_FILE && entryVf != null) {
+            val ext = entryVf.extension?.lowercase()
+            val newText: String? = try {
+                when (ext) {
+                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)
+                    "ts", "tsx", "js", "jsx" -> Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)
+                    else -> null
+                }
+            } catch (t: Throwable) {
+                null
+            }
+            if (newText != null) {
+                try {
+                    Util.writeVirtualFileText(entryVf, newText)
+                    return OutputResult(
+                        copiedToClipboard = false,
+                        overwroteEntryFile = true,
+                        entryFileName = entryVf.name,
+                    )
+                } catch (t: Throwable) {
+                    val content = Util.getJsonContent(jsonPretty)
+                    CopyPasteManager.getInstance().setContents(StringSelection(content))
+                    return OutputResult(
+                        copiedToClipboard = true,
+                        overwroteEntryFile = false,
+                        fallbackReason = t.message?.take(40) ?: "写文件异常"
+                    )
+                }
+            } else {
+                val reason = when (ext) {
+                    "ts", "tsx", "js", "jsx" -> "TS/JS 入口未找到 export default/export const 对象字面量，或包含无法解析结构"
+                    "json" -> "JSON 解析失败"
+                    else -> "不支持的入口文件后缀"
+                }
+                val content = Util.getJsonContent(jsonPretty)
+                CopyPasteManager.getInstance().setContents(StringSelection(content))
+                return OutputResult(
+                    copiedToClipboard = true,
+                    overwroteEntryFile = false,
+                    fallbackReason = reason
+                )
+            }
+        }
+
+        if (dialog.json != null) {
+            val content = Util.getJsonContent(dialog.json!!)
+            CopyPasteManager.getInstance().setContents(StringSelection(content))
+        }
+        return OutputResult(copiedToClipboard = true, overwroteEntryFile = false)
     }
 
     private fun notifyNothingExtracted(project: Project) {
@@ -277,6 +353,8 @@ class AllI18nExtractorAction : AnAction() {
 
     fun transform(e: AnActionEvent) {
         val project = e.project ?: return
+        // 上下文 PsiFile：给 Dialog 推断入口文件位置用
+        val contextPsi: PsiFile? = e.getData(CommonDataKeys.PSI_FILE)
         val allFiles = getIncludesFile(project)
         // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
         val files = allFiles.filterNot { Util.isTranslationResourceFile(it) }
@@ -318,31 +396,28 @@ class AllI18nExtractorAction : AnAction() {
             CommonPrefixSuffixFactorizer.factorize(siteRefs)
         }
 
-        // 弹出模态框：Tab1 JSON / Tab2 合并建议
-        val dialog = ExtractedStringsDialog(project, extracted, affixGroups, digitGroups);
+        // 弹出模态框：Tab1 JSON / Tab2 合并建议 + Tab 底部输出方式配置
+        val dialog = ExtractedStringsDialog(
+            project, extracted, affixGroups, digitGroups,
+            contextPsiFile = contextPsi
+        );
         if (dialog.showAndGet()) {
             val mergePlan = dialog.mergePlan
-            val jsonDialog = dialog.json
 
             // 【问题 1 / 用户反馈修复：写 $t 阶段没有进度条 → UI 冻结没反馈】
-            //   之前：Dialog OK 后直接同步串行在 EDT 里跑 Command+WCA（processors.forEach +
-            //        rewriteTasks.forEach + JSON 整理 + 剪贴板），文件多/句子多时 UI 卡几秒~几十秒。
-            //   现在（服用 I18nExtractorAction.processDirectory 的成功写法）：
-            //   Task.Backgroundable（非模态后台任务）+ ProgressIndicator 分 5 段：
+            //   Task.Backgroundable（非模态后台任务）+ ProgressIndicator 分 6 段：
             //     ① 填 blockedSiteIds                               0.00 → 0.02
             //     ② processors逐文件 run()（import注入 + $t 替换）    0.02 → 0.60
-            //     ③ 预构建 rewriteTasks (Psi取指 + finalExtracted)   0.60 (不拆分)
-            //     ④ 逐 rewriteTask 执行骨架合并重写                    0.60 → 0.95
-            //     ⑤ finalExtracted 清理 + 回填 extracted              0.95 (整理)
-            //     ⑥ 复制 JSON 到剪贴板（后台线程，不再吃 EDT）         0.95 → 1.0
-            //   写 PSI 操作全部仍然包裹在 **同一个 Command + WCA** 内（invokeAndWait 在 EDT 上），
-            //   → 用户 Ctrl+Z 一次就能完整撤回所有文件改动（不破坏之前的撤销语义）。
+            //     ③ 预构建 rewriteTasks (Psi取指 + finalExtracted)   0.60
+            //     ④ 逐 rewriteTask 执行骨架合并重写                    0.60 → 0.92
+            //     ⑤ finalExtracted 清理 + 回填 extracted              0.92
+            //     ⑥ 根据用户配置：覆盖入口文件 / 复制 JSON 到剪贴板    0.92 → 1.0
             ProgressManager.getInstance().run(object : Task.Backgroundable(
                 project,
                 "i18n 全项目写入中…",
                 true   // canBeCancelled：用户点进度条 X 可以中断（break 循环）
             ) {
-                private var jsonCopied = false
+                private lateinit var output: OutputResult
 
                 override fun run(indicator: ProgressIndicator) {
                     indicator.isIndeterminate = false
@@ -351,13 +426,12 @@ class AllI18nExtractorAction : AnAction() {
                     indicator.text2 = ""
 
                     // ── ①~⑤ 所有写 PSI + map 清理合并都要拿在 EDT + 同一个 Command/WCA
-                    //    （保证撤销 undo group 只有 1 个；invokeAndWait 卡住后台线程，进度条继续响）
                     ApplicationManager.getApplication().invokeAndWait {
                         CommandProcessor.getInstance().executeCommand(
                             project,
                             runnable@{
                                 WriteCommandAction.runWriteCommandAction(project) {
-                                    // ── ① 填 blockedSiteIds：被合并选中的句子阻止旧 i18n 单句替换 ──
+                                    // ── ① 填 blockedSiteIds ──
                                     indicator.text = "标记被合并承载的句子（阻止旧 i18n 单句替换）"
                                     for (g in mergePlan.selectedAffix) {
                                         if (indicator.isCanceled) return@runWriteCommandAction
@@ -390,11 +464,10 @@ class AllI18nExtractorAction : AnAction() {
                                         return@runWriteCommandAction
                                     }
 
-                                    // ── ③ 预构建骨架重写任务（纯计算 + Psi 指针取 element） ──
+                                    // ── ③ 预构建骨架重写任务列表 ──
                                     indicator.text = "生成骨架重写任务列表（公共前后缀/数字抽取）"
                                     indicator.fraction = 0.6
                                     val finalExtracted: MutableMap<String, String> = LinkedHashMap(extracted)
-                                    // 任务带 label（显示在进度条 text2）：file.tsx@L123 这种形式
                                     val rewriteTasks = mutableListOf<Pair<String, () -> Unit>>()
 
                                     for (g in mergePlan.selectedAffix) {
@@ -462,14 +535,14 @@ class AllI18nExtractorAction : AnAction() {
                                     indicator.text = "应用骨架合并重写（生成带 {N0} 的 \$t 调用）"
                                     for ((idx, task) in rewriteTasks.withIndex()) {
                                         if (indicator.isCanceled) break
-                                        indicator.fraction = 0.6 + (idx + 1).toDouble() / rewriteTasks.size.coerceAtLeast(1) * 0.35
+                                        indicator.fraction = 0.6 + (idx + 1).toDouble() / rewriteTasks.size.coerceAtLeast(1) * 0.32
                                         indicator.text2 = task.first
                                         task.second()
                                     }
 
                                     // ── ⑤ finalExtracted：删除被合并承载的那些原句 key，回填 extracted ──
                                     indicator.text = "整理最终翻译资源（移除被合并承载的冗余句子）"
-                                    indicator.fraction = 0.95
+                                    indicator.fraction = 0.92
                                     val mergedOriginalMessages = HashSet<String>()
                                     for (g in mergePlan.selectedAffix) {
                                         for (variant in g.variants) {
@@ -488,39 +561,32 @@ class AllI18nExtractorAction : AnAction() {
                                     }
                                     extracted.clear()
                                     extracted.putAll(finalExtracted)
+
+                                    // ── ⑥ 最终输出：覆盖入口文件 or 复制 JSON（在同一 WCA 中执行，保证撤销一致） ──
+                                    indicator.text = when (dialog.outputMode) {
+                                        Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
+                                        else -> "复制翻译 JSON 到剪贴板"
+                                    }
+                                    indicator.fraction = 0.95
+                                    val finalMap = LinkedHashMap(extracted)
+                                    output = applyFinalOutput(project, dialog, finalMap)
+                                    indicator.fraction = 1.0
                                 }
                             },
                             "Vue i18n Extract (含公共前后缀/数字合并)",
                             null
                         )
                     }
-
-                    // ── ⑥ 复制 JSON 到剪贴板（后台线程执行，EDT 此时已释放） ──
-                    if (jsonDialog !== null) {
-                        indicator.text = "复制翻译 JSON 到剪贴板"
-                        indicator.fraction = 0.97
-                        indicator.text2 = ""
-                        val pretty = com.google.gson.GsonBuilder()
-                            .setPrettyPrinting()
-                            .create()
-                            .toJson(extracted)
-                        val content = getJsonContent(pretty)
-                        CopyPasteManager.getInstance().setContents(StringSelection(content))
-                        jsonCopied = true
-                        indicator.fraction = 1.0
-                    } else {
-                        indicator.fraction = 1.0
-                    }
                 }
 
                 override fun onSuccess() {
-                    // 完成后回到 EDT 发通知（避免 UI 线程问题）
                     notifyExtractSuccess(
                         project,
                         title = "全项目国际化提取完成",
                         extractedCount = extracted.size,
                         processedFiles = files.size,
-                        jsonWritten = jsonCopied
+                        output = if (::output.isInitialized) output
+                                 else OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
                     )
                 }
             })
