@@ -706,6 +706,39 @@ object Util {
         return text.contains("createI18n(") || text.contains("createI18n (")
     }
 
+    /** 判断文本是否是一个 i18n 初始化文件（Vue 的 createI18n 或 React 的 i18n/i18next.init）。 */
+    private fun isI18nInitText(text: String): Boolean {
+        if (text.contains("createI18n(") || text.contains("createI18n (")) return true              // Vue
+        if (text.contains("initReactI18next")) return true                                          // React (react-i18next)
+        return Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)                 // React / CJS
+    }
+
+    /** 给定项目根，查找初始化了 i18n 的文件（createI18n 或 i18n/i18next.init），Vue 与 React 通用。 */
+    fun findI18nInitFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+        val commonDirs = listOf(
+            "src/locales", "locales", "src/i18n", "i18n",
+            "src/locale", "locale", "src/lang", "lang"
+        )
+        for (relPath in commonDirs) {
+            val dir = findRelativeFile(projectRoot, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val result = walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                    val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                    if (isI18nInitText(t)) vf else null
+                } else null
+            }
+            if (result != null) return result
+        }
+        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
+            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                if (isI18nInitText(t)) vf else null
+            } else null
+        }
+    }
+
     /**
      * 构造从当前文件 [currentPsiFile] 导入 Vue i18n 实例文件 [i18nVFile] 的路径。
      *
@@ -951,8 +984,8 @@ object Util {
             }
             if (hit != null) return hit
         }
-        // 3) 预设目录未命中：统一像 Vue 全局导入那样探测 createI18n 实例，再根据其配置项查中文入口
-        findChineseEntryViaVueConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
+        // 3) 预设目录未命中：统一像 Vue / React 全局导入那样探测 i18n 初始化文件，再根据其配置项查中文入口
+        findChineseEntryViaI18nConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
         // 4) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
         val excludeDirs = setOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
         return walkVirtualFile(root, maxDepth = 5, enterFilter = { it.name !in excludeDirs }) { vf ->
@@ -970,18 +1003,29 @@ object Util {
     }
 
     /**
-     * 统一像 Vue 全局导入那样探测：找到 createI18n 实例文件，然后根据其配置项
-     * （`locale` / `messages`）查出实际的中文 message 来源文件。
+     * 统一像 Vue / React 全局导入那样探测：找到 i18n 初始化文件（createI18n 或 i18n.init），
+     * 然后根据其配置项查出实际的中文 message 来源文件。
      *
-     * 例如：
+     * Vue 示例：
      *   import zhLocales from '../config/messages/zh-locales'
      *   createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zhLocales, en: enLocales } })
-     * → 解析出 locale='zh-CN'，在 messages 里命中 'zh-CN' → zhLocales → 解析 import 得到该文件。
+     *
+     * React (react-i18next) 示例：
+     *   import zh from '../locales/zh-CN'
+     *   i18n.use(initReactI18next).init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zh } } })
      */
-    fun findChineseEntryViaVueConfig(root: VirtualFile): VirtualFile? {
-        val i18nVFile = findVueI18nInstanceFileInRoot(root) ?: return null
-        val text = try { String(i18nVFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return null }
+    fun findChineseEntryViaI18nConfig(root: VirtualFile): VirtualFile? {
+        val initFile = findI18nInitFileInRoot(root) ?: return null
+        val text = try { String(initFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return null }
+        return if (text.contains("createI18n(") || text.contains("createI18n (")) {
+            findVueEntryFromConfigText(initFile, text)
+        } else {
+            findReactEntryFromConfigText(initFile, text)
+        }
+    }
 
+    /** 从 Vue createI18n 配置文本中解析中文入口。 */
+    private fun findVueEntryFromConfigText(initFile: VirtualFile, text: String): VirtualFile? {
         // 1) 定位 createI18n( 的配置对象
         val createIdx = Regex("""createI18n\s*\(""").find(text)?.range?.first ?: return null
         val brace = text.indexOf('{', createIdx)
@@ -1000,17 +1044,61 @@ object Util {
         if (refs.isEmpty()) return null
 
         // 4) 选目标：优先 locale 配置对应的引用，其次 zh 风味的语言 key，最后第一个
-        val preferred = localeCode
-        val target = refs.firstOrNull { it.first == preferred }
-            ?: refs.firstOrNull { isChineseLocaleBasename(it.first) }
-            ?: refs.firstOrNull { it.first.lowercase().startsWith("zh") }
-            ?: refs.first()
+        val target = pickChineseRef(refs, localeCode) ?: return null
         val valueExpr = target.second.trim()
         if (valueExpr.isEmpty() || valueExpr.startsWith("{") || valueExpr.startsWith("[")) return null
 
         // 5) 把引用名解析成 import 路径并定位文件
         val importPath = resolveImportPathForIdentifier(text, valueExpr) ?: return null
-        return resolveLocalImportFile(i18nVFile, importPath)
+        return resolveLocalImportFile(initFile, importPath)
+    }
+
+    /** 从 React i18n.init / i18next.init 配置文本中解析中文入口。 */
+    private fun findReactEntryFromConfigText(initFile: VirtualFile, text: String): VirtualFile? {
+        // 1) 定位 resources: { ... }（React 的 messages 结构，语言下再包一层 namespace）
+        val resourcesMatch = Regex("""\bresources\s*:\s*\{""").find(text) ?: return null
+        val rBrace = resourcesMatch.range.last
+        val rEnd = findBalancedCloseBrace(text, rBrace) ?: return null
+        val refs = parseResourcesRefs(text.substring(rBrace, rEnd))
+        if (refs.isEmpty()) return null
+
+        // 2) 读取 lng 配置值（如 'zh-CN'）
+        val localeCode = Regex("""\blng\s*:\s*['"]([^'"]+)['"]""").find(text)?.groupValues?.get(1)
+
+        // 3) 选目标
+        val target = pickChineseRef(refs, localeCode) ?: return null
+        val valueExpr = target.second.trim()
+        if (valueExpr.isEmpty() || valueExpr.startsWith("{") || valueExpr.startsWith("[")) return null
+
+        // 4) 把引用名解析成 import 路径并定位文件
+        val importPath = resolveImportPathForIdentifier(text, valueExpr) ?: return null
+        return resolveLocalImportFile(initFile, importPath)
+    }
+
+    /** 从引用列表中选出目标：优先 locale 配置对应的语言，其次 zh 风味 key，最后第一个。 */
+    private fun pickChineseRef(refs: List<Pair<String, String>>, localeCode: String?): Pair<String, String>? {
+        return refs.firstOrNull { it.first == localeCode }
+            ?: refs.firstOrNull { isChineseLocaleBasename(it.first) }
+            ?: refs.firstOrNull { it.first.lowercase().startsWith("zh") }
+            ?: refs.firstOrNull()
+    }
+
+    /** 解析 React resources 对象体，返回 [(语言 key, 引用表达式)]（跳过内联对象/数组）。 */
+    private fun parseResourcesRefs(resourcesBody: String): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        for (langProp in splitTopLevelProperties(resourcesBody)) {
+            val (langKey, langValue) = parseOneProperty(langProp.trim()) ?: continue
+            val langClean = stripValueSuffixes(langValue).trim()
+            if (!(langClean.startsWith("{") && langClean.endsWith("}"))) continue
+            val nsBody = langClean.substring(1, langClean.length - 1)
+            for (nsProp in splitTopLevelProperties(nsBody)) {
+                val (_, nsValue) = parseOneProperty(nsProp.trim()) ?: continue
+                val v = stripValueSuffixes(nsValue).trim()
+                if (v.startsWith("{") || v.startsWith("[")) continue
+                result.add(langKey to v)
+            }
+        }
+        return result
     }
 
     /** 解析 messages 对象体，返回 [(语言 key, 引用表达式)]，兼容 keyed 与 shorthand 写法。 */

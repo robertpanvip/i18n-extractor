@@ -167,4 +167,41 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         assertNotNull("预设目录应优先命中", found)
         assertTrue("应命中 src/locales/zh.ts，实际：${found!!.path}", found.path.endsWith("locales/zh.ts"))
     }
+
+    // ─────────────────────────────────────────
+    // React (react-i18next) 中文入口探测：按 i18n.init 的 resources / lng 配置查
+    // ─────────────────────────────────────────
+    fun testChineseEntryDetectedViaReactI18next() {
+        // 预设目录 src/i18n 里只有 index.ts（无 zh 基名文件），预设扫描不会命中；
+        // 真正的中文来源在 src/config/resources/zh-cn.ts，只能通过 react-i18next 的
+        // resources['zh-cn'].translation 配置反向解析出来。
+        myFixture.addFileToProject("package.json", "{}")
+        createEntry(
+            "src/i18n/index.ts",
+            """
+            import zh from '../config/resources/zh-cn'
+            import en from '../config/resources/en-us'
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+            i18n.use(initReactI18next).init({
+              lng: 'zh-cn',
+              fallbackLng: 'en-us',
+              resources: {
+                'zh-cn': { translation: zh },
+                'en-us': { translation: en },
+              },
+            })
+            """.trimIndent()
+        )
+        createEntry("src/config/resources/zh-cn.ts", "export default { '标题': '标题' }")
+        createEntry("src/config/resources/en-us.ts", "export default { 'Title': 'Title' }")
+        val context = myFixture.addFileToProject("src/App.tsx", "export default () => <div>hi</div>")
+
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("应通过 react-i18next 配置探测到中文入口", found)
+        assertTrue(
+            "应命中 zh-cn.ts，实际：${found!!.path}",
+            found.path.endsWith("config/resources/zh-cn.ts")
+        )
+    }
 }
