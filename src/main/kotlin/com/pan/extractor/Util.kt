@@ -816,15 +816,27 @@ object Util {
     }
 
     private fun globToRegex(glob: String): Regex {
-        var pattern = glob.replace("\\", "/")
+        // 统一相对项目根：去掉开头的 ./ 与前导 /（A7：根目录型 include）
+        var normalized = glob.trim().replace("\\", "/")
+            .removePrefix("./")
+            .removePrefix("/")
+        if (normalized.isEmpty()) normalized = "**"
 
-        pattern = pattern
+        // 结尾带斜杠 = 目录：附加通配以匹配其下所有文件
+        if (normalized.endsWith("/")) normalized += "**"
+
+        // 无通配符的裸路径：最后一段带扩展名按精确文件匹配；否则按目录匹配（含其下所有文件）（A8）
+        val hasWildcard = normalized.contains('*')
+        val lastSegmentExt = normalized.substringAfterLast('/').substringAfterLast('.', "")
+        val isDirPath = !hasWildcard && lastSegmentExt.isEmpty()
+
+        var pattern = normalized
             .replace(".", "\\.")
             .replace("**/", "(.*/)?")
             .replace("/**", "(/.*)?")
             .replace("**", ".*")
             .replace("*", "[^/]*")
-
+        if (isDirPath) pattern = "$pattern(/.*)?"
         return Regex("^$pattern$")
     }
 

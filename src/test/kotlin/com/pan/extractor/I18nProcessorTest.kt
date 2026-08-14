@@ -282,6 +282,30 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("警告"))
     }
 
+    /**
+     * 【Bug 验证 A10】同名 `t` 函数被误判为翻译函数。
+     * 用户自定义了一个与 i18n 无关的普通函数 `t`（例如测试/工具函数），
+     * 其参数里的中文不应被当成「已翻译」而跳过提取。
+     * 当前实现按名字 `t`/`$t`/`tc` 判定，会误判。
+     */
+    fun testSameNamedTFunctionShouldNotBeTreatedAsTranslation() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            export function t(x: string) { return x.toUpperCase() }
+            const value = t('自定义函数的中文')
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "同名普通函数 t 的参数中文应被提取，但 got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("自定义函数的中文")
+        )
+    }
+
     // ============================================================
     // 3. 模板字面量（反引号）
     // ============================================================

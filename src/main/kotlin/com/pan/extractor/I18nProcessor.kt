@@ -439,7 +439,9 @@ class I18nProcessor(
         if (method is JSReferenceExpression) {
             val name = method.referenceName
             if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") {
-                existingStrings.putIfAbsent(key, text.trim())
+                if (!isLocalFunctionNamedTCall(call)) {
+                    existingStrings.putIfAbsent(key, text.trim())
+                }
             }
             return
         }
@@ -1744,6 +1746,20 @@ class I18nProcessor(
      */
     enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION }
 
+    /**
+     * 【Bug A10】排除「同名本地普通函数」的 t/tc 调用。
+     * 若引用名 `t`/`tc` 解析到**本文件内**声明的普通函数（function t / function tc），
+     * 说明它不是 i18n 翻译函数，其参数里的中文仍应被提取，而不是被当成「已翻译」跳过。
+     * 仅对裸名 t/tc 生效；$t/$tc（插件统一的全局别名）与 i18n.t/tc 链式调用不受影响。
+     */
+    private fun isLocalFunctionNamedTCall(call: JSCallExpression): Boolean {
+        val method = call.methodExpression as? JSReferenceExpression ?: return false
+        val name = method.referenceName
+        if (name != "t" && name != "tc") return false
+        val resolved = method.resolve() ?: return false
+        return resolved is JSFunction && resolved.containingFile == call.containingFile
+    }
+
     fun detectTSemantic(stringExpr: JSLiteralExpression): TSem {
         // 1) 直接参数
         val parent = stringExpr.parent
@@ -1753,6 +1769,7 @@ class I18nProcessor(
             else -> null
         }
         fun isTCall(call: JSCallExpression): Boolean {
+            if (isLocalFunctionNamedTCall(call)) return false
             val method = call.methodExpression
             if (method is JSReferenceExpression) {
                 val name = method.referenceName

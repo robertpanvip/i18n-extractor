@@ -103,7 +103,7 @@ object MergeApplier {
                 val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
                 val root = site.replaceRootPointer.element ?: continue
                 if (!root.isValid) continue
-                val digitText = ps.digitValues.firstOrNull() ?: "0"
+                val digitText = renderDigitLiteral(ps.digitValues.firstOrNull() ?: "0")
                 val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
                 rewriteTasks += label to {
                     rewriteSiteToSkeleton(
@@ -123,20 +123,29 @@ object MergeApplier {
         indicator?.text = "应用骨架合并重写（生成带 {N0} 的 \$t 调用）"
         for (task in rewriteTasks) task.second()
 
-        // ⑤ 清理：删除被合并承载的那些原句 key，回填 extracted
+        // ⑤ 清理：删除被合并承载的原句 key，回填 extracted
+        //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，
+        //    才删除该句对应的 key；若仍存在未被合并的独立站点（同名文本），其 key 必须保留。
         indicator?.text = "整理最终翻译资源（移除被合并承载的冗余句子）"
-        val mergedOriginalMessages = HashSet<String>()
+        val consumedByMerge = HashSet<String>()          // 被合并承载的 siteId
+        val messageToSiteIds = HashMap<String, MutableSet<String>>()  // 原句 trim → 命中该句的所有 siteId
+        for (proc in processors) {
+            for (site in proc.collectedSites) {
+                messageToSiteIds.getOrPut(site.originalMessage.trim()) { mutableSetOf() }.add(site.id)
+            }
+        }
         for (g in mergePlan.selectedAffix) {
-            for (v in g.variants) for (ref in v.sites)
-                mergedOriginalMessages.add(ref.originalMessage.trim())
+            for (v in g.variants) for (ref in v.sites) consumedByMerge.add(ref.siteId)
         }
         for (g in mergePlan.selectedDigit) {
-            for (ps in g.perSites) mergedOriginalMessages.add(ps.site.originalMessage.trim())
+            for (ps in g.perSites) consumedByMerge.add(ps.site.siteId)
         }
+        // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的
+        val fullyConsumedMessages = messageToSiteIds.filterValues { ids -> ids.isNotEmpty() && ids.all { it in consumedByMerge } }.keys
         val iter = finalExtracted.entries.iterator()
         while (iter.hasNext()) {
             val (k, v) = iter.next()
-            if (k.trim() in mergedOriginalMessages || v.trim() in mergedOriginalMessages) {
+            if (k.trim() in fullyConsumedMessages || v.trim() in fullyConsumedMessages) {
                 iter.remove()
             }
         }
@@ -185,8 +194,20 @@ object MergeApplier {
     /** 把一个纯字符串渲染成 JS 字面量（差异段非中文时用；字符串加引号，数字不加） */
     internal fun renderLiteralValue(diff: String): String {
         if (diff.matches(Regex("""-?\d+(?:\.\d+)?"""))) return diff
-        val quote = if ('\'' !in diff) "'" else "\""
-        return "$quote${diff.replace(quote, "\\$quote")}$quote"
+        return quoteString(diff)
+    }
+
+    /** 数字抽取的占位值渲染：前导零（如 0755）会破坏 JS 字面量，必须加引号当字符串；纯数值保持数字 */
+    internal fun renderDigitLiteral(d: String): String {
+        val isPlainNumber = d.matches(Regex("""-?\d+(?:\.\d+)?"""))
+        val hasLeadingZero = d.length > 1 && d.startsWith("0") && !d.startsWith("0.")
+        if (!isPlainNumber || hasLeadingZero) return quoteString(d)
+        return d
+    }
+
+    private fun quoteString(s: String): String {
+        val quote = if ('\'' !in s) "'" else "\""
+        return "$quote${s.replace(quote, "\\$quote")}$quote"
     }
 
     /** 把某个 site 重写为 \$t('骨架{N0}', { N0: <diff> }) 并回填骨架 key 到翻译资源 */

@@ -83,4 +83,33 @@ class InlineScanBugRegressionTest : BasePlatformTestCase() {
             hitPaths.isNotEmpty()
         )
     }
+
+    /**
+     * Bug A8：目录型 include（tsconfig include 里常写裸目录名，如 "src"）应匹配该目录下
+     * 所有文件。当前 globToRegex("src") 只生成 ^src$，匹配不到 src/App.ts。
+     */
+    fun testDirectoryIncludeShouldMatchFilesUnderIt() {
+        addFileOnDisk("src/App.ts", "export const a = '你好';")
+        addFileOnDisk("src/components/Card.ts", "export const b = '卡片';")
+
+        val files = Util.findFilesByIncludePatterns(project, listOf("src"))
+        assertTrue(
+            "裸目录 src 应匹配其下所有文件，实际: ${files.map { it.path }}",
+            files.any { it.path.endsWith("src/App.ts") } && files.any { it.path.endsWith("src/components/Card.ts") }
+        )
+    }
+
+    /**
+     * Bug A7：glob 根目录写法（tsconfig 里可能是 "/src" 加双星、或 "./src" 加双星）
+     * 应等价于相对项目根的 "src" 加双星。当前带前导 / 或 ./ 的模式匹配不到相对路径。
+     */
+    fun testRootPrefixedGlobShouldMatch() {
+        addFileOnDisk("src/App.ts", "export const a = '你好';")
+
+        val files = Util.findFilesByIncludePatterns(project, listOf("/src/**/*.ts"))
+        assertTrue(
+            "带前导 / 的 glob 应匹配 src 下文件，实际: ${files.map { it.path }}",
+            files.any { it.path.endsWith("src/App.ts") }
+        )
+    }
 }
