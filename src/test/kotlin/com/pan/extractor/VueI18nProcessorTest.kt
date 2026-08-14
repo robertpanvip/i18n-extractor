@@ -2540,4 +2540,86 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val afterUseReq = result.substring(minOf(idxUseReq, result.length))
         assertEquals("useRequest 回调体内部不应再出现第二次解构，got tail:\n$afterUseReq", 0, destructureRe.findAll(afterUseReq).drop(1).count())
     }
+
+    // ============================================================
+    // 16. 采集→因子化 联动：测试1/测试2 是否真的能进 Tab2 合并候选
+    // ============================================================
+
+    /**
+     * 用真实 Vue 模板采集"测试1""测试2"，再走 factorize。
+     * 复现用户反馈"Tab2 根本不出现 测试{N0} 候选"。
+     */
+    fun testCollectedSitesFlowIntoFactorize() {
+        val file = configureFile(
+            "src/Demo.vue",
+            """
+            <template>
+                <div>
+                    <span>测试1</span>
+                    <span>测试2</span>
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        // 1) sites 确实被采集到
+        val msgs = processor.collectedSites.map { it.originalMessage }
+        assertTrue("采集到的原句应含 测试1/测试2，实际: $msgs", msgs.contains("测试1") && msgs.contains("测试2"))
+
+        // 2) 按 transform() 同款方式构建 SiteRef 并 factorize
+        val siteRefs = processor.collectedSites.map { site ->
+            SiteRef(
+                processorIndex = 0,
+                siteId = site.id,
+                originalMessage = site.originalMessage,
+                containingFile = site.containingFile,
+                isVue = site.isVue,
+                isReact = site.isReact,
+                line1 = site.startLine,
+            )
+        }
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(siteRefs)
+
+        // 3) Tab2 的候选应非空（用户反馈"根本不出现"即此断言失败）
+        assertTrue("Tab2 数字抽取候选不应为空，实际 digit=$digit", digit.isNotEmpty())
+        assertTrue("Tab2 公共前后缀候选不应为空，实际 affix=$affix", affix.isNotEmpty())
+    }
+
+    /**
+     * 场景 B：Vue 项目 .ts 文件里的 JS 字符串字面量 const a = "测试1"; const b = "测试2"。
+     * 验证字面量场景是否同样能进 factorize。
+     */
+    fun testTsStringLiteralsFlowIntoFactorize() {
+        val file = configureFile(
+            "src/labels.ts",
+            """
+            export const a = "测试1";
+            export const b = "测试2";
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        val msgs = processor.collectedSites.map { it.originalMessage }
+        assertTrue("采集到的原句应含 测试1/测试2，实际: $msgs", msgs.contains("测试1") && msgs.contains("测试2"))
+
+        val siteRefs = processor.collectedSites.map { site ->
+            SiteRef(
+                processorIndex = 0,
+                siteId = site.id,
+                originalMessage = site.originalMessage,
+                containingFile = site.containingFile,
+                isVue = site.isVue,
+                isReact = site.isReact,
+                line1 = site.startLine,
+            )
+        }
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(siteRefs)
+        assertTrue("TS 字面量场景 Tab2 数字候选不应为空，实际 digit=$digit", digit.isNotEmpty())
+        assertTrue("TS 字面量场景 Tab2 前后缀候选不应为空，实际 affix=$affix", affix.isNotEmpty())
+    }
 }
