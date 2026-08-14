@@ -126,9 +126,17 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
-    // 4) node_modules（裸包名）import → 回退（返回 null）
+    // 4) node_modules（裸包名）import → 只读识别内容，不写盘
     // ─────────────────────────────────────────
-    fun testNodeModulesImportFallsBack() {
+    fun testNodeModulesRecognizedReadOnly() {
+        createEntry(
+            "node_modules/i18n-common/index.js",
+            """
+            module.exports = {
+              '标题': '标题',
+            }
+            """.trimIndent()
+        )
         val entry = createEntry(
             "src/zh.ts",
             """
@@ -139,9 +147,17 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
-        val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
+        // 新 key 里 '标题' 已存在于 node_modules（被 spread 覆盖），'退出' 是真正新增
+        val newFlat = linkedMapOf("首页" to "首页", "标题" to "标题", "退出" to "退出")
         val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
-        assertNull("裸包名 import 应视为非本地，返回 null 回退旧逻辑", writes)
+        assertNotNull("应识别 node_modules 内容（只读），不返回 null", writes)
+        assertEquals("node_modules 只读：只写盘入口一次", 1, writes!!.size)
+        assertEquals("写盘目标应为入口文件", entry.path, writes[0].first.path)
+        val result = writes[0].second
+        // 真正新增的 '退出' 应写进入口对象
+        assertTrue("入口对象应包含新 key '退出'，result:\n$result", result.substringAfter("export default").contains("'退出'"))
+        // 已在 node_modules 里的 '标题' 不应被重复写进入口
+        assertEquals("已在 node_modules 的 '标题' 不应重复写入入口，result:\n$result", 0, countOccurrences(result.substringAfter("export default"), "'标题'"))
     }
 
     // ─────────────────────────────────────────

@@ -1826,7 +1826,8 @@ object Util {
         val file: VirtualFile,        // 要写入的文件（同文件 const 时 = 入口文件）
         val objRangeInText: IntRange, // 目标对象在 file 文本中的区间（JSON 目标占位 0..-1）
         val existingKeys: Map<String, Any?>,
-        val kind: String              // "const" | "ts" | "json"
+        val kind: String,             // "const" | "ts" | "json"
+        val readOnly: Boolean = false // node_modules 等只读目标：识别内容但不写盘
     )
 
     /** 从对象字面量文本中提取顶层 spread 变量名（如 `...common` → common）。 */
@@ -1877,17 +1878,21 @@ object Util {
         // 2) import：import <varName> from '...' 或 import <varName>, { ... } from '...'
         val importRe = Regex("""import\s+(${Regex.escape(varName)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
         val im = importRe.find(entryText) ?: return null
-        val targetVf = resolveLocalImportFile(entryVf, im.groupValues[2]) ?: return null
+        val spec = im.groupValues[2]
+        // 本地相对/绝对路径优先；裸包名（node_modules）作为只读识别
+        val localVf = resolveLocalImportFile(entryVf, spec)
+        val targetVf = localVf ?: resolveNodeModulesFile(entryVf, spec) ?: return null
+        val readOnly = localVf == null // node_modules → 只读（识别内容但不可写盘）
         val targetText = readVirtualFileText(project, targetVf) ?: return null
         return when (targetVf.extension?.lowercase()) {
             "json" -> {
                 val root = try { JsonParser.parseString(targetText) } catch (_: Exception) { return null }
                 val existing = jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))
-                ResolvedSpreadTarget(targetVf, 0 until 0, existing, "json")
+                ResolvedSpreadTarget(targetVf, 0 until 0, existing, "json", readOnly)
             }
             else -> {
                 val info = parseTsExportedObject(targetText) ?: return null
-                ResolvedSpreadTarget(targetVf, info.objectRange, info.staticKV, "ts")
+                ResolvedSpreadTarget(targetVf, info.objectRange, info.staticKV, "ts", readOnly)
             }
         }
     }
@@ -1909,6 +1914,49 @@ object Util {
             val vf = base.findFileByRelativePath(p) ?: continue
             if (vf.isDirectory) continue
             return vf
+        }
+        return null
+    }
+
+    /**
+     * 把裸包名（node_modules）导入解析为实际文件：向上找最近的 node_modules，
+     * 用 package.json 的 main 字段优先，否则退化到 index.js/index.json/dist/index.js。
+     * 仅用于「识别内容」，返回的文件会被标记为只读，不会写盘。
+     */
+    private fun resolveNodeModulesFile(fromFile: VirtualFile, spec: String): VirtualFile? {
+        val clean = spec.trim()
+        if (clean.isEmpty() || clean.startsWith(".") || clean.startsWith("/")) return null
+        var dir: VirtualFile? = fromFile.parent
+        while (dir != null) {
+            val nm = dir.findChild("node_modules")
+            if (nm != null) {
+                val pkg = nm.findFileByRelativePath(clean)
+                if (pkg != null) {
+                    if (pkg.isDirectory) {
+                        val pkgJson = pkg.findChild("package.json")
+                        var main: String? = null
+                        if (pkgJson != null) {
+                            main = try {
+                                val root = JsonParser.parseString(String(pkgJson.contentsToByteArray(), StandardCharsets.UTF_8))
+                                root.takeIf { it.isJsonObject }?.asJsonObject?.get("main")
+                                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                            } catch (_: Exception) { null }
+                        }
+                        val candidates = buildList {
+                            if (!main.isNullOrEmpty()) add(main)
+                            add("index.js"); add("index.json"); add("dist/index.js")
+                        }.distinct()
+                        for (c in candidates) {
+                            val vf = pkg.findFileByRelativePath(c) ?: continue
+                            if (vf.isDirectory) continue
+                            return vf
+                        }
+                    } else if (pkg.extension in setOf("js", "json", "mjs", "cjs")) {
+                        return pkg
+                    }
+                }
+            }
+            dir = dir.parent
         }
         return null
     }
@@ -1946,42 +1994,55 @@ object Util {
         if (spreadVars.isEmpty()) return null
         val entryKeys = entryInfo.staticKV.keys.toSet()
 
-        for (varName in spreadVars) {
-            val target = resolveSpreadTarget(project, entryVf, entryText, varName) ?: continue
-            val toEntry = newFlatJson.filterKeys { it in entryKeys }
-            val toTarget = newFlatJson.filterKeys { it !in entryKeys }
-            if (toTarget.isEmpty()) {
-                // 新 key 全在条目里 → 只重写条目
-                return listOf(entryVf to applyRangeReplacements(entryText, listOf(
-                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
-                )))
-            }
-            if (target.kind == "json") {
-                val newTarget = regenerateJsonFileWithNewJson(target.file, toTarget) ?: return null
-                val newEntry = applyRangeReplacements(entryText, listOf(
-                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
-                ))
-                return listOf(entryVf to newEntry, target.file to newTarget)
-            }
-            // const / ts：可能同文件（const），也可能不同文件（import）
-            val sameFile = target.file.path == entryVf.path
-            val targetText = if (sameFile) entryText else readVirtualFileText(project, target.file) ?: return null
+        // 解析所有 spread 变量指向的目标（含 node_modules 只读识别）
+        val targets = spreadVars.mapNotNull { resolveSpreadTarget(project, entryVf, entryText, it) }
+        if (targets.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
+        // 所有目标已识别的 key（含 node_modules 只读内容），用于避免重复写入
+        val recognizedKeys = targets.flatMap { it.existingKeys.keys }.toSet()
+        val writableTargets = targets.filter { !it.readOnly }
+        val toEntry = newFlatJson.filterKeys { it in entryKeys }
+        val toNew = newFlatJson.filterKeys { it !in entryKeys && it !in recognizedKeys }
+
+        if (writableTargets.isEmpty()) {
+            // 只有 node_modules（只读）：识别其内容，真正新增的 key 写入口对象，
+            // 已在 node_modules 里存在的 key 视为被 spread 覆盖，不再重复写入。
+            val entryAll = newFlatJson.filterKeys { it in entryKeys || it in toNew }
+            return listOf(entryVf to applyRangeReplacements(entryText, listOf(
+                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV)
+            )))
+        }
+
+        val target = writableTargets.first()
+        if (toNew.isEmpty()) {
+            // 没有真正新增的 key → 只重写入口
+            return listOf(entryVf to applyRangeReplacements(entryText, listOf(
+                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
+            )))
+        }
+        if (target.kind == "json") {
+            val newTarget = regenerateJsonFileWithNewJson(target.file, toNew) ?: return null
             val newEntry = applyRangeReplacements(entryText, listOf(
                 entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
             ))
-            if (sameFile) {
-                val combined = applyRangeReplacements(entryText, listOf(
-                    entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV),
-                    target.objRangeInText to newRegionText(targetText, target.objRangeInText, toTarget, target.existingKeys)
-                ))
-                return listOf(entryVf to combined)
-            }
-            val newTarget = applyRangeReplacements(targetText, listOf(
-                target.objRangeInText to newRegionText(targetText, target.objRangeInText, toTarget, target.existingKeys)
-            ))
             return listOf(entryVf to newEntry, target.file to newTarget)
         }
-        return null
+        // const / ts：可能同文件（const），也可能不同文件（import）
+        val sameFile = target.file.path == entryVf.path
+        val targetText = if (sameFile) entryText else readVirtualFileText(project, target.file) ?: return null
+        val newEntry = applyRangeReplacements(entryText, listOf(
+            entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
+        ))
+        if (sameFile) {
+            val combined = applyRangeReplacements(entryText, listOf(
+                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV),
+                target.objRangeInText to newRegionText(targetText, target.objRangeInText, toNew, target.existingKeys)
+            ))
+            return listOf(entryVf to combined)
+        }
+        val newTarget = applyRangeReplacements(targetText, listOf(
+            target.objRangeInText to newRegionText(targetText, target.objRangeInText, toNew, target.existingKeys)
+        ))
+        return listOf(entryVf to newEntry, target.file to newTarget)
     }
 
     // ==========================================================================
