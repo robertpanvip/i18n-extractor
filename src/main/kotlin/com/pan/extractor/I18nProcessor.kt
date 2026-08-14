@@ -38,6 +38,10 @@ class I18nProcessor(
     private val project: Project,
     private var psiFile: PsiElement,
 ) {
+    /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。 */
+    private val T_CALL_PATTERN =
+        Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+
     // ─────────────────────────────────────────────────────────────
     // 结构化 site（供跨文件公共前后缀合并 + 差异段嵌套 $t 重写使用）
     // ─────────────────────────────────────────────────────────────
@@ -368,13 +372,10 @@ class I18nProcessor(
      * 注意：i18n.global.t 和 $t 可以在同一文件中共存，两者都识别为已翻译。
      */
     private fun collectExistingTKeys() {
-        // 0. 检测翻译函数名：扫描已有 JSCallExpression
-        // 优先级：i18n.global.t > i18n.t > $t（默认）
-        // 注意：Vue 模板 {{ }} 中的 JS 调用是注入到 XmlText 的注入 PSI，
-        // 不在主 PSI 树中，需要单独扫描（见下方 mustache 处理）。
-        PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
-            detectTFunctionName(call)
-        }
+        // 一次性收集所有 JSCallExpression，供 detectTFunctionName 和 collectTKeyFromCall 复用，
+        // 避免对同一棵 PSI 树做两次 findChildrenOfType 顶层遍历（性能）。
+        val calls = PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java)
+        calls.forEach { call -> detectTFunctionName(call) }
 
         // 1. 模板 {{ }} 中的注入 JS
         PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
@@ -395,9 +396,7 @@ class I18nProcessor(
         }
 
         // 2. script / JS / TS 中的 $t() 调用
-        PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java).forEach { call ->
-            collectTKeyFromCall(call)
-        }
+        calls.forEach { call -> collectTKeyFromCall(call) }
     }
 
     /**
@@ -407,8 +406,7 @@ class I18nProcessor(
     private fun collectTKeysFromRawText(text: String) {
         // 匹配 $t / $tc / i18n.global.t / i18n.global.tc / i18n.t / i18n.tc 调用
         // 使用反向引用确保引号配对（如开闭都是反引号）
-        val pattern = Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
-        pattern.findAll(text).forEach { match ->
+        T_CALL_PATTERN.findAll(text).forEach { match ->
             val content = match.groupValues[2]
             val key = generateKey(content.trim(), psiFile)
             existingStrings.putIfAbsent(key, content.trim())

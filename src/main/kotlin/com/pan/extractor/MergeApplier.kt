@@ -18,6 +18,9 @@ import com.intellij.psi.PsiElement
  */
 object MergeApplier {
 
+    /** 纯数字字面量正则（含负数/小数），高频用于差异段/数字渲染，避免每次重复编译。 */
+    private val NUMBER_RE = Regex("""-?\d+(?:\.\d+)?""")
+
     // ─────────────────────────────────────────────────────────────
     // 候选生成
     // ─────────────────────────────────────────────────────────────
@@ -193,13 +196,13 @@ object MergeApplier {
 
     /** 把一个纯字符串渲染成 JS 字面量（差异段非中文时用；字符串加引号，数字不加） */
     internal fun renderLiteralValue(diff: String): String {
-        if (diff.matches(Regex("""-?\d+(?:\.\d+)?"""))) return diff
+        if (diff.matches(NUMBER_RE)) return diff
         return quoteString(diff)
     }
 
     /** 数字抽取的占位值渲染：前导零（如 0755）会破坏 JS 字面量，必须加引号当字符串；纯数值保持数字 */
     internal fun renderDigitLiteral(d: String): String {
-        val isPlainNumber = d.matches(Regex("""-?\d+(?:\.\d+)?"""))
+        val isPlainNumber = d.matches(NUMBER_RE)
         val hasLeadingZero = d.length > 1 && d.startsWith("0") && !d.startsWith("0.")
         if (!isPlainNumber || hasLeadingZero) return quoteString(d)
         return d

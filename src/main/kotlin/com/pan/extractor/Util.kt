@@ -43,6 +43,10 @@ import kotlin.io.path.relativeToOrNull
 object Util {
     private val HAN_RE = Regex("""[\u4e00-\u9fff]""")
 
+    /** 高频复用正则：避免每次在循环里重复编译（性能）。 */
+    private val REACT_KEY_RE = Regex(""""react"\s*:\s*"""")
+    private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
+
     /** 常见 helper：文本中是否包含至少 1 个汉字（UTF-16 BMP 范围的中日韩统一表意文字基本区）。
      *  - 用于判断差异段是否要嵌套 `$t('差异')`（含中文→嵌套；纯英文/数字→直接写字符串字面量）。*/
     fun hasChinese(text: CharSequence?): Boolean {
@@ -117,8 +121,8 @@ object Util {
             if (pkgFile != null) {
                 return try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
-                    val hasReact = content.contains(Regex(""""react"\s*:\s*""""))
-                    val hasVue = content.contains(Regex(""""vue"\s*:\s*""""))
+                    val hasReact = content.contains(REACT_KEY_RE)
+                    val hasVue = content.contains(VUE_KEY_RE)
                     Triple(hasReact, hasVue, true)
                 } catch (e: Exception) {
                     Triple(false, false, false)
@@ -561,8 +565,8 @@ object Util {
                 try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
                     // 精确匹配依赖键（排除 react-dom / vue-router 等派生包）
-                    val hasReact = content.contains(Regex(""""react"\s*:\s*""""))
-                    val hasVue = content.contains(Regex(""""vue"\s*:\s*""""))
+                    val hasReact = content.contains(REACT_KEY_RE)
+                    val hasVue = content.contains(VUE_KEY_RE)
                     return hasReact && !hasVue
                 } catch (e: Exception) {
                     return false
