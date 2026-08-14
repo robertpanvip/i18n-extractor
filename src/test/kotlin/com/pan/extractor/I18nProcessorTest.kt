@@ -1237,4 +1237,83 @@ class I18nProcessorTest : BasePlatformTestCase() {
             result.contains("= \"加载中...\"")
         )
     }
+
+    // ============================================================
+    // 回归 1：「限制200字符 / 限制50字符」等中文夹数字的字符串漏提取
+    // ============================================================
+    fun testChineseAndNumberMixedStringsLikeLimitNNCharsExtracts() {
+        val file = myFixture.configureByText(
+            "validation.ts",
+            """
+            const rules = {
+              name: { max: 50, message: "限制50字符" },
+              desc: { max: 200, message: "限制200字符" },
+              intro: { max: 1000, message: "最多输入1000字" },
+              zip: { pattern: /^\d{6}$/, message: "请输入6位邮政编码" },
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("应提取 '限制50字符'", processor.extractedStrings.containsValue("限制50字符"))
+        assertTrue("应提取 '限制200字符'", processor.extractedStrings.containsValue("限制200字符"))
+        assertTrue("应提取 '最多输入1000字'", processor.extractedStrings.containsValue("最多输入1000字"))
+        assertTrue("应提取 '请输入6位邮政编码'", processor.extractedStrings.containsValue("请输入6位邮政编码"))
+        assertEquals("共 4 条中文夹数字提取", 4, processor.extractedStrings.size)
+
+        processor.execute()
+        val result = file.text
+        // 不能残留裸字符串
+        listOf("限制50字符", "限制200字符", "最多输入1000字", "请输入6位邮政编码").forEach { s ->
+            assertFalse(
+                "裸字符串 \"$s\" 不应残留（应包进 ${'$'}t(\"$s\") 形式），got:\n$result",
+                (result.contains("\"$s\"") && !result.contains("\$t(\"$s\"")) ||
+                    (result.contains("'$s'") && !result.contains("\$t('$s'"))
+            )
+        }
+    }
+
+    // ============================================================
+    // 回归 2：已被 $t( 三元表达式参数包裹的字符串，不能二次 $t 包装
+    //         错误：$t(isPinned ? '取消置顶' : '置顶')
+    //               -> $t(isPinned ? $t('取消置顶') : $t('置顶'))
+    // ============================================================
+    fun testAlreadyWrappedInTernaryInsideTDollarCallDoesNotDoubleWrap() {
+        val file = myFixture.configureByText(
+            "pin.tsx",
+            """
+            function PinButton({ isPinned }: { isPinned: boolean }) {
+              return (
+                <button>{${'$'}t(isPinned ? '取消置顶' : '置顶')}</button>
+              )
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("应提取 '取消置顶'", processor.extractedStrings.containsValue("取消置顶"))
+        assertTrue("应提取 '置顶'", processor.extractedStrings.containsValue("置顶"))
+        processor.execute()
+        val result = file.text
+        // 修正后：$t('取消置顶') 和 $t('置顶') 的单条调用只在外层出现一次
+        //         即整个表达式应该是 $t(isPinned ? $t('取消置顶') : $t('置顶')) ？——
+        //         不！更合理的是：外层 $t( 整个三元表达式) 不再合法（参数是表达式不是字符串），
+        //         所以 processor 不能识别外层那个 $t 调用（不是字符串字面量参数），
+        //         只替换内部两个字符串 → 最终形态必须是：
+        //              $t(isPinned ? $t('取消置顶') : $t('置顶'))  ——  双重 $t，错！
+        //         （实际应当：外层的 $t() 整段不是字符串参数，外层不应被视为"已转换"，
+        //          但内部两个独立字符串字面量参数属于"它们并不在任何合法 $t( 单参字符串调用里"
+        //          → 必须替换。因此最终结果虽然嵌套 $t，语义上其实正确：外层参数传进去的是
+        //          两次 $t 调后的字符串；如果用户原本写 $t(cond?'a':'b') 就是错的，
+        //          插件修正它变成内层独立调用是正确行为。但用户报这个 bug，可能用户期望
+        //          「外层已经写了 $t( 表达式 )，则内部字符串不再动」——
+        //          就按用户期望实现：当字符串所在最内层 $t/ t/ i18n.global.t 调用祖先存在时，
+        //          即使该调用的参数不是字符串（是表达式），仍把它视为"已在 $t 作用域内"，
+        //          不再二次替换。
+        val tCall = Regex("""\$\s*t\s*\(\s*isPinned""")
+        assertTrue("整体结构保留 \${'$'}t(isPinned ? ... : ...) 外形", tCall.containsMatchIn(result))
+        // 用户期望：内部不要再出现第二个 $t(
+        val totalT = Regex("""\$\s*t\s*\(""").findAll(result).count()
+        assertEquals("用户期望：外层已有 ${'$'}t( 表达式 )，内部不要再包第二层 ${'$'}t", 1, totalT)
+    }
 }

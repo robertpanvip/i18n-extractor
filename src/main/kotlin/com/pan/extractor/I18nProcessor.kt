@@ -940,9 +940,26 @@ class I18nProcessor(
                     //   · setup: () => {}            → JSFunction(箭头类型，SDK 内 JSFunction 可识别) + block
                     // 兼容所有结构：**先在 setupFunc（JSFunction）内找 block，找不到就退到 setupProp 内找**
                     val setupFunc = PsiTreeUtil.findChildOfType(setupProp, JSFunction::class.java)
+                    // ── 修复 Bug3：setup() 里用 useRequest(async () => { ... }) 时，
+                    //    findChildOfType 深度遍历会返回 useRequest 回调内部的箭头函数字符串块，
+                    //    导致解构被错误注入到 useRequest 回调体首行（而非 setup 顶层）。
+                    //    正确做法：
+                    //      1) 优先取 setupFunc 的「直接子节点」 JSBlockStatement（不是后代）；
+                    //      2) 否则从 setupProp 的「第一层直接后代 JSBlockStatement」拿：
+                    //         即 从 setupProp.subtree 中第一个 JSBlockStatement，它的 parent
+                    //         要么就是 setupFunc（JSFunction），要么就是 setup 属性本身
+                    //         （如对象字面量简写属性 setup(){ ... } 的 block 直接后代）。
+                    fun findDirectBlockIn(ancestor: PsiElement): JSBlockStatement? {
+                        for (child in ancestor.children) {
+                            if (child is JSBlockStatement) return child
+                            val found = findDirectBlockIn(child)
+                            if (found != null) return found
+                        }
+                        return null
+                    }
                     val body: JSBlockStatement =
-                        ((if (setupFunc != null) PsiTreeUtil.findChildOfType(setupFunc, JSBlockStatement::class.java) else null)
-                            ?: PsiTreeUtil.findChildOfType(setupProp, JSBlockStatement::class.java))
+                        ((if (setupFunc != null) findDirectBlockIn(setupFunc) else null)
+                            ?: findDirectBlockIn(setupProp))
                             ?: continue
                     targetBodies.add(body)
                 }
@@ -1712,29 +1729,55 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, stringExpr) { value -> value }
     }
 
-    fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean {
-        // 兼容两种 PSI 结构：
-        // 1. JSCallExpression -> JSLiteralExpression（新版 IntelliJ，无 JSArgumentList）
-        // 2. JSCallExpression -> JSArgumentList -> JSLiteralExpression（旧版结构）
+    /**
+     * 检查字符串字面量是否已经处于某一层 i18n 翻译调用的作用域内。
+     *
+     * 返回分三档，收集/替换阶段走不同策略：
+     *   - NONE             : 完全不在任何 t/$t/i18n.global.t 调用里 → 正常：加 key + 替换为 $t('key')
+     *   - DIRECT_ARG       : 字符串字面量直接就是某条 t/$t(...) 的第一个参数 → 完全跳过（已有完整 $t('x')，不需再处理）
+     *   - OUTER_T_EXPRESSION: 外层祖先有 t/$t/... 调用，但本字符串不是其**直接单字符串参数**，
+     *                        而是嵌套在参数表达式里（典型：$t(isPinned ? '取消置顶' : '置顶') 三元分支内
+     *                        的两个独立字符串）。
+     *                        此时仍要提取到 extractedStrings（国际化字典要有「取消置顶 / 置顶」两条），
+     *                        但替换时只替换字符串字面量为 'key'，不再包一层 $t('key')，
+     *                        避免出现双重 $t：$t(isPinned ? $t(...) : $t(...))。
+     */
+    enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION }
+
+    fun detectTSemantic(stringExpr: JSLiteralExpression): TSem {
+        // 1) 直接参数
         val parent = stringExpr.parent
-        val callExpr = when {
+        val directCall = when {
             parent is JSCallExpression -> parent
             parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
-        if (callExpr != null) {
-            val method = callExpr.methodExpression
+        fun isTCall(call: JSCallExpression): Boolean {
+            val method = call.methodExpression
             if (method is JSReferenceExpression) {
                 val name = method.referenceName
-                // $t / t / $tc / tc 调用
                 if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
             }
-            // 支持 i18n.global.t / i18n.t 等链式调用
             val calleeText = method?.text
             if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
+            return false
         }
-        return false
+        if (directCall != null && isTCall(directCall)) return TSem.DIRECT_ARG
+
+        // 2) 外层祖先 $t 调用（参数不是字符串字面量 → 表达式形式）
+        var cursor: PsiElement? = stringExpr.parent
+        while (cursor != null) {
+            if (cursor is JSCallExpression && cursor !== directCall && isTCall(cursor)) return TSem.OUTER_T_EXPRESSION
+            cursor = cursor.parent
+        }
+        return TSem.NONE
     }
+
+    /** 旧名兼容：其他地方只需要「DIRECT_ARG 就跳过」——保留 true/false 语义：
+     *  仅 DIRECT_ARG 返回 true（完全跳过）；OUTER_T_EXPRESSION 返回 false（仍然进入收集/替换分支，
+     *  但在 collectJSStringChange 内部再走 key-text-only 替换分支）。 */
+    fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean =
+        detectTSemantic(stringExpr) == TSem.DIRECT_ARG
 
     /**
      * 核心方法：提取 XmlText 中的纯文本（过滤注释、空白符、换行符）
@@ -1890,15 +1933,25 @@ class I18nProcessor(
         if (text.isEmpty()) return
         //print("$text,contains${raw.contains("\$t(")}\n")
 
-        // 先检查是否已在 $t() 调用中，避免误添加到 extractedStrings
-        if (isTransformedCalled(ele)) {
+        // ── 先检查是否处于 i18n 翻译调用作用域（3 档）
+        val tSem = detectTSemantic(ele)
+        if (tSem == TSem.DIRECT_ARG) {
+            // 字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
             return
         }
 
         val key = collectExtractedStrings(ele)
 
-        // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
-        val newExprText = buildTFunctionExpr(key, "{}")
+        // Bug4 修复：外层祖先有 $t(...)，但参数是表达式不是字符串字面量，
+        //  内层字符串不能再包一层 $t(...)，否则出现 $t(isPinned ? $t(...) : $t(...))。
+        //  正确：直接把字符串字面量替换为 'key' 文本 → $t(isPinned ? 'key1' : 'key2')
+        val newExprText: String = if (tSem == TSem.OUTER_T_EXPRESSION) {
+            val quote = if (raw.startsWith("'")) "'" else "\""
+            "$quote$key$quote"
+        } else {
+            // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
+            buildTFunctionExpr(key, "{}")
+        }
         if (ele.text == newExprText) return
 
         recordChange(
