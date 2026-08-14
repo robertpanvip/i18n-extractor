@@ -2485,8 +2485,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             result.contains("useI18n") || result.contains("vue-i18n")
         )
         assertFalse(
-            "无中文场景不应注入 `const { t: \$t } = useI18n()`，got:\n$result",
-            "const\\s*\\{\\s*t\\s*:\\s*\\\$t\\s*\\}\\s*=\\s*useI18n\\s*\\(".toRegex().containsMatchIn(result)
+            "无中文场景不应注入 `const { t: ${'$'}t } = useI18n()`，got:\n$result",
+            Regex("const\\s*\\{\\s*t\\s*:\\s*\\${'$'}t\\s*\\}\\s*=\\s*useI18n\\s*\\(").containsMatchIn(result)
         )
     }
 
@@ -2528,9 +2528,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("title 用户列表 应提取", processor.extractedStrings.containsValue("用户列表"))
         processor.execute()
         val result = file.text
-        val destructureRe = """const\s*\{\s*t\s*:\s*\\$t\s*\}\s*=\s*useI18n\s*\(""".toRegex()
+        val destructureRe = Regex("const\\s*\\{\\s*t\\s*:\\s*\\${'$'}t\\s*\\}\\s*=\\s*useI18n\\s*\\(")
         val allD = destructureRe.findAll(result).toList()
-        assertEquals("只应注入 1 条 `const { t: \$t } = useI18n()`，got ${allD.size}: \n$result", 1, allD.size)
+        assertEquals("只应注入 1 条 `const { t: ${'$'}t } = useI18n()`，got ${allD.size}: \n$result", 1, allD.size)
         // 检查这条解构位于 setup() 开头，不在 useRequest(async () => { ... }) 的箭头函数体内部：
         // （简化判断：解构文本必须出现在字符串 `useRequest(async` 之前，而非之后）
         val idxD = allD.first().range.first
