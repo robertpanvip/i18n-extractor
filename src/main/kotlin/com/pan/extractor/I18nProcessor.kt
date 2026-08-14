@@ -940,9 +940,26 @@ class I18nProcessor(
                     //   · setup: () => {}            → JSFunction(箭头类型，SDK 内 JSFunction 可识别) + block
                     // 兼容所有结构：**先在 setupFunc（JSFunction）内找 block，找不到就退到 setupProp 内找**
                     val setupFunc = PsiTreeUtil.findChildOfType(setupProp, JSFunction::class.java)
+                    // ── 修复 Bug3：setup() 里用 useRequest(async () => { ... }) 时，
+                    //    findChildOfType 深度遍历会返回 useRequest 回调内部的箭头函数字符串块，
+                    //    导致解构被错误注入到 useRequest 回调体首行（而非 setup 顶层）。
+                    //    正确做法：
+                    //      1) 优先取 setupFunc 的「直接子节点」 JSBlockStatement（不是后代）；
+                    //      2) 否则从 setupProp 的「第一层直接后代 JSBlockStatement」拿：
+                    //         即 从 setupProp.subtree 中第一个 JSBlockStatement，它的 parent
+                    //         要么就是 setupFunc（JSFunction），要么就是 setup 属性本身
+                    //         （如对象字面量简写属性 setup(){ ... } 的 block 直接后代）。
+                    fun findDirectBlockIn(ancestor: PsiElement): JSBlockStatement? {
+                        for (child in ancestor.children) {
+                            if (child is JSBlockStatement) return child
+                            val found = findDirectBlockIn(child)
+                            if (found != null) return found
+                        }
+                        return null
+                    }
                     val body: JSBlockStatement =
-                        ((if (setupFunc != null) PsiTreeUtil.findChildOfType(setupFunc, JSBlockStatement::class.java) else null)
-                            ?: PsiTreeUtil.findChildOfType(setupProp, JSBlockStatement::class.java))
+                        ((if (setupFunc != null) findDirectBlockIn(setupFunc) else null)
+                            ?: findDirectBlockIn(setupProp))
                             ?: continue
                     targetBodies.add(body)
                 }
@@ -1717,13 +1734,13 @@ class I18nProcessor(
         // 1. JSCallExpression -> JSLiteralExpression（新版 IntelliJ，无 JSArgumentList）
         // 2. JSCallExpression -> JSArgumentList -> JSLiteralExpression（旧版结构）
         val parent = stringExpr.parent
-        val callExpr = when {
+        val directCall = when {
             parent is JSCallExpression -> parent
             parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
-        if (callExpr != null) {
-            val method = callExpr.methodExpression
+        if (directCall != null) {
+            val method = directCall.methodExpression
             if (method is JSReferenceExpression) {
                 val name = method.referenceName
                 // $t / t / $tc / tc 调用
@@ -1732,6 +1749,37 @@ class I18nProcessor(
             // 支持 i18n.global.t / i18n.t 等链式调用
             val calleeText = method?.text
             if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // 修复 Bug4：$t(isPinned ? '取消置顶' : '置顶') 这类外层 $t 参数是
+        //   表达式（不是字符串字面量）的情况，内部两个字符串被错误地再包
+        //   了一层 $t，结果变成：
+        //     $t(isPinned ? $t('取消置顶') : $t('置顶'))  （嵌套 $t）
+        //   用户期望：外层已经写了 $t( 表达式 )，内部字符串保持不动。
+        //
+        // 做法：沿 parent 链向上找，若字符串字面量所在最内层的
+        //   JSCallExpression 的 method 正好命中 $t / t / $tc / tc /
+        //   i18n.global.t / i18n.t（即使它的第一个参数不是本字符串字面量），
+        //   也视为"已在 $t() 作用域内"，不再二次提取/替换。
+        // ──────────────────────────────────────────────────────────────
+        var cursor: PsiElement? = stringExpr.parent
+        val visitedDirect = directCall
+        while (cursor != null) {
+            if (cursor is JSCallExpression && cursor !== visitedDirect) {
+                val method = cursor.methodExpression
+                var hit = false
+                if (method is JSReferenceExpression) {
+                    val name = method.referenceName
+                    if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") hit = true
+                }
+                if (!hit) {
+                    val calleeText = method?.text
+                    if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) hit = true
+                }
+                if (hit) return true
+            }
+            cursor = cursor.parent
         }
         return false
     }

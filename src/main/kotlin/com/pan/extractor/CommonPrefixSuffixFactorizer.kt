@@ -87,7 +87,48 @@ object CommonPrefixSuffixFactorizer {
     fun factorize(allSites: List<SiteRef>): Pair<List<AffixGroupCandidate>, List<DigitGroupCandidate>> {
         val affix = buildAffixGroups(allSites)
         val digit = buildDigitGroups(allSites)
-        return affix to digit
+        // 修复 Bug5：简单声明 `const a = "测试数据1"; const b = "测试数据2"` 这种
+        //   ——两句没有公共前后缀也没有数字骨架相似点 ——「合并建议」空是正确的算法行为，
+        //   但用户误以为漏了。解决方案：
+        //     · 完全相同文本出现多次 → 自动生成一条骨架 = {N0} = 原句、
+        //       变体差异段也是原句（其实就是「同 key 自动合并去重」的可视化提示）；
+        //     · 两句全不同但站点数>1 → 仍在 Tab 2 上显示"没有公共前后缀 / 没有数字抽
+        //       样，暂无法合并"占位候选项（selected=false，避免误应用）。
+        val exactDupes = buildExactDuplicateHintGroups(allSites)
+        val finalAffix = (affix.asSequence() + exactDupes.asSequence())
+            .distinctBy { it.skeleton to it.variants.map { v -> v.diff }.toSet() }
+            .sortedByDescending { it.siteCount }
+            .toList()
+        val finalDigit = if (digit.isEmpty() && finalAffix.isEmpty() && allSites.size >= 2) {
+            listOf(DigitGroupCandidate(
+                id = "DG0",
+                skeleton = "（没有可自动抽取的数字骨架，无法合并；手动编辑翻译即可）",
+                digits = emptyList(),
+                perSites = allSites.take(8).map { DigitPerSite(it, emptyList(), true) },
+                selected = false,
+                skeletonKey = "no-digit-groups-placeholder"
+            ))
+        } else digit
+        return finalAffix to finalDigit
+    }
+
+    // ── 0. 完全相同文本多次出现：给 Tab 2 生成一条"提示性" AffixGroupCandidate
+    //       （其实同一文本会生成同一 key，用户以为漏了合并 → 显式展示即可）
+    private fun buildExactDuplicateHintGroups(allSites: List<SiteRef>): List<AffixGroupCandidate> {
+        val buckets = allSites.groupBy { it.originalMessage.trim() }.filterValues { it.size >= 2 }
+        var idSeq = 0
+        return buckets.map { (msg, sites) ->
+            val trimmed = msg
+            AffixGroupCandidate(
+                id = "AG_EXACT_DUP_${++idSeq}",
+                skeleton = trimmed,
+                prefix = trimmed,
+                suffix = "",
+                variants = listOf(AffixVariant(diff = trimmed, sites = sites.toList())),
+                selected = false,
+                skeletonKey = trimmed
+            )
+        }
     }
 
     // ── ① 公共前后缀合并（≥2字） ──────────────────────────────

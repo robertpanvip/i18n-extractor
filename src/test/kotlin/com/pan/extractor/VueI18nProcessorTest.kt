@@ -2458,4 +2458,86 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             result.contains("okText = \"立即执行\"") || result.contains("okText = '立即执行'")
         )
     }
+
+    // ============================================================
+    // 回归 Bug1：Vue 文件中即使没有中文也导入 useI18n / 解构
+    // ============================================================
+    fun testVueSfcScriptSetupNoChineseShouldNotInjectUseI18n() {
+        val file = configureFile(
+            "src/components/NumberBox.vue",
+            """
+            <template>
+              <div>{{ count }}</div>
+            </template>
+            <script setup lang="ts">
+            import { ref } from 'vue'
+            const count = ref(0)
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals("没有中文 → 提取数量为 0", 0, processor.extractedStrings.size)
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            "无中文场景不应注入 `import { useI18n } from 'vue-i18n'`，got:\n$result",
+            result.contains("useI18n") || result.contains("vue-i18n")
+        )
+        assertFalse(
+            "无中文场景不应注入 `const { t: \$t } = useI18n()`，got:\n$result",
+            "const\\s*\\{\\s*t\\s*:\\s*\\\$t\\s*\\}\\s*=\\s*useI18n\\s*\\(".toRegex().containsMatchIn(result)
+        )
+    }
+
+    // ============================================================
+    // 回归 Bug3：setup() 中有 useRequest(callback)，解构不应注入到 callback 内部，
+    //           必须注入在 setup()/script 顶层。
+    // ============================================================
+    fun testVueSfcSetupUsesUseRequestI18nDestructureShouldInjectAtTopNotInsideCallback() {
+        val file = configureFile(
+            "src/views/UserList.vue",
+            """
+            <template>
+              <div>
+                <table v-loading="loading">
+                  <tbody><tr><td>{{ title }}</td></tr></tbody>
+                </table>
+              </div>
+            </template>
+            <script lang="ts">
+            import { defineComponent, ref } from 'vue'
+            import { useRequest } from 'ahooks-vue'
+
+            export default defineComponent({
+              name: 'UserList',
+              setup() {
+                const title = ref('用户列表')
+                const { loading } = useRequest(async () => {
+                  console.log('开始请求')
+                  return await fetch('/api/users').then(r => r.json())
+                }, { manual: false })
+                return { title, loading }
+              }
+            })
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue("title 用户列表 应提取", processor.extractedStrings.containsValue("用户列表"))
+        processor.execute()
+        val result = file.text
+        val destructureRe = """const\s*\{\s*t\s*:\s*\\$t\s*\}\s*=\s*useI18n\s*\(""".toRegex()
+        val allD = destructureRe.findAll(result).toList()
+        assertEquals("只应注入 1 条 `const { t: \$t } = useI18n()`，got ${allD.size}: \n$result", 1, allD.size)
+        // 检查这条解构位于 setup() 开头，不在 useRequest(async () => { ... }) 的箭头函数体内部：
+        // （简化判断：解构文本必须出现在字符串 `useRequest(async` 之前，而非之后）
+        val idxD = allD.first().range.first
+        val idxUseReq = result.indexOf("useRequest(")
+        assertTrue("解构注入位置应在 useRequest( 之前（setup 顶层），got indices destructure@$idxD vs useRequest@$idxUseReq:\n$result", idxUseReq < 0 || idxD in 0 until idxUseReq)
+        // 同时箭头函数 `async () => {` 的内部首行不应再出现第二条解构
+        val afterUseReq = result.substring(minOf(idxUseReq, result.length))
+        assertEquals("useRequest 回调体内部不应再出现第二次解构，got tail:\n$afterUseReq", 0, destructureRe.findAll(afterUseReq).drop(1).count())
+    }
 }
