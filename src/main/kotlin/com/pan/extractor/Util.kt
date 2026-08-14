@@ -741,6 +741,49 @@ object Util {
     }
 
     /**
+     * React 专用：查找"导出了 i18n 实例"的初始化文件。
+     *
+     * 与 [findI18nInitFileInRoot] 的区别：只匹配 React 初始化文件（initReactI18next /
+     * i18n.init），且文件必须导出了 i18n（`export default i18n` / `export const i18n` /
+     * `export { i18n }`）。这样避免混合项目里命中 Vue 的 createI18n 文件，也满足
+     * "如果 locale 初始化导出了 i18n 才用它"的语义——未导出 i18n 的初始化文件视为不可用。
+     */
+    fun findReactI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+        val commonDirs = listOf(
+            "src/locales", "locales", "src/i18n", "i18n",
+            "src/locale", "locale", "src/lang", "lang"
+        )
+        for (relPath in commonDirs) {
+            val dir = findRelativeFile(projectRoot, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val result = walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                    val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                    if (isReactI18nInitWithExport(t)) vf else null
+                } else null
+            }
+            if (result != null) return result
+        }
+        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
+            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                if (isReactI18nInitWithExport(t)) vf else null
+            } else null
+        }
+    }
+
+    /** 判断文本是否是一个"React 初始化且导出了 i18n"的文件。 */
+    private fun isReactI18nInitWithExport(text: String): Boolean {
+        val isReactInit = text.contains("initReactI18next") ||
+            Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)
+        if (!isReactInit) return false
+        return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(text) ||
+            Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(text) ||
+            Regex("""export\s+default\s+i18n\b""").containsMatchIn(text)
+    }
+
+    /**
      * 构造从当前文件 [currentPsiFile] 导入 Vue i18n 实例文件 [i18nVFile] 的路径。
      *
      * 优先级：

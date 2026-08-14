@@ -1059,17 +1059,45 @@ class I18nProcessor(
                     }
             }
         }
+        // React 版：检查是否已经存在 `const i18n = getI18n()` 别名
+        // （i18n.t 语义 + locale 不可用时，用该别名保持 i18n 标识符可用）
+        fun hasReactI18nGlobalAliased(root: PsiElement): Boolean {
+            val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+            val re = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
+            return vars.any {
+                re.containsMatchIn(it.text) ||
+                    it.text.replace("\\s+", "").let { t -> t.contains("consti18n=getI18n()") }
+            }
+        }
+        // React 版：检查是否已存在 getI18n 的 const 别名（$t 或 i18n 均可）
+        // → 判定"文件已经在用 getI18n"，避免切 locale 造成别名错位。
+        fun hasReactGetI18nAlias(root: PsiElement): Boolean =
+            hasReactGlobalDollarTAliased(root) || hasReactI18nGlobalAliased(root)
         // ───────────────────────────────────────────────────────────────
 
         val i18nAlreadyImported = hasI18nInstanceImported(psiFile)
-        // React getI18n 导入是否已经存在？
-        val reactGetI18nAlreadyImported = !isVue && hasReactGetI18nImported(psiFile)
 
-        // 【问题 2 修复（用户报告：只出现 const $t=getI18n().t 却没 import { getI18n }）】
+        // React：统一"locale 优先、getI18n 回退"。
+        //  - reactLocaleImport：项目 locale 初始化文件导出了 i18n → 用它的导入语句；
+        //  - 否则回退 `import { getI18n } from 'react-i18next'`（不再硬编码 `import i18n from 'i18next'`）；
+        //  - 若文件已经用 getI18n（import 或 const 别名），保持 getI18n 不切 locale，避免别名错位。
+        val alreadyUsesGetI18n = !isVue && (hasReactGetI18nImported(psiFile) || hasReactGetI18nAlias(psiFile))
+        val reactLocaleImport =
+            if (isVue || alreadyUsesGetI18n) null
+            else buildReactI18nInstanceImport(psiFile.containingFile ?: psiFile)
+
+        // React $t 模式（injectReactGlobalDollarT=true，纯工具 TS 无组件无 Hook）：
+        //  - locale 可用：$t 指向 locale 导入的 i18n → 已有任意 i18n 实例导入即视为满足；
+        //  - locale 不可用：$t = getI18n().t → **必须严格存在 getI18n 命名导入**才算满足。
+        //    老 `import i18n from 'i18next'` 顶不上——否则又出现用户报告过的问题 2：
+        //    只追加 const $t = getI18n().t、却没补 import { getI18n }，运行时报 getI18n is not defined。
+        val reactDollarTImportSatisfied =
+            if (reactLocaleImport != null) i18nAlreadyImported else hasReactGetI18nImported(psiFile)
+
         val requiredImportAlreadyPresent = when {
-            // React 新模板（getI18n）→ 严格要求 getI18n 导入，老 i18n 不算
-            !isVue && injectReactGlobalDollarT -> reactGetI18nAlreadyImported
-            // 其他所有情况：Vue + React 旧 i18n.t 模式 → 只要"存在一个指向 i18n 实例的导入"即可
+            isVue -> i18nAlreadyImported
+            injectReactGlobalDollarT -> reactDollarTImportSatisfied
+            // i18n.t 语义：只要已有任意指向 i18n 实例的导入（locale / ./i18n / i18next / getI18n）即满足
             else -> i18nAlreadyImported
         }
 
@@ -1077,25 +1105,37 @@ class I18nProcessor(
         val dollarTAliasAlreadyPresent = when {
             isVue && injectGlobalDollarT -> hasVueGlobalDollarTAliased(psiFile)
             !isVue && injectReactGlobalDollarT -> hasReactGlobalDollarTAliased(psiFile)
-            else -> true // 不需要别名 → 当然算"已存在"
+            else -> true // 不需要 $t 别名 → 当然算"已存在"
         }
+        // React i18n.t 语义（injectReactGlobalDollarT=false）且 locale 不可用、又缺 import 时，
+        // 回退 getI18n 需要 `const i18n = getI18n();` 保持 i18n 标识符可用。
+        val reactI18nAliasAlreadyPresent = !isVue && hasReactI18nGlobalAliased(psiFile)
+        val reactNeedsI18nAlias = !isVue && !injectReactGlobalDollarT &&
+            reactLocaleImport == null && !requiredImportAlreadyPresent
 
         // 提前 return：(所需的 import 已存在) 且 (不需要追加别名 OR 别名也已经追加过)
-        val stillNeedConstAlias = (isVue && injectGlobalDollarT) || (!isVue && injectReactGlobalDollarT)
-        if (requiredImportAlreadyPresent && !(stillNeedConstAlias && !dollarTAliasAlreadyPresent)) {
+        val stillNeedConstAlias = (isVue && injectGlobalDollarT) ||
+            (!isVue && injectReactGlobalDollarT) ||
+            reactNeedsI18nAlias
+        val aliasAlreadyPresent = if (reactNeedsI18nAlias) reactI18nAliasAlreadyPresent else dollarTAliasAlreadyPresent
+        if (requiredImportAlreadyPresent && !(stillNeedConstAlias && !aliasAlreadyPresent)) {
             return
         }
 
-        // —— 计算 import 文本 & const $t 别名文本 ——
+        // —— 计算 import 文本 & const 别名文本 ——
         val importText: String? = when {
             requiredImportAlreadyPresent -> null
             isVue -> buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
-            injectReactGlobalDollarT -> "import { getI18n } from 'react-i18next';\n"
-            else -> "import i18n from 'i18next';\n"
+            reactLocaleImport != null -> reactLocaleImport
+            else -> "import { getI18n } from 'react-i18next';\n"
         }
         val dollarTText: String? = when {
             isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
-            !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = getI18n().t;\n"
+            // React $t 别名：locale → i18n.t；回退 → getI18n().t
+            !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
+                if (reactLocaleImport != null) "const \$t = i18n.t;\n" else "const \$t = getI18n().t;\n"
+            // React i18n.t 语义 + 回退 getI18n：注入 const i18n = getI18n() 保持 i18n 标识符可用
+            reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
             else -> null
         }
 
@@ -1205,8 +1245,12 @@ class I18nProcessor(
                     }
                 }
             }
-            // 2) React $t 别名注入（新模式 injectReactGlobalDollarT=true 时）
-            if (injectReactGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) {
+            // 2) React 别名注入：$t 别名（injectReactGlobalDollarT）或 i18n 别名
+            //    （reactNeedsI18nAlias：i18n.t 语义 + locale 不可用 + 无导入 → const i18n = getI18n()）
+            val needReactConstAlias =
+                (injectReactGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) ||
+                    (reactNeedsI18nAlias && dollarTText != null && !reactI18nAliasAlreadyPresent)
+            if (needReactConstAlias) {
                 val stmt = createStringExpressionNode(dollarTText, containingFile)
                 val latestImports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
                 if (latestImports.isNotEmpty()) {
@@ -1241,6 +1285,28 @@ class I18nProcessor(
             ?: return FALLBACK_VUE_I18N_IMPORT
         val isDefault = Util.isVueI18nDefaultExport(i18nVFile)
         return if (isDefault) {
+            "import i18n from '$importPath';\n"
+        } else {
+            "import { i18n } from '$importPath';\n"
+        }
+    }
+
+    /**
+     * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
+     *
+     * 流程：
+     * 1. 通过 Util.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
+     * 2. 通过 Util.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 Util.isVueI18nDefaultExport 判断命名 or 默认导入语法
+     *
+     * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
+     */
+    private fun buildReactI18nInstanceImport(psiFile: PsiElement): String? {
+        val containingFile = psiFile.containingFile ?: return null
+        val projectRoot = Util.findProjectRoot(containingFile) ?: return null
+        val initFile = Util.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
+        val importPath = Util.resolveVueI18nImportPath(containingFile, initFile) ?: return null
+        return if (Util.isVueI18nDefaultExport(initFile)) {
             "import i18n from '$importPath';\n"
         } else {
             "import { i18n } from '$importPath';\n"

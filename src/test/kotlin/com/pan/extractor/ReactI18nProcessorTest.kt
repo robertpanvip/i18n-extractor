@@ -553,8 +553,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入默认导入。
-     * React 默认注入默认导入：import i18n from 'i18next'
+     * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入。
+     *
+     * 新语义：locale 优先、失败回退 getI18n。
+     * 本项目没有"导出了 i18n 的 React 初始化文件" → locale 不可用 → 回退 getI18n：
+     *   顶部注入 `import { getI18n } from 'react-i18next';`
+     *   并追加 `const i18n = getI18n();` 保持 i18n.t(...) 标识符可用。
+     * 不再硬编码 `import i18n from 'i18next'`。
      */
     fun testReactI18nTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -579,15 +584,195 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
-        // 应注入 i18n 实例的默认导入
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // locale 不可用 → 回退 getI18n：注入 import { getI18n } from 'react-i18next'
         assertTrue(
-            "应注入 import i18n from 'i18next', got:\n$resultText",
-            resultText.contains("import i18n from 'i18next'")
+            "应注入 import { getI18n } from 'react-i18next', got:\n$resultText",
+            compact.contains("import{getI18n}from'react-i18next'")
+        )
+        // i18n.t 语义：追加 const i18n = getI18n() 保持 i18n 标识符可用
+        assertTrue(
+            "应追加 const i18n = getI18n(), got:\n$resultText",
+            compact.contains("consti18n=getI18n()")
+        )
+        // 不再硬编码旧的 import i18n from 'i18next'
+        assertFalse(
+            "不应再注入 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
         )
         // 不应注入 useTranslation（已使用全局 i18n）
         assertFalse(
             "不应注入 useTranslation, got:\n$resultText",
             resultText.contains("useTranslation")
+        )
+    }
+
+    // ============================================================
+    // 9.1 新语义：locale 优先、失败回退 getI18n
+    //     （locale 初始化文件导出了 i18n → import i18n from '@/locales'；
+    //       未导出 i18n / 无初始化文件 → 回退 getI18n）
+    // ============================================================
+
+    /**
+     * locale 初始化文件导出了 i18n，且文件用 i18n.t 但缺导入 →
+     * 应注入 `import i18n from '@/locales'`，**不**回退 getI18n。
+     */
+    fun testReactI18nTWithLocaleExportUsesLocaleImport() {
+        // locale 初始化文件：React 初始化 + 导出了 i18n
+        myFixture.addFileToProject(
+            "src/locales/index.ts",
+            """
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+
+            i18n.use(initReactI18next).init({
+              resources: {},
+              lng: 'zh',
+            })
+
+            export default i18n
+            """.trimIndent()
+        )
+
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            export default function App() {
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                        <button onClick={() => alert(i18n.t("已存在"))}>按钮</button>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // locale 优先：从 locale 初始化文件导入 i18n 实例（默认导出 → @/locales）
+        assertTrue(
+            "应注入 import i18n from '@/locales', got:\n$resultText",
+            compact.contains("importi18nfrom'@/locales'")
+        )
+        // 不落回 getI18n
+        assertFalse(
+            "locale 可用时不应回退 getI18n, got:\n$resultText",
+            compact.contains("getI18n")
+        )
+        // 不用旧的 i18next 包导入
+        assertFalse(
+            "不应注入 import i18n from 'i18next', got:\n$resultText",
+            resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
+        )
+    }
+
+    /**
+     * locale 初始化文件导出了 i18n，纯工具 TS 文件（\$t 语义）→
+     * 注入 `import i18n from '@/locales'` + `const \$t = i18n.t;`，不回退 getI18n。
+     */
+    fun testReactPureTsWithLocaleExportUsesLocaleImport() {
+        myFixture.addFileToProject(
+            "src/locales/index.ts",
+            """
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+
+            i18n.use(initReactI18next).init({
+              resources: {},
+              lng: 'zh',
+            })
+
+            export default i18n
+            """.trimIndent()
+        )
+
+        val file = configureFile(
+            "src/utils/format.ts",
+            """
+            export function formatTip(type: string) {
+                const label = "提示"
+                return type + ": " + label
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "纯工具 TS 应注入 import i18n from '@/locales', got:\n$resultText",
+            compact.contains("importi18nfrom'@/locales'")
+        )
+        assertTrue(
+            "纯工具 TS 应追加 const \$t = i18n.t（用 locale i18n，而非 getI18n）, got:\n$resultText",
+            compact.contains("const\$t=i18n.t")
+        )
+        assertFalse(
+            "locale 可用时纯工具 TS 不应回退 getI18n, got:\n$resultText",
+            compact.contains("getI18n")
+        )
+    }
+
+    /**
+     * 用户指定语义："失败回退才走到现在的 getI18n"。
+     * locale 初始化文件**存在但未导出 i18n** → 视为不可用 → 回退 getI18n。
+     */
+    fun testReactI18nTWithLocaleInitNoExportFallsBackToGetI18n() {
+        // locale 初始化文件：React 初始化了，但**没有导出 i18n**
+        myFixture.addFileToProject(
+            "src/i18n/index.ts",
+            """
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+
+            i18n.use(initReactI18next).init({
+              resources: {},
+              lng: 'zh',
+            })
+            """.trimIndent()
+        )
+
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            export default function App() {
+                return (
+                    <div>
+                        <h1>新标题</h1>
+                        <button onClick={() => alert(i18n.t("已存在"))}>按钮</button>
+                    </div>
+                )
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // 初始化文件未导出 i18n → 不切 locale
+        assertFalse(
+            "未导出 i18n 的初始化文件不应被用作 locale 导入, got:\n$resultText",
+            compact.contains("@/i18n") || compact.contains("@/locale") || compact.contains("@/locales")
+        )
+        // 回退 getI18n
+        assertTrue(
+            "应回退 import { getI18n } from 'react-i18next', got:\n$resultText",
+            compact.contains("import{getI18n}from'react-i18next'")
+        )
+        assertTrue(
+            "i18n.t 语义回退应追加 const i18n = getI18n(), got:\n$resultText",
+            compact.contains("consti18n=getI18n()")
         )
     }
 
