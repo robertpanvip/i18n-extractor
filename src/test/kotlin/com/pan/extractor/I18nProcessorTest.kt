@@ -243,6 +243,27 @@ class I18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * 【Bug 验证 A2】$t(foo('中文')) 中 '中文' 是普通函数 foo 的参数，
+     * 不是 $t 的直接字符串参数，应当被提取，而不是被误判为 DIREC_ARG 跳过。
+     */
+    fun testNestedCallInsideTDollarShouldStillExtract() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = ${'$'}t(foo('内部中文'))
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "'内部中文' 是 foo() 的参数而非 ${'$'}t 的直接参数，应被提取，但 got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("内部中文")
+        )
+    }
+
+    /**
      * 测试函数调用中普通字符串参数应提取（非 $t 函数）
      */
     fun testFunctionCallStringArgShouldExtract() {
@@ -436,6 +457,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(
             "extractedStrings should contain '你好世界', got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("你好世界")
+        )
+        // 【Bug 验证 A1】拼接不应把操作数再单独提取，整条拼接应只产生 1 个 key
+        assertEquals(
+            "拼接 '你好' + '世界' 应只提取合并后的 1 条，不应分别提取操作数，got: ${processor.extractedStrings}",
+            1,
+            processor.extractedStrings.size
         )
     }
 

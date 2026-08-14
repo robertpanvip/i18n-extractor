@@ -575,6 +575,35 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * 【Bug 验证】非指令普通属性 <div title="中文"> 中的中文应被提取，
+     * 且重写后不应多包一层引号（应为 :title="$t('中文')" 而非 :title="'$t('中文')'"）。
+     */
+    fun testVueNonDirectiveAttributeShouldExtractWithoutExtraQuotes() {
+        val file = configureFile(
+            "src/Test.vue",
+            """
+            <template>
+                <div title="提示信息">hover me</div>
+            </template>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "非指令属性 title='提示信息' 应提取，但 got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("提示信息")
+        )
+        processor.execute()
+        val result = file.text
+        assertFalse(
+            "重写后不应有多余单引号包裹（结果应形如 title=${'$'}t('提示信息')），got: $result",
+            result.contains("''\${'$'}t") || result.contains("'\${'$'}t('")
+        )
+    }
+
+    /**
      * 测试 :title="$t('key')" 动态属性中已有 $t() 应跳过
      */
     fun testVueDynamicAttributeWithExistingTShouldSkip() {
