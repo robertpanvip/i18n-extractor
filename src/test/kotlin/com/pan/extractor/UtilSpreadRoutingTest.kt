@@ -177,4 +177,91 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
         val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNull("无法解析 spread 目标时应返回 null 回退旧逻辑", writes)
     }
+
+    // ─────────────────────────────────────────
+    // 6) 嵌套对象里的 spread：nav: { ...common }，nav 下的新 key 路由到 common 目标
+    // ─────────────────────────────────────────
+    fun testNestedSpreadRoutesToTarget() {
+        createEntry(
+            "src/common.ts",
+            """
+            export default {
+              '标题': '标题',
+            }
+            """.trimIndent()
+        )
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            import common from './common'
+            export default {
+              nav: {
+                ...common,
+              },
+              '首页': '首页',
+            }
+            """.trimIndent()
+        )
+        val newFlat = linkedMapOf("首页" to "首页", "nav.退出" to "退出")
+        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        assertNotNull("应识别嵌套 spread 并路由到 common", writes)
+        // common.ts 应主要路由 nav 下的新 key
+        val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
+        assertNotNull("应包含 common.ts 的写盘", commonWrite)
+        assertTrue("common.ts 应包含新 key '退出'，result:\n${commonWrite!!.second}", commonWrite.second.contains("'退出'"))
+        // 入口 nav 容器不应把 '退出' 重复写进去
+        val entryWrite = writes.firstOrNull { it.first.path.endsWith("zh.ts") }!!
+        val exportBlock = entryWrite.second.substringAfter("export default")
+        assertEquals("入口对象不应重复新增 nav 下的 '退出'，result:\n$exportBlock", 0, countOccurrences(exportBlock, "'退出'"))
+    }
+
+    // ─────────────────────────────────────────
+    // 7) 命名空间导入：import * as common from './common' → 解析到默认导出对象
+    // ─────────────────────────────────────────
+    fun testNamespaceImportSpreadRoutesToTarget() {
+        createEntry(
+            "src/common.ts",
+            """
+            export default {
+              '标题': '标题',
+            }
+            """.trimIndent()
+        )
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            import * as common from './common'
+            export default {
+              ...common,
+              '首页': '首页',
+            }
+            """.trimIndent()
+        )
+        val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
+        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        assertNotNull("应识别 import * as 命名空间导入并路由", writes)
+        val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
+        assertNotNull("应包含 common.ts 的写盘", commonWrite)
+        assertTrue("common.ts 应包含新 key '退出'，result:\n${commonWrite!!.second}", commonWrite.second.contains("'退出'"))
+    }
+
+    // ─────────────────────────────────────────
+    // 8) 嵌套对象值带 as const（TS 收紧类型的常见写法）：点式新 key 归并进现有对象，不产生重复
+    // ─────────────────────────────────────────
+    fun testNestedAsConstMergesDottedKey() {
+        val entry = createEntry(
+            "src/zh.ts",
+            """
+            export default {
+              nav: { '标题': '标题' } as const,
+            }
+            """.trimIndent()
+        )
+        val newText = Util.regenerateTsFileWithNewJson(project, entry, linkedMapOf("nav.退出" to "退出"))
+        assertNotNull("应能解析带 as const 的嵌套对象并重写", newText)
+        val exportBlock = newText!!.substringAfter("export default")
+        assertEquals("nav 容器不应重复出现，result:\n$exportBlock", 1, countOccurrences(exportBlock, "nav:"))
+        assertTrue("nav 内应包含 '退出'，result:\n$exportBlock", exportBlock.contains("'退出'"))
+        assertTrue("应保留原有 '标题'，result:\n$exportBlock", exportBlock.contains("'标题'"))
+    }
 }

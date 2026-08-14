@@ -1290,9 +1290,20 @@ object Util {
         return sb.toString()
     }
 
+    /**
+     * 去掉值表达式尾部与静态判定无关的 TS 后缀，以便 `{ ... } as const`、`x satisfies Foo`
+     * 等常见写法也能落到对象/原始字面量解析。只剥除末尾的 ` as const` 与 ` satisfies <Type>`。
+     */
+    private fun stripValueSuffixes(expr: String): String {
+        var t = expr.trim()
+        if (t.endsWith(" as const")) t = t.removeSuffix(" as const").trim()
+        t = t.replace(Regex("""\s+satisfies\s+[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$"""), "").trim()
+        return t
+    }
+
     /** 尝试把一个表达式片段解析为静态值；非静态返回 null。 */
     private fun tryParseStaticValue(expr: String): Any? {
-        val s = expr.trim()
+        val s = stripValueSuffixes(expr)
         if (s.isEmpty()) return null
         // 字面量：null / undefined / true / false
         when (s) {
@@ -1830,18 +1841,52 @@ object Util {
         val readOnly: Boolean = false // node_modules 等只读目标：识别内容但不写盘
     )
 
-    /** 从对象字面量文本中提取顶层 spread 变量名（如 `...common` → common）。 */
-    private fun findSpreadVarNames(objBody: String): List<String> {
+    /** 一个 spread 引用：`...varName`，path 为它被展开所在的容器对象路径（顶层为空列表）。 */
+    private data class SpreadRef(val varName: String, val path: List<String>)
+
+    /**
+     * 从对象字面量文本中递归提取 spread 引用（含嵌套对象里的 spread，如 `nav: { ...common }`）。
+     * path 记录每个 spread 所在的容器路径，用于把新 key 精确路由到对应目标文件。
+     */
+    private fun findSpreadRefs(objBody: String, path: List<String>): List<SpreadRef> {
+        val result = mutableListOf<SpreadRef>()
         val body = objBody.trim().let {
             if (it.startsWith("{") && it.endsWith("}")) it.substring(1, it.length - 1) else it
         }
-        return splitTopLevelProperties(body).mapNotNull { prop ->
+        for (prop in splitTopLevelProperties(body)) {
             val t = prop.trim()
             if (t.startsWith("...")) {
                 val name = t.removePrefix("...").trim()
-                if (name.matches(Regex("""[A-Za-z_$][\w$]*"""))) name else null
-            } else null
+                if (name.matches(Regex("""[A-Za-z_$][\w$]*"""))) result.add(SpreadRef(name, path))
+                continue
+            }
+            // 值本身是对象字面量 → 递归进入（识别嵌套 spread）
+            val (k, v) = parseOneProperty(prop) ?: continue
+            val vClean = stripValueSuffixes(v)
+            if (vClean.startsWith("{") && vClean.endsWith("}")) {
+                result.addAll(findSpreadRefs(vClean, path + k))
+            }
         }
+        return result
+    }
+
+    /** 判断 key 是否位于 path 容器之下（path 为空 → 恒 true）。 */
+    private fun isUnder(path: List<String>, key: String): Boolean {
+        if (path.isEmpty()) return true
+        val prefix = path.joinToString(".")
+        return key == prefix || key.startsWith("$prefix.")
+    }
+
+    /** 把 key 转成相对 path 容器下的相对 key；key 不在 path 容器下则返回 null。 */
+    private fun relativeKey(path: List<String>, key: String): String? {
+        if (path.isEmpty()) return key
+        val prefix = path.joinToString(".")
+        return if (key.startsWith("$prefix.")) key.removePrefix("$prefix.") else null
+    }
+
+    /** 把容器路径 + 相对 key 拼成入口扁平 key。 */
+    private fun joinPath(path: List<String>, k: String): String {
+        return if (path.isEmpty()) k else path.joinToString(".") + "." + k
     }
 
     private fun readVirtualFileText(project: Project?, vf: VirtualFile): String? {
@@ -1875,8 +1920,8 @@ object Util {
             val objBody = entryText.substring(braceIdx, objEnd)
             return ResolvedSpreadTarget(entryVf, braceIdx until objEnd, parseObjectLiteralBody(objBody), "const")
         }
-        // 2) import：import <varName> from '...' 或 import <varName>, { ... } from '...'
-        val importRe = Regex("""import\s+(${Regex.escape(varName)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
+        // 2) import：import <varName> from '...'、import * as <varName> from '...'、import <varName>, { ... } from '...'
+        val importRe = Regex("""import\s+(?:\*\s+as\s+)?(${Regex.escape(varName)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
         val im = importRe.find(entryText) ?: return null
         val spec = im.groupValues[2]
         // 本地相对/绝对路径优先；裸包名（node_modules）作为只读识别
@@ -1990,59 +2035,73 @@ object Util {
         val entryText = readVirtualFileText(project, entryVf) ?: return null
         val entryInfo = parseTsExportedObject(entryText) ?: return null
         val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.endExclusive)
-        val spreadVars = findSpreadVarNames(entryObjBody)
-        if (spreadVars.isEmpty()) return null
+        val spreadRefs = findSpreadRefs(entryObjBody, emptyList())
+        if (spreadRefs.isEmpty()) return null
         val entryKeys = entryInfo.staticKV.keys.toSet()
 
-        // 解析所有 spread 变量指向的目标（含 node_modules 只读识别）
-        val targets = spreadVars.mapNotNull { resolveSpreadTarget(project, entryVf, entryText, it) }
-        if (targets.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
-        // 所有目标已识别的 key（含 node_modules 只读内容），用于避免重复写入
-        val recognizedKeys = targets.flatMap { it.existingKeys.keys }.toSet()
-        val writableTargets = targets.filter { !it.readOnly }
-        val toEntry = newFlatJson.filterKeys { it in entryKeys }
-        val toNew = newFlatJson.filterKeys { it !in entryKeys && it !in recognizedKeys }
+        // 解析每个 spread 引用指向的目标（含 node_modules 只读识别）
+        val resolved = spreadRefs.mapNotNull { ref ->
+            resolveSpreadTarget(project, entryVf, entryText, ref.varName)?.let { ref to it }
+        }
+        if (resolved.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
+        // 所有目标已识别的 key（按各自容器路径展开成入口扁平 key），用于避免重复写入
+        val covered = resolved.flatMap { (ref, target) ->
+            target.existingKeys.keys.map { joinPath(ref.path, it) }
+        }.toSet()
+        val writableResolved = resolved.filter { !it.second.readOnly }
 
-        if (writableTargets.isEmpty()) {
-            // 只有 node_modules（只读）：识别其内容，真正新增的 key 写入口对象，
-            // 已在 node_modules 里存在的 key 视为被 spread 覆盖，不再重复写入。
-            val entryAll = newFlatJson.filterKeys { it in entryKeys || it in toNew }
+        // 只有只读（node_modules）目标 → 识别内容，真正新增的 key 写入口对象
+        if (writableResolved.isEmpty()) {
+            val entryAll = newFlatJson.filterKeys { it in entryKeys || it !in covered }
             return listOf(entryVf to applyRangeReplacements(entryText, listOf(
                 entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV)
             )))
         }
 
-        val target = writableTargets.first()
-        if (toNew.isEmpty()) {
-            // 没有真正新增的 key → 只重写入口
-            return listOf(entryVf to applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
-            )))
+        // 为每个真正新增的 key 决定去向：优先最深的可写容器 spread 目标，否则入口
+        data class WriteUnit(val target: ResolvedSpreadTarget, val relative: MutableMap<String, String>)
+        val targetWrites = linkedMapOf<String, WriteUnit>() // key = 目标文件 path
+        val entryNew = mutableMapOf<String, String>()
+
+        for ((k, v) in newFlatJson) {
+            if (k in entryKeys) { entryNew[k] = v; continue }
+            if (k in covered) continue // 已被某个 spread 提供的 key 覆盖
+            val best = writableResolved
+                .filter { isUnder(it.first.path, k) }
+                .maxByOrNull { it.first.path.size }
+            if (best == null) { entryNew[k] = v; continue }
+            val rel = relativeKey(best.first.path, k) ?: run { entryNew[k] = v; continue }
+            targetWrites.getOrPut(best.second.file.path) { WriteUnit(best.second, linkedMapOf()) }
+                .relative[rel] = v
         }
-        if (target.kind == "json") {
-            val newTarget = regenerateJsonFileWithNewJson(target.file, toNew) ?: return null
-            val newEntry = applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
-            ))
-            return listOf(entryVf to newEntry, target.file to newTarget)
+
+        // 组装入口写盘（含同文件 const 目标范围）
+        val entryReplacements = mutableListOf<Pair<IntRange, String>>(entryInfo.objectRange to
+                newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV))
+        val separateWrites = mutableListOf<Pair<VirtualFile, String>>()
+        for ((_, unit) in targetWrites) {
+            val target = unit.target
+            when (target.kind) {
+                "json" -> {
+                    val newTarget = regenerateJsonFileWithNewJson(target.file, unit.relative) ?: return null
+                    separateWrites.add(target.file to newTarget)
+                }
+                "ts" -> {
+                    val targetText = readVirtualFileText(project, target.file) ?: return null
+                    val newTarget = applyRangeReplacements(targetText, listOf(
+                        target.objRangeInText to newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys)
+                    ))
+                    separateWrites.add(target.file to newTarget)
+                }
+                else -> { // const：与入口同文件，合并进同一文本替换
+                    entryReplacements.add(
+                        target.objRangeInText to newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys)
+                    )
+                }
+            }
         }
-        // const / ts：可能同文件（const），也可能不同文件（import）
-        val sameFile = target.file.path == entryVf.path
-        val targetText = if (sameFile) entryText else readVirtualFileText(project, target.file) ?: return null
-        val newEntry = applyRangeReplacements(entryText, listOf(
-            entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV)
-        ))
-        if (sameFile) {
-            val combined = applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, toEntry, entryInfo.staticKV),
-                target.objRangeInText to newRegionText(targetText, target.objRangeInText, toNew, target.existingKeys)
-            ))
-            return listOf(entryVf to combined)
-        }
-        val newTarget = applyRangeReplacements(targetText, listOf(
-            target.objRangeInText to newRegionText(targetText, target.objRangeInText, toNew, target.existingKeys)
-        ))
-        return listOf(entryVf to newEntry, target.file to newTarget)
+        val entryCombined = applyRangeReplacements(entryText, entryReplacements)
+        return listOf(entryVf to entryCombined) + separateWrites
     }
 
     // ==========================================================================
