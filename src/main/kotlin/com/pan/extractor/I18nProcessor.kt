@@ -1503,9 +1503,8 @@ class I18nProcessor(
         }
     }
 
-    fun hasChinese(text: String): Boolean {
-        return text.any { it in '\u4e00'..'\u9fff' }
-    }
+    /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
+    fun hasChinese(text: String): Boolean = Util.containsTargetLanguage(text)
 
 
     fun isJSTemplateLiteral(text: String): Boolean {

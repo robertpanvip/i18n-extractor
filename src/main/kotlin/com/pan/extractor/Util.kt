@@ -42,17 +42,19 @@ import kotlin.io.path.Path
 import kotlin.io.path.relativeToOrNull
 
 object Util {
-    private val HAN_RE = Regex("""[\u4e00-\u9fff]""")
-
     /** 高频复用正则：避免每次在循环里重复编译（性能）。 */
     private val REACT_KEY_RE = Regex(""""react"\s*:\s*"""")
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
 
-    /** 常见 helper：文本中是否包含至少 1 个汉字（UTF-16 BMP 范围的中日韩统一表意文字基本区）。
-     *  - 用于判断差异段是否要嵌套 `$t('差异')`（含中文→嵌套；纯英文/数字→直接写字符串字面量）。*/
-    fun hasChinese(text: CharSequence?): Boolean {
+    /** 常见 helper：文本中是否包含至少 1 个目标语言的字符。
+     *  - 用于判断差异段是否要嵌套 `$t('差异')`（含目标语言→嵌套；纯英文/数字→直接写字符串字面量）。
+     *  - 目标语言取决于全局设置（默认仅中文，向后兼容）。*/
+    fun hasChinese(text: CharSequence?): Boolean = containsTargetLanguage(text)
+
+    /** 文本是否包含任一“已启用目标语言”的字符（由全局设置决定，默认仅中文）。 */
+    fun containsTargetLanguage(text: CharSequence?): Boolean {
         if (text == null) return false
-        return HAN_RE.containsMatchIn(text)
+        return I18nSettings.getInstance().activeExtractors().any { it.judge(text) }
     }
 
     fun isJSX(element: PsiElement): Boolean {
@@ -958,44 +960,42 @@ object Util {
     }
 
     // ==========================================================================
-    // 查找项目中的"中文多语言入口文件"（zh-CN / zhCN / zhs 等命名）
+    // 查找项目的"目标语言多语言入口文件"（zh-CN / ja-JP / ko_KR 等命名）
+    // 目标语言取决于全局设置（默认仅中文，向后兼容）。
     // ==========================================================================
-    /** 中文 locale 名候选（按优先级）。 */
-    private val ZH_LOCALE_NAMES = listOf(
-        "zh-CN", "zh_CN", "zhCN", "zhHans", "zh-Hans", "zhs",
-        "zh", "zhcn", "cn", "zh-CHS", "zh-hans-cn", "zh-Hans-CN",
-        "zh-SG", "zh_SG", "zhSG"
-    )
 
-    /** 找中文语言包入口文件的常见基名（不带扩展名）。 */
-    private fun isChineseLocaleBasename(stem: String): Boolean {
+    /** 找目标语言语言包入口文件的常见基名（不带扩展名）。 */
+    private fun isTargetLocaleBasename(stem: String): Boolean {
         val lower = stem.lowercase()
+        val candidates = I18nSettings.getInstance().activeLocaleCandidates()
         // 直接相等
-        if (ZH_LOCALE_NAMES.any { it.equals(lower, ignoreCase = true) }) return true
-        // messages.zh-CN / i18n.zhs / translations.zh_CN 这种
+        if (candidates.any { it.equals(lower, ignoreCase = true) }) return true
+        // messages.zh-CN / i18n.ja / translations.ko_KR 这种
         val dotIdx = lower.lastIndexOf('.')
         if (dotIdx >= 0) {
             val prefix = lower.substring(0, dotIdx)
             val suffix = lower.substring(dotIdx + 1)
             if (TRANSLATION_BASE_PREFIXES.contains(prefix) &&
-                ZH_LOCALE_NAMES.any { it.equals(suffix, ignoreCase = true) }) return true
+                candidates.any { it.equals(suffix, ignoreCase = true) }) return true
         }
-        // 兜底：zh 作为前缀 + 国家码（zhCN/zhHK 等）
-        if (lower.length in 4..7 && lower.startsWith("zh")) {
-            val rest = lower.drop(2)
-            if (rest.all { it.isLetterOrDigit() } &&
-                setOf("hans","hant","cn","tw","hk","sg","mo","my").any { rest.contains(it) })
-                return true
+        // 兜底：<langtag><region>（zhCN / jaJP / koKR 等）
+        for (ex in I18nSettings.getInstance().activeExtractors()) {
+            val tag = ex.langTagPrefix
+            if (lower.length in 4..7 && lower.startsWith(tag)) {
+                val rest = lower.drop(tag.length)
+                if (rest.all { it.isLetterOrDigit() } && ex.regionCodes.any { rest.contains(it) })
+                    return true
+            }
         }
         return false
     }
 
     /**
-     * 尝试定位"中文多语言入口文件"。
+     * 尝试定位"目标语言多语言入口文件"。
      * 优先级：
      *   1. 用户上次选择并持久化的路径（若文件仍存在）
-     *   2. 项目根下常见 i18n 目录中匹配 ZH_LOCALE_NAMES 的文件（.ts/.tsx/.js/.json）
-     *   3. 整个项目（排除 node_modules）按 isTranslationResourceFile + ZH basename 扫描
+     *   2. 项目根下常见 i18n 目录中匹配目标语言 locale 命名的文件（.ts/.tsx/.js/.json）
+     *   3. 整个项目（排除 node_modules）按 isTranslationResourceFile + 目标语言 basename 扫描
      * @return 命中的 VirtualFile 或 null
      */
     fun findChineseLocaleEntryFile(project: Project, contextPsiFile: PsiFile?): VirtualFile? {
@@ -1024,11 +1024,11 @@ object Util {
                 val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
                 if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
                 val nameNoExt = vf.nameWithoutExtension
-                if (isChineseLocaleBasename(nameNoExt)) vf else null
+                if (isTargetLocaleBasename(nameNoExt)) vf else null
             }
             if (hit != null) return hit
         }
-        // 3) 预设目录未命中：统一像 Vue / React 全局导入那样探测 i18n 初始化文件，再根据其配置项查中文入口
+        // 3) 预设目录未命中：统一像 Vue / React 全局导入那样探测 i18n 初始化文件，再根据其配置项查目标语言入口
         findChineseEntryViaI18nConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
         // 4) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
         val excludeDirs = setOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
@@ -1036,14 +1036,23 @@ object Util {
             if (vf.isDirectory || !vf.isValid) return@walkVirtualFile null
             val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
             if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
-            // 目录段命中翻译目录 or 基名像中文 locale
+            // 目录段命中翻译目录 or 基名像目标语言 locale
             val pathLike = isTranslationResourceFile(vf.name, vf.path)
-            val baseLike = isChineseLocaleBasename(vf.nameWithoutExtension)
-            if ((pathLike || baseLike) && (vf.path.lowercase().contains("zh") ||
-                    ZH_LOCALE_NAMES.any { vf.nameWithoutExtension.contains(it, ignoreCase = true) })) {
+            val baseLike = isTargetLocaleBasename(vf.nameWithoutExtension)
+            if ((pathLike || baseLike) && isTargetLocalePathHit(vf)) {
                 vf
             } else null
         }
+    }
+
+    /** 判断文件路径/基名是否命中任一已启用语言的标识（locale 候选 或 语言前缀）。 */
+    private fun isTargetLocalePathHit(vf: VirtualFile): Boolean {
+        val nameNoExt = vf.nameWithoutExtension
+        val lowerPath = vf.path.lowercase()
+        val active = I18nSettings.getInstance().activeExtractors()
+        val candidates = I18nSettings.getInstance().activeLocaleCandidates()
+        if (candidates.any { nameNoExt.contains(it, ignoreCase = true) }) return true
+        return active.any { lowerPath.contains(it.langTagPrefix) }
     }
 
     /**
@@ -1132,11 +1141,12 @@ object Util {
         return resolveLocalImportFile(initFile, importPath)
     }
 
-    /** 从引用列表中选出目标：优先 locale 配置对应的语言，其次 zh 风味 key，最后第一个。 */
+    /** 从引用列表中选出目标：优先 locale 配置对应的语言，其次命中目标语言 locale 命名，再其次语言前缀，最后第一个。 */
     private fun pickChineseRef(refs: List<Pair<String, String>>, localeCode: String?): Pair<String, String>? {
+        val tags = I18nSettings.getInstance().activeExtractors().map { it.langTagPrefix }
         return refs.firstOrNull { it.first == localeCode }
-            ?: refs.firstOrNull { isChineseLocaleBasename(it.first) }
-            ?: refs.firstOrNull { it.first.lowercase().startsWith("zh") }
+            ?: refs.firstOrNull { isTargetLocaleBasename(it.first) }
+            ?: refs.firstOrNull { ref -> tags.any { ref.first.lowercase().startsWith(it) } }
             ?: refs.firstOrNull()
     }
 

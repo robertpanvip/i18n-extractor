@@ -40,6 +40,11 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
                 toolWindowId="Project"
                 isLogByDefault="false"
         />
+        <applicationService serviceImplementation="com.pan.extractor.I18nSettings"/>
+        <applicationConfigurable
+                id="com.pan.extractor.settings"
+                displayName="I18n Extractor"
+                instance="com.pan.extractor.I18nSettingsConfigurable"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->
