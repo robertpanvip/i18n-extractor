@@ -1476,7 +1476,7 @@ class I18nProcessor(
         }
 
         val isJSX = Util.isJSX(first)
-        val key = collectExtractedStrings(pureText, first)
+        val key = collectExtractedStrings(pureText, first) ?: return
 
         recordChange(
             message = pureText,
@@ -1633,7 +1633,6 @@ class I18nProcessor(
         val isDirective = isVueDirective(attr.name);
 
         var newText = originalText;
-        var key: String? = null;
 
         if (!(isDirective && !originalText.startsWith("\"")
                     && !originalText.startsWith("'")
@@ -1641,8 +1640,8 @@ class I18nProcessor(
         ) {
             // 指令的字符串字面量值（如 :title="'中文'"）去掉内层引号后再提取
             val literal = stripSurroundingQuotes(originalText)
-            key = collectExtractedStrings(literal, attrValue);
-            newText = "${tFunctionName}('$key')"
+            val extracted = collectExtractedStrings(literal, attrValue)
+            if (extracted != null) newText = "${tFunctionName}('$extracted')"
         }
 
         if (newText == originalText) return
@@ -2011,7 +2010,7 @@ class I18nProcessor(
             .trim() // 去掉首尾空格
     }
 
-    fun collectExtractedStrings(ele: PsiElement): String {
+    fun collectExtractedStrings(ele: PsiElement): String? {
         val text = when (ele) {
             // JS 字面量：取纯字符串值（去掉引号）
             is JSLiteralExpression -> ele.stringValue ?: ""
@@ -2023,14 +2022,18 @@ class I18nProcessor(
             else -> ele.text ?: ""
         }
         val trimmed = text.trim()
+        // 最小提取长度：过短的文案不提取
+        if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
         val key = generateKey(trimmed, ele)
         extractedStrings.putIfAbsent(key, trimmed)
         return key;
     }
 
     /** 用已合并好的 [pureText] 生成 key 并登记（供跨节点合并的文本段使用）。 */
-    fun collectExtractedStrings(pureText: String, element: PsiElement): String {
+    fun collectExtractedStrings(pureText: String, element: PsiElement): String? {
         val trimmed = pureText.trim()
+        // 最小提取长度：过短的文案不提取
+        if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
         val key = generateKey(trimmed, element)
         extractedStrings.putIfAbsent(key, trimmed)
         return key
@@ -2205,7 +2208,7 @@ class I18nProcessor(
             return
         }
 
-        val key = collectExtractedStrings(ele)
+        val key = collectExtractedStrings(ele) ?: return
 
         // Bug4 修复：外层祖先有 $t(...)，但参数是表达式不是字符串字面量，
         //  内层字符串不能再包一层 $t(...)，否则出现 $t(isPinned ? $t(...) : $t(...))。

@@ -79,10 +79,47 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
     fun setOutputDestination(d: OutputDestination) {
         state.outputDestination = d.name
     }
+
+    /** 最小提取长度：字符串长度小于该值的文案不提取（默认 1，即全部提取，向后兼容）。 */
+    fun minStringLength(): Int = state.minStringLength.coerceAtLeast(1)
+
+    /** 更新最小提取长度。 */
+    fun setMinStringLength(v: Int) {
+        state.minStringLength = v.coerceAtLeast(1)
+    }
+
+    /** 合并建议阈值：公共前后缀合计至少达到该字符数才生成合并建议（默认 2）。 */
+    fun mergeAffixThreshold(): Int = state.mergeAffixThreshold.coerceAtLeast(1)
+
+    /** 更新合并建议阈值。 */
+    fun setMergeAffixThreshold(v: Int) {
+        state.mergeAffixThreshold = v.coerceAtLeast(1)
+    }
+
+    /** 扫描时排除的目录名（默认 node_modules/.git/dist 等构建产物）。 */
+    fun excludeDirs(): Set<String> = state.excludeDirs.orEmpty().toSet().filterTo(mutableSetOf()) { it.isNotBlank() }
+
+    /** 更新排除目录名集合。 */
+    fun setExcludeDirs(v: Collection<String>) {
+        state.excludeDirs = v.filter { it.isNotBlank() }.toMutableSet()
+    }
+
+    /** 用户自定义的翻译资源目录名（追加到内置目录之上）。 */
+    fun customTranslationDirs(): List<String> = state.customTranslationDirs.orEmpty().map { it.trim() }.filter { it.isNotBlank() }
+
+    /** 更新自定义翻译资源目录名。 */
+    fun setCustomTranslationDirs(v: Collection<String>) {
+        state.customTranslationDirs = v.map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
 class I18nSettingsState {
     var languageIds: MutableSet<String> = mutableSetOf("zh")
     var outputDestination: String = OutputDestination.ASK.name
+    var minStringLength: Int = 1
+    var mergeAffixThreshold: Int = 2
+    var excludeDirs: MutableSet<String> =
+        mutableSetOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
+    var customTranslationDirs: MutableList<String> = mutableListOf()
 }

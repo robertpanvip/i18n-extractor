@@ -2682,4 +2682,46 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("TS 字面量场景 Tab2 数字候选不应为空，实际 digit=$digit", digit.isNotEmpty())
         assertTrue("TS 字面量场景 Tab2 前后缀候选不应为空，实际 affix=$affix", affix.isNotEmpty())
     }
+
+    // ============================================================
+    // 最小提取长度：过短的文案不提取
+    // ============================================================
+
+    fun testMinStringLengthFiltersShortText() {
+        val settings = I18nSettings.getInstance()
+        val savedMinLen = settings.minStringLength()
+        val savedLang = settings.languageIds()
+        try {
+            // 目标语言中文 + 最小长度 3
+            settings.setLanguageIds(listOf("zh"))
+            settings.setMinStringLength(3)
+
+            val file = configureFile(
+                "src/MinLen.vue",
+                """
+                <template>
+                    <div>中</div>
+                    <div>你好世界</div>
+                    <div :title="'一'">良好</div>
+                </template>
+                """.trimIndent()
+            )
+            val p = I18nProcessor(project, file)
+            p.collect()
+            p.execute()
+            val result = file.text
+
+            // 单字「中」长度 1 < 3 → 不提取，原样保留（标签体走 mustache）
+            assertTrue("单字「中」长度不足 3 不应提取，got:\n$result", result.contains("<div>中</div>"))
+            // 4 字「你好世界」长度 ≥ 3 → 提取为 $t(`你好世界`)
+            assertTrue("「你好世界」长度 ≥ 3 应提取，got:\n$result", result.contains("\$t(`你好世界`)"))
+            // 指令值单字「一」< 3 → 不提取原样保留
+            assertTrue("指令值单字「一」长度不足 3 不应提取，got:\n$result", result.contains(":title=\"'一'\""))
+            // 指令值「良好」长度 2 < 3 → 也不提取
+            assertTrue("「良好」长度 2 不足 3 不应提取，got:\n$result", result.contains("良好"))
+        } finally {
+            settings.setMinStringLength(savedMinLen)
+            settings.setLanguageIds(savedLang)
+        }
+    }
 }

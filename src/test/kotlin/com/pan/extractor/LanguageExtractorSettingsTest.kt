@@ -20,20 +20,38 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
 
     private lateinit var originalIds: Set<String>
     private lateinit var originalDest: OutputDestination
+    private var originalMinLen: Int = 1
+    private var originalMerge: Int = 2
+    private lateinit var originalExclude: Set<String>
+    private lateinit var originalCustomDirs: List<String>
 
     override fun setUp() {
         super.setUp()
         originalIds = I18nSettings.getInstance().languageIds().toSet()
         originalDest = I18nSettings.getInstance().outputDestination()
+        originalMinLen = I18nSettings.getInstance().minStringLength()
+        originalMerge = I18nSettings.getInstance().mergeAffixThreshold()
+        originalExclude = I18nSettings.getInstance().excludeDirs()
+        originalCustomDirs = I18nSettings.getInstance().customTranslationDirs()
         // 每测从干净默认开始
         I18nSettings.getInstance().setLanguageIds(listOf("zh"))
         I18nSettings.getInstance().setOutputDestination(OutputDestination.ASK)
+        I18nSettings.getInstance().setMinStringLength(1)
+        I18nSettings.getInstance().setMergeAffixThreshold(2)
+        I18nSettings.getInstance().setExcludeDirs(
+            listOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
+        )
+        I18nSettings.getInstance().setCustomTranslationDirs(emptyList())
     }
 
     override fun tearDown() {
         try {
             I18nSettings.getInstance().setLanguageIds(originalIds)
             I18nSettings.getInstance().setOutputDestination(originalDest)
+            I18nSettings.getInstance().setMinStringLength(originalMinLen)
+            I18nSettings.getInstance().setMergeAffixThreshold(originalMerge)
+            I18nSettings.getInstance().setExcludeDirs(originalExclude)
+            I18nSettings.getInstance().setCustomTranslationDirs(originalCustomDirs)
         } finally {
             super.tearDown()
         }
@@ -498,6 +516,62 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue("应命中 src/locales/pt.ts，实际：${found?.path}", found!!.path.endsWith("locales/pt.ts"))
     }
 
+    // ─────────────────────────────────────────
+    // 最小提取长度
+    // ─────────────────────────────────────────
+
+    fun testMinStringLengthDefaultsToOne() {
+        assertEquals("默认最小长度为 1（全部提取）", 1, I18nSettings.getInstance().minStringLength())
+    }
+
+    fun testMinStringLengthRoundTripAndCoerce() {
+        val s = I18nSettings.getInstance()
+        s.setMinStringLength(3)
+        assertEquals(3, s.minStringLength())
+        // 低于 1 的输入被钳制回 1
+        s.setMinStringLength(0)
+        assertEquals("应钳制回 1", 1, s.minStringLength())
+        s.setMinStringLength(-5)
+        assertEquals("应钳制回 1", 1, s.minStringLength())
+    }
+
+    // ─────────────────────────────────────────
+    // 合并建议阈值
+    // ─────────────────────────────────────────
+
+    fun testMergeAffixThresholdRoundTrip() {
+        val s = I18nSettings.getInstance()
+        assertEquals("默认阈值为 2", 2, s.mergeAffixThreshold())
+        s.setMergeAffixThreshold(5)
+        assertEquals(5, s.mergeAffixThreshold())
+        s.setMergeAffixThreshold(0)
+        assertEquals("应钳制回 1", 1, s.mergeAffixThreshold())
+    }
+
+    // ─────────────────────────────────────────
+    // 排除目录
+    // ─────────────────────────────────────────
+
+    fun testExcludeDirsDefaultAndRoundTrip() {
+        val s = I18nSettings.getInstance()
+        assertTrue("默认应包含 node_modules", s.excludeDirs().contains("node_modules"))
+        s.setExcludeDirs(listOf("node_modules", "dist", "  ", ""))
+        assertEquals("空白项应被过滤", setOf("node_modules", "dist"), s.excludeDirs())
+    }
+
+    // ─────────────────────────────────────────
+    // 自定义翻译目录
+    // ─────────────────────────────────────────
+
+    fun testCustomTranslationDirsDefaultAndRoundTrip() {
+        val s = I18nSettings.getInstance()
+        assertTrue("默认无自定义目录", s.customTranslationDirs().isEmpty())
+        s.setCustomTranslationDirs(listOf("assets/lang", "packages/ui-locales"))
+        assertEquals(listOf("assets/lang", "packages/ui-locales"), s.customTranslationDirs())
+        // 空白项去除
+        s.setCustomTranslationDirs(listOf("  ", "a"))
+        assertEquals(listOf("a"), s.customTranslationDirs())
+    }
     // ─────────────────────────────────────────
     // 输出去向设置（剪贴板 / 写入文件 / 每次询问）
     // ─────────────────────────────────────────

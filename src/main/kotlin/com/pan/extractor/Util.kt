@@ -213,8 +213,12 @@ object Util {
         "fy","xh","yi","yo","za","zu","zhs","zht","cmn","yue"
     )
 
-    /** 翻译资源常见目录名（全部小写，按路径片段匹配）。 */
-    private val TRANSLATION_DIRS = setOf("locales","i18n","locale","lang","languages","translations")
+    /** 翻译资源常见目录名（全部小写，按路径片段匹配）；内置 + 用户自定义。 */
+    private val TRANSLATION_DIRS_DEFAULT = setOf("locales","i18n","locale","lang","languages","translations")
+
+    /** 用于路径片段匹配的翻译目录集合（内置目录 + 设置里自定义的目录）。 */
+    private fun translationDirs(): Set<String> =
+        TRANSLATION_DIRS_DEFAULT + I18nSettings.getInstance().customTranslationDirs().map { it.lowercase() }
 
     /** 常见的文件基名前缀（messages.en / i18n.zh-CN 这种）。 */
     private val TRANSLATION_BASE_PREFIXES = setOf("messages","i18n","translation","translations","strings","resources","lang","locale")
@@ -277,7 +281,7 @@ object Util {
         // 1) 路径目录段命中：locales / i18n / locale / lang / translations / ...
         if (filePath != null && filePath.isNotEmpty()) {
             val normalized = filePath.replace('\\', '/').lowercase()
-            for (dir in TRANSLATION_DIRS) {
+            for (dir in translationDirs()) {
                 // 精确匹配目录段，避免把 "mailing/" 之类误判成 "lang"
                 if ("/$normalized/".contains("/$dir/")) return true
             }
@@ -640,7 +644,7 @@ object Util {
         }
 
         // 阶段 2：常见目录未命中，在项目根做 walk（最大深度 4，排除 node_modules）
-        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 if (vfContainsCreateI18n(vf)) vf else null
@@ -738,7 +742,7 @@ object Util {
             }
             if (result != null) return result
         }
-        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
@@ -771,7 +775,7 @@ object Util {
             }
             if (result != null) return result
         }
-        val excludeDirs = setOf("node_modules", ".git", "dist", "build")
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
@@ -894,7 +898,7 @@ object Util {
                 .replace("\\", "/")
 
             // 排除 node_modules 与构建产物目录，避免把依赖源码当成翻译源
-            if (relativePath.split("/").contains("node_modules")) return@forEach
+            if (relativePath.split("/").any { it in I18nSettings.getInstance().excludeDirs() }) return@forEach
 
             // include 为空时视为"全项目扫描"（回退），否则按 glob 模式匹配
             if (regexList.isEmpty() || regexList.any { it.matches(relativePath) }) {
@@ -1016,11 +1020,16 @@ object Util {
         if (root == null || !root.isDirectory) return null
 
         // 2) 常见目录优先精确匹配
-        val commonDirs = listOf(
+        val commonDirs = mutableListOf(
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang",
             "src/languages", "languages", "src/translations", "translations"
         )
+        // 追加用户自定义的翻译目录（如 src/assets/lang、assets/lang）
+        for (custom in I18nSettings.getInstance().customTranslationDirs()) {
+            commonDirs += "src/$custom"
+            commonDirs += custom
+        }
         for (rel in commonDirs) {
             val dir = findRelativeFile(root, rel) ?: continue
             if (!dir.isDirectory) continue
@@ -1036,7 +1045,7 @@ object Util {
         // 3) 预设目录未命中：统一像 Vue / React 全局导入那样探测 i18n 初始化文件，再根据其配置项查目标语言入口
         findChineseEntryViaI18nConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
         // 4) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
-        val excludeDirs = setOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return walkVirtualFile(root, maxDepth = 5, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isDirectory || !vf.isValid) return@walkVirtualFile null
             val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
