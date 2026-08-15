@@ -361,4 +361,70 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertNotNull("启用俄语后应命中 ru 入口", found)
         assertTrue("应命中 src/locales/ru.ts，实际：${found?.path}", found!!.path.endsWith("locales/ru.ts"))
     }
+
+    // ─────────────────────────────────────────
+    // 德语（变音符判定）
+    // ─────────────────────────────────────────
+
+    fun testGermanJudge() {
+        assertTrue(GermanExtractor.judge("Grüße"))
+        assertTrue(GermanExtractor.judge("Schönen Tag noch"))
+        assertTrue(GermanExtractor.judge("Straße"))
+        assertTrue(GermanExtractor.judge("für"))
+        assertFalse(GermanExtractor.judge("Hallo"))      // 纯 ASCII 德语，无变音符 → 与英文重叠，不判德语
+        assertFalse(GermanExtractor.judge("hello world"))// 英文
+        assertFalse(GermanExtractor.judge("你好"))        // 中文
+        assertFalse(GermanExtractor.judge("café"))       // 法语
+    }
+
+    fun testGermanJudgmentFollowsSettings() {
+        I18nSettings.getInstance().setLanguageIds(listOf("de"))
+        for (kind in SiteKind.values()) {
+            assertTrue("德语文本在上下文 $kind 应命中", Util.containsTargetLanguage("Grüße", kind))
+        }
+        assertFalse("禁用中文时中文不应命中", Util.containsTargetLanguage("你好"))
+    }
+
+    fun testGermanEntryFoundWhenGermanEnabled() {
+        I18nSettings.getInstance().setLanguageIds(listOf("de"))
+        createEntry("package.json", "{}")
+        createEntry("src/locales/de.ts", "export default { 'Grüße': 'Grüße' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("启用德语后应命中 de 入口", found)
+        assertTrue("应命中 src/locales/de.ts，实际：${found?.path}", found!!.path.endsWith("locales/de.ts"))
+    }
+
+    // ─────────────────────────────────────────
+    // 西班牙语（专属字符判定）
+    // ─────────────────────────────────────────
+
+    fun testSpanishJudge() {
+        assertTrue(SpanishExtractor.judge("mañana"))
+        assertTrue(SpanishExtractor.judge("¡Hola mundo!"))
+        assertTrue(SpanishExtractor.judge("¿Cómo estás?"))
+        assertTrue(SpanishExtractor.judge("años"))
+        assertFalse(SpanishExtractor.judge("hola"))      // 纯 ASCII 西语，无专属字符 → 与英文重叠，不判西语
+        assertFalse(SpanishExtractor.judge("hello world"))// 英文
+        assertFalse(SpanishExtractor.judge("你好"))        // 中文
+        assertFalse(SpanishExtractor.judge("Straße"))    // 德语（ß 为德语独有，无西语字符）
+    }
+
+    fun testSpanishJudgmentFollowsSettings() {
+        I18nSettings.getInstance().setLanguageIds(listOf("es"))
+        for (kind in SiteKind.values()) {
+            assertTrue("西语文本在上下文 $kind 应命中", Util.containsTargetLanguage("años", kind))
+        }
+        assertFalse("禁用中文时中文不应命中", Util.containsTargetLanguage("你好"))
+    }
+
+    fun testSpanishEntryFoundWhenSpanishEnabled() {
+        I18nSettings.getInstance().setLanguageIds(listOf("es"))
+        createEntry("package.json", "{}")
+        createEntry("src/locales/es.ts", "export default { 'años': 'años' }")
+        val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
+        val found = Util.findChineseLocaleEntryFile(project, context)
+        assertNotNull("启用西语后应命中 es 入口", found)
+        assertTrue("应命中 src/locales/es.ts，实际：${found?.path}", found!!.path.endsWith("locales/es.ts"))
+    }
 }

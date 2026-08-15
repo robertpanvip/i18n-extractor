@@ -165,12 +165,49 @@ object RussianExtractor : LanguageExtractor {
     override val regionCodes: Set<String> = setOf("ru", "ua", "kz", "by")
 }
 
-/** 语言提取器注册表：内置 zh/ja/ko/en/fr/ru。 */
+/**
+ * 德语：拉丁字母 + 德语专属变音（ä ö ü 与 ß）。
+ *
+ * 与英/法同为拉丁字母，无法用整段字符区间与英文完全区分；因此用德语专属变音符做确定性判定
+ * （含变音符 → 德语），纯 ASCII 德语（如 "Hallo"）与英文重叠属已知取舍，与英文/法语方案一致。
+ * 变音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ */
+object GermanExtractor : LanguageExtractor {
+    override val id = "de"
+    override val displayName = "德语"
+    private val RE = Regex("""[äöüßÄÖÜ]""")
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("de", "de-DE", "de_DE", "deDE", "de-AT", "de_AT", "de-CH", "de_CH")
+    override val langTagPrefix = "de"
+    override val regionCodes: Set<String> = setOf("de", "at", "ch", "li", "lu")
+}
+
+/**
+ * 西班牙语：拉丁字母 + 西语专属字符（ñ、带重音的元音、倒问句/叹句）。
+ *
+ * 与英/法/德同为拉丁字母，无法用整段字符区间与英文完全区分；因此用西语专属字符做确定性判定
+ * （含 ñ / 重音元音等 → 西语），纯 ASCII 西语（如 "hola"）与英文重叠属已知取舍，与英文/法语/德语方案一致。
+ * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ */
+object SpanishExtractor : LanguageExtractor {
+    override val id = "es"
+    override val displayName = "西班牙语"
+    private val RE = Regex("""[ñáéíóúüÑÁÉÍÓÚÜ¿¡]""")
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("es", "es-ES", "es_ES", "esES", "es-MX", "es_MX", "es-AR", "es-CL", "es-CO")
+    override val langTagPrefix = "es"
+    override val regionCodes: Set<String> = setOf("es", "mx", "ar", "cl", "co", "pe", "ve", "us")
+}
+
+/** 语言提取器注册表：内置 zh/ja/ko/en/fr/ru/de/es。 */
 object LanguageRegistry {
     val all: List<LanguageExtractor> =
         listOf(
             ChineseExtractor, JapaneseExtractor, KoreanExtractor,
-            EnglishExtractor, FrenchExtractor, RussianExtractor
+            EnglishExtractor, FrenchExtractor, RussianExtractor,
+            GermanExtractor, SpanishExtractor
         )
 
     fun byId(id: String): LanguageExtractor? = all.firstOrNull { it.id == id }
