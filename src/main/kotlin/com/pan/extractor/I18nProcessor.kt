@@ -35,7 +35,7 @@ import kotlin.collections.forEach
 import kotlin.text.replace
 
 class I18nProcessor(
-    private val project: Project,
+    internal val project: Project,
     private var psiFile: PsiElement,
 ) {
     /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。 */
@@ -89,8 +89,14 @@ class I18nProcessor(
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
+    /** 拆分后的「翻译调用 import / i18n 实例注入」辅助类 */
+    internal val injector: I18nImportInjector by lazy { I18nImportInjector(this) }
+
+    /** 「JS 字符串收集 与 $t 表达式生成」辅助类 */
+    internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
+
     /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t */
-    private var tFunctionName: String = "\$t"
+    internal var tFunctionName: String = "\$t"
 
     /**
      * 全局 $t 别名注入标记（用户要求：全部统一用 $t，减少复杂度）。
@@ -176,13 +182,13 @@ class I18nProcessor(
     }
 
 
-    private fun isVueFile(psiFile: PsiFile): Boolean =
+    internal fun isVueFile(psiFile: PsiFile): Boolean =
         I18nPsiTools.isVueFile(psiFile)
 
     fun rm(element: PsiElement): String = I18nPsiTools.rm(element)
 
     /** 统一登记 site + 包装 change，返回新的 change 列表条目 */
-    private fun recordChange(
+    internal fun recordChange(
         message: String,
         replaceRoot: PsiElement,
         anchor: PsiElement,
@@ -724,7 +730,7 @@ class I18nProcessor(
      *     3) 默认导入：默认变量名 == wantedName 或 wantedName == "default"
      */
     private fun hasImportedSpecifier(decl: ES6ImportDeclaration, moduleName: String, wantedName: String): Boolean =
-        I18nPsiTools.hasImportedSpecifier(decl, moduleName, wantedName)
+        injector.hasImportedSpecifier(decl, moduleName, wantedName)
 
     /**
      * 判断 [scope] 范围内是否已经存在"[callee]() 函数调用 + 指定解构"。
@@ -742,115 +748,16 @@ class I18nProcessor(
         callee: String,
         destructureNameFrom: String,
         destructureAlias: String,
-    ): Boolean = I18nPsiTools.scopeHasDestructuredCall(
+    ): Boolean = injector.scopeHasDestructuredCall(
         scope, callee, destructureNameFrom, destructureAlias
     )
 
-    private fun ensureVueI18nImported(psiFile: PsiElement) {
-        val scriptTag = getScriptTag() ?: run {
-            val script = factory.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
-            psiFile.add(script);
-            getScriptTag()
-        } ?: return;
-        // 關鍵：找到 <script> 內部的文本節點（注入宿主通常在這裡）
-        val scriptContent = PsiTreeUtil.findChildOfType(scriptTag, JSEmbeddedContent::class.java)
-        if (scriptContent === null) {
-            return
-        }
-        val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
-
-        // ── 修复问题 4（重复注入）：语义级判定 import 是否存在 ──
-        val importUseI18nExists = importStatements.any {
-            hasImportedSpecifier(it, moduleName = "vue-i18n", wantedName = "useI18n")
-        }
-        val constUseI18nExists = scopeHasDestructuredCall(
-            scriptContent,
-            callee = "useI18n",
-            destructureNameFrom = "t",
-            destructureAlias = "\$t"
-        )
-
-        // 1. 创建 import 语句
-        val importUseI18nNode = createStringExpressionNode("import { useI18n } from 'vue-i18n';", psiFile)
-        // 2. 创建 const 语句
-        val constUseI18nNode = createStringExpressionNode("const { t: \$t } = useI18n();", psiFile)
-
-        if (importStatements.isEmpty()) {
-            // 没有 import，直接加到内容最前面（或合适位置）
-            val addedImport = scriptContent.addAfter(importUseI18nNode, scriptContent.firstChild)
-            val whiteSpace = scriptContent.addAfter(createStringExpressionNode("\n", psiFile), addedImport)
-            if (!constUseI18nExists) scriptContent.addAfter(constUseI18nNode, whiteSpace)
-        } else {
-            if (!importUseI18nExists) {
-                // 有 import → 新 import 加到第一个 import 前面
-                val firstImport = importStatements.first()
-                firstImport.parent.addBefore(importUseI18nNode, firstImport)
-            }
-            if (!constUseI18nExists) {
-                // const 加到最后一个 import 后面
-                val lastImport = importStatements.last()
-                lastImport.parent.addAfter(constUseI18nNode, lastImport)
-            }
-        }
-    }
+    private fun ensureVueI18nImported(psiFile: PsiElement) =
+        injector.ensureVueI18nImported(psiFile)
 
     /** React i18n 导入 + useTranslation hook 注入 */
-    private fun ensureReactI18nImported(psiFile: PsiElement) {
-        val containingFile = psiFile.containingFile ?: return
-
-        // Bug 1 修复：先确认文件中真正存在"能合法调用 useTranslation 的地方"，
-        // 否则直接 return，避免给纯工具/纯常量/纯配置文件注入 useTranslation import。
-        // 合法注入位置：
-        //   1) React 函数组件/类组件的 render 函数体（findReactComponentFunctions）
-        //   2) React 项目中 .ts/.tsx 文件里的自定义 hook（use 开头的顶级函数）
-        val componentFuncs = Util.findReactComponentFunctions(containingFile)
-        val hookFuncs = Util.findHookFunctions(containingFile)
-        val allTargets = (componentFuncs.asSequence() + hookFuncs.asSequence())
-            .distinct()
-            .toList()
-        if (allTargets.isEmpty()) return
-
-        // 1. 确保 react-i18next 导入存在（仅当有合法调用目标时才注入 import）
-        //    注意：必须按"是否已导入 useTranslation"去重，而不是按模块名 react-i18next——
-        //    否则顶部已有 `import { getI18n } from 'react-i18next'` 时会把 useTranslation
-        //    import 吞掉，导致组件里用了 useTranslation 却没导入（运行时报错）。
-        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("useTranslation") }) {
-            val importText = "import { useTranslation } from 'react-i18next';\n"
-            val importStmt = createJSStatementFromText(importText, containingFile)
-            if (imports.isNotEmpty()) {
-                val firstImport = imports.first()
-                firstImport.parent.addBefore(importStmt, firstImport)
-            } else {
-                // 没有 import 时，加到文件最开头（第一个有效语句之前）
-                val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                if (firstStatement != null) {
-                    containingFile.addBefore(importStmt, firstStatement)
-                } else {
-                    containingFile.add(importStmt)
-                }
-            }
-        }
-
-        // 2. 逐个注入（从后往前插入，避免 offset 偏移）
-        // 使用 PSI 操作创建语句并插入，全部使用纯 PSI 操作避免 Document locked 异常
-        for (func in allTargets.asReversed()) {
-            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
-            // 检查是否已存在 useTranslation 调用
-            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
-            if (existingVars.none { it.text.contains("useTranslation") }) {
-                val hookStmt = createJSStatementFromText(
-                    "\n    const { t: \$t } = useTranslation();",
-                    func
-                )
-                // 插入到 body 的 '{' 之后（即第一个 LeafElement 之后）
-                val openingBrace = body.firstChild
-                if (openingBrace != null) {
-                    body.addAfter(hookStmt, openingBrace)
-                }
-            }
-        }
-    }
+    private fun ensureReactI18nImported(psiFile: PsiElement) =
+        injector.ensureReactI18nImported(psiFile)
 
     /**
      * Vue 项目纯 .ts 文件中 use 开头自定义 hook 的 useI18n 注入。
@@ -863,49 +770,8 @@ class I18nProcessor(
      * 1. 缺少 vue-i18n 导入时，在文件顶部注入 `import { useI18n } from 'vue-i18n'`
      * 2. 给每个 use 开头的顶级 hook 函数体首行注入 `const { t: $t } = useI18n();`
      */
-    private fun ensureVueHookI18nImported(psiFile: PsiElement) {
-        val containingFile = psiFile.containingFile ?: return
-
-        // 0. 先找到所有 use 开头的 hook 函数，没有则直接返回
-        //    （避免普通 TS 文件被注入 vue-i18n import）
-        val hookFuncs = Util.findHookFunctions(containingFile)
-        if (hookFuncs.isEmpty()) return
-
-        // 1. 确保 vue-i18n 导入存在
-        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("vue-i18n") }) {
-            val importText = "import { useI18n } from 'vue-i18n';\n"
-            val importStmt = createJSStatementFromText(importText, containingFile)
-            if (imports.isNotEmpty()) {
-                val firstImport = imports.first()
-                firstImport.parent.addBefore(importStmt, firstImport)
-            } else {
-                val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                if (firstStatement != null) {
-                    containingFile.addBefore(importStmt, firstStatement)
-                } else {
-                    containingFile.add(importStmt)
-                }
-            }
-        }
-
-        // 3. 逐个注入（从后往前插入，避免 offset 偏移）
-        for (func in hookFuncs.asReversed()) {
-            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
-            // 检查是否已存在 useI18n 调用
-            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
-            if (existingVars.none { it.text.contains("useI18n") }) {
-                val hookStmt = createJSStatementFromText(
-                    "\n    const { t: \$t } = useI18n();",
-                    func
-                )
-                val openingBrace = body.firstChild
-                if (openingBrace != null) {
-                    body.addAfter(hookStmt, openingBrace)
-                }
-            }
-        }
-    }
+    private fun ensureVueHookI18nImported(psiFile: PsiElement) =
+        injector.ensureVueHookI18nImported(psiFile)
 
     /**
      * 【Vue TSX 组件的 useI18n 注入】（对应 ensureVueHookI18nImported 的"组件版"）
@@ -924,93 +790,8 @@ class I18nProcessor(
      *
      * 注意：和 ensureVueHookI18nImported 对称——如果文件里找不到任何组件函数，直接 return。
      */
-    private fun ensureVueComponentI18nInjected(psiFile: PsiElement) {
-        val containingFile = psiFile.containingFile ?: return
-        val vueComponents = Util.findVueComponentFunctions(containingFile)
-        if (vueComponents.isEmpty()) return
-
-        // —— 阶段 1：先确认要注入 const 解构的"函数体列表"
-        val targetBodies = mutableListOf<JSBlockStatement>()
-
-        for (cand in vueComponents) {
-            when {
-                // 类型 1：cand 就是一个函数式组件（defineComponent 场景 2 返回的 JSFunction）
-                cand is JSFunction -> {
-                    val body = PsiTreeUtil.findChildOfType(cand, JSBlockStatement::class.java)
-                    if (body != null) targetBodies.add(body)
-                }
-                // 类型 2：cand 是 defineComponent({ setup(){...} }) 的调用（JSCallExpression）
-                cand is JSCallExpression -> {
-                    // 在 cand 的整个子树里找 setup: 属性
-                    // （defineComponent 的第一个参数就是 { setup: ... } 对象字面量）
-                    // 直接用 findChildrenOfType(JSProperty) 搜索，避免 SDK 版本差异
-                    // （arguments 类型在不同 SDK 版本不一致，但属性一定是 JSProperty 的后代）。
-                    val setupProp = PsiTreeUtil.findChildrenOfType(cand, JSProperty::class.java)
-                        .firstOrNull { it.name == "setup" } ?: continue
-                    // setup 可能是三种形态，且不同 IntelliJ 版本解析结构不一致：
-                    //   · 简写方法 setup() {}        → 直接在 setupProp 下展开 PARAMETER_LIST + JSBlockStatement
-                    //     （JSFunction 也能 find 到，但其下的 block 可能是空 → 需要在 setupProp 直接找）
-                    //   · setup: function(){}        → JSFunction + block
-                    //   · setup: () => {}            → JSFunction(箭头类型，SDK 内 JSFunction 可识别) + block
-                    // 兼容所有结构：**先在 setupFunc（JSFunction）内找 block，找不到就退到 setupProp 内找**
-                    val setupFunc = PsiTreeUtil.findChildOfType(setupProp, JSFunction::class.java)
-                    // ── 修复 Bug3：setup() 里用 useRequest(async () => { ... }) 时，
-                    //    findChildOfType 深度遍历会返回 useRequest 回调内部的箭头函数字符串块，
-                    //    导致解构被错误注入到 useRequest 回调体首行（而非 setup 顶层）。
-                    //    正确做法：
-                    //      1) 优先取 setupFunc 的「直接子节点」 JSBlockStatement（不是后代）；
-                    //      2) 否则从 setupProp 的「第一层直接后代 JSBlockStatement」拿：
-                    //         即 从 setupProp.subtree 中第一个 JSBlockStatement，它的 parent
-                    //         要么就是 setupFunc（JSFunction），要么就是 setup 属性本身
-                    //         （如对象字面量简写属性 setup(){ ... } 的 block 直接后代）。
-                    fun findDirectBlockIn(ancestor: PsiElement): JSBlockStatement? {
-                        for (child in ancestor.children) {
-                            if (child is JSBlockStatement) return child
-                            val found = findDirectBlockIn(child)
-                            if (found != null) return found
-                        }
-                        return null
-                    }
-                    val body: JSBlockStatement =
-                        ((if (setupFunc != null) findDirectBlockIn(setupFunc) else null)
-                            ?: findDirectBlockIn(setupProp))
-                            ?: continue
-                    targetBodies.add(body)
-                }
-            }
-        }
-        // 没找到任何组件函数体 → 不注入 import（避免无意义的 vue-i18n 注入）
-        if (targetBodies.isEmpty()) return
-
-        // —— 阶段 2：保证 vue-i18n import 存在（复用 ensureVueHookI18nImported 的同一段逻辑）
-        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("vue-i18n") }) {
-            val importText = "import { useI18n } from 'vue-i18n';\n"
-            val importStmt = createJSStatementFromText(importText, containingFile)
-            if (imports.isNotEmpty()) {
-                imports.first().parent.addBefore(importStmt, imports.first())
-            } else {
-                val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                if (firstStatement != null) {
-                    containingFile.addBefore(importStmt, firstStatement)
-                } else {
-                    containingFile.add(importStmt)
-                }
-            }
-        }
-
-        // —— 阶段 3：从后往前，在每个组件函数体首行插 `const { t: $t } = useI18n();`（去重）
-        for (body in targetBodies.asReversed()) {
-            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
-            if (existingVars.any { it.text.contains("useI18n") }) continue
-            val hookStmt = createJSStatementFromText(
-                "\n    const { t: \$t } = useI18n();",
-                body
-            )
-            val openingBrace = body.firstChild ?: continue
-            body.addAfter(hookStmt, openingBrace)
-        }
-    }
+    private fun ensureVueComponentI18nInjected(psiFile: PsiElement) =
+        injector.ensureVueComponentI18nInjected(psiFile)
 
     /**
      * 当文件使用 i18n.global.t / i18n.t / getI18n().t 但缺少 i18n 实例导入时，注入默认导入。
@@ -1047,240 +828,9 @@ class I18nProcessor(
         isVue: Boolean,
         injectGlobalDollarT: Boolean = false,
         injectReactGlobalDollarT: Boolean = false
-    ) {
-        // ── 局部 helper：先声明，后面才能用 ─────────────────────────────
-        // Vue 版：检查是否已经存在 `const $t = i18n.global.t`（宽松空格/分号容忍）
-        fun hasVueGlobalDollarTAliased(root: PsiElement): Boolean {
-            val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
-            val reSimple = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
-            return vars.any {
-                re.containsMatchIn(it.text.replace("\\s+", "")) ||
-                    reSimple.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t ->
-                        t.contains("const\$t=i18n.global.t")
-                    }
-            }
-        }
-        // React 版：检查是否已经存在 `const $t = getI18n().t`
-        fun hasReactGlobalDollarTAliased(root: PsiElement): Boolean {
-            val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val reSimple = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
-            return vars.any {
-                reSimple.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t ->
-                        t.contains("const\$t=getI18n().t")
-                    }
-            }
-        }
-        // React 版：检查是否已经存在 `const i18n = getI18n()` 别名
-        // （i18n.t 语义 + locale 不可用时，用该别名保持 i18n 标识符可用）
-        fun hasReactI18nGlobalAliased(root: PsiElement): Boolean {
-            val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val re = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
-            return vars.any {
-                re.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t -> t.contains("consti18n=getI18n()") }
-            }
-        }
-        // React 版：检查是否已存在 getI18n 的 const 别名（$t 或 i18n 均可）
-        // → 判定"文件已经在用 getI18n"，避免切 locale 造成别名错位。
-        fun hasReactGetI18nAlias(root: PsiElement): Boolean =
-            hasReactGlobalDollarTAliased(root) || hasReactI18nGlobalAliased(root)
-        // ───────────────────────────────────────────────────────────────
-
-        val i18nAlreadyImported = hasI18nInstanceImported(psiFile)
-
-        // React：统一"locale 优先、getI18n 回退"。
-        //  - reactLocaleImport：项目 locale 初始化文件导出了 i18n → 用它的导入语句；
-        //  - 否则回退 `import { getI18n } from 'react-i18next'`（不再硬编码 `import i18n from 'i18next'`）；
-        //  - 若文件已经用 getI18n（import 或 const 别名），保持 getI18n 不切 locale，避免别名错位。
-        val alreadyUsesGetI18n = !isVue && (hasReactGetI18nImported(psiFile) || hasReactGetI18nAlias(psiFile))
-        val reactLocaleImport =
-            if (isVue || alreadyUsesGetI18n) null
-            else buildReactI18nInstanceImport(psiFile.containingFile ?: psiFile)
-
-        // React $t 模式（injectReactGlobalDollarT=true，纯工具 TS 无组件无 Hook）：
-        //  - locale 可用：$t 指向 locale 导入的 i18n → 已有任意 i18n 实例导入即视为满足；
-        //  - locale 不可用：$t = getI18n().t → **必须严格存在 getI18n 命名导入**才算满足。
-        //    老 `import i18n from 'i18next'` 顶不上——否则又出现用户报告过的问题 2：
-        //    只追加 const $t = getI18n().t、却没补 import { getI18n }，运行时报 getI18n is not defined。
-        val reactDollarTImportSatisfied =
-            if (reactLocaleImport != null) i18nAlreadyImported else hasReactGetI18nImported(psiFile)
-
-        val requiredImportAlreadyPresent = when {
-            isVue -> i18nAlreadyImported
-            injectReactGlobalDollarT -> reactDollarTImportSatisfied
-            // i18n.t 语义：只要已有任意指向 i18n 实例的导入（locale / ./i18n / i18next / getI18n）即满足
-            else -> i18nAlreadyImported
-        }
-
-        // $t 全局别名是否已经存在：对应各自 helper 才叫存在
-        val dollarTAliasAlreadyPresent = when {
-            isVue && injectGlobalDollarT -> hasVueGlobalDollarTAliased(psiFile)
-            !isVue && injectReactGlobalDollarT -> hasReactGlobalDollarTAliased(psiFile)
-            else -> true // 不需要 $t 别名 → 当然算"已存在"
-        }
-        // React i18n.t 语义（injectReactGlobalDollarT=false）且 locale 不可用、又缺 import 时，
-        // 回退 getI18n 需要 `const i18n = getI18n();` 保持 i18n 标识符可用。
-        val reactI18nAliasAlreadyPresent = !isVue && hasReactI18nGlobalAliased(psiFile)
-        val reactNeedsI18nAlias = !isVue && !injectReactGlobalDollarT &&
-            reactLocaleImport == null && !requiredImportAlreadyPresent
-
-        // 提前 return：(所需的 import 已存在) 且 (不需要追加别名 OR 别名也已经追加过)
-        val stillNeedConstAlias = (isVue && injectGlobalDollarT) ||
-            (!isVue && injectReactGlobalDollarT) ||
-            reactNeedsI18nAlias
-        val aliasAlreadyPresent = if (reactNeedsI18nAlias) reactI18nAliasAlreadyPresent else dollarTAliasAlreadyPresent
-        if (requiredImportAlreadyPresent && !(stillNeedConstAlias && !aliasAlreadyPresent)) {
-            return
-        }
-
-        // —— 计算 import 文本 & const 别名文本 ——
-        val importText: String? = when {
-            requiredImportAlreadyPresent -> null
-            isVue -> buildVueI18nInstanceImport(psiFile.containingFile ?: psiFile)
-            reactLocaleImport != null -> reactLocaleImport
-            else -> "import { getI18n } from 'react-i18next';\n"
-        }
-        val dollarTText: String? = when {
-            isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
-            // React $t 别名：locale → i18n.t；回退 → getI18n().t
-            !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
-                if (reactLocaleImport != null) "const \$t = i18n.t;\n" else "const \$t = getI18n().t;\n"
-            // React i18n.t 语义 + 回退 getI18n：注入 const i18n = getI18n() 保持 i18n 标识符可用
-            reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
-            else -> null
-        }
-
-        if (isVue) {
-            // 分两种情况：
-            // A) .vue SFC：需要注入到文件内部的 <script> 内（getScriptTag() 能找到）
-            // B) 纯 TS/JS 文件（用户新场景：needInjectGlobalDollarT=true 的典型宿主）：
-            //    就跟 React 一样直接写到 PsiFile 顶部
-            val sfcScript = getScriptTag()
-            if (sfcScript != null) {
-                val scriptContent = PsiTreeUtil.findChildOfType(sfcScript, JSEmbeddedContent::class.java)
-                    ?: return
-                val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
-                val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(scriptContent)
-
-                // 1) Import 注入（如果需要）
-                if (importText != null) {
-                    val importStmt = createStringExpressionNode(importText, scriptContent)
-                    if (importStatements.isNotEmpty()) {
-                        val firstImport = importStatements.first()
-                        firstImport.parent.addBefore(importStmt, firstImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(scriptContent)
-                        if (firstStatement != null) {
-                            scriptContent.addBefore(importStmt, firstStatement)
-                        } else {
-                            scriptContent.add(importStmt)
-                        }
-                    }
-                }
-                // 2) $t 全局别名注入（如果需要且没有）
-                if (injectGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) {
-                    val stmt = createStringExpressionNode(dollarTText, scriptContent)
-                    val lastImport = importStatements.lastOrNull()
-                    if (lastImport != null) {
-                        lastImport.parent.addAfter(stmt, lastImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(scriptContent)
-                        if (firstStatement != null) {
-                            scriptContent.addBefore(stmt, firstStatement)
-                        } else {
-                            scriptContent.add(stmt)
-                        }
-                    }
-                }
-            } else {
-                // —— Case B: 纯脚本文件，直接写到 PsiFile 顶部（React 相同的位置注入逻辑，
-                //            但 $t 别名用字符串 LeafPSI，避免 createJSStatementFromText
-                //            在缺少 JS language 上下文时失败）
-                val containingFile = psiFile.containingFile ?: return
-                val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-                val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(containingFile)
-
-                // 1) Import 注入（如果需要）
-                if (importText != null) {
-                    val importStmt = createJSStatementFromText(importText, containingFile)
-                    if (imports.isNotEmpty()) {
-                        val firstImport = imports.first()
-                        firstImport.parent.addBefore(importStmt, firstImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                        if (firstStatement != null) {
-                            containingFile.addBefore(importStmt, firstStatement)
-                        } else {
-                            containingFile.add(importStmt)
-                        }
-                    }
-                }
-                // 2) $t 全局别名：位置 = import 语句（含刚注入的）之后的首行；若仍无 import
-                //    就放在文件首部。为了去重，先在 ES6ImportDeclaration 的 PSI 树上操作。
-                if (injectGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) {
-                    val stmt = createStringExpressionNode(dollarTText, containingFile)
-                    val latestImports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-                    if (latestImports.isNotEmpty()) {
-                        val lastImport = latestImports.last()
-                        lastImport.parent.addAfter(stmt, lastImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                        if (firstStatement != null) {
-                            containingFile.addBefore(stmt, firstStatement)
-                        } else {
-                            containingFile.add(stmt)
-                        }
-                    }
-                }
-            }
-        } else {
-            // —— React: 注入到文件顶部
-            // 旧模式：只有 import i18n from 'i18next'（dollarTText=null，因为 tFunctionName 是 i18n.t）
-            // 新模式：import { getI18n } from 'react-i18next' + const $t = getI18n().t;
-            val containingFile = psiFile.containingFile ?: return
-            val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-            val dollarTAlreadyAliased = hasReactGlobalDollarTAliased(containingFile)
-
-            // 1) Import 注入（如果需要）
-            if (importText != null) {
-                val importStmt = createJSStatementFromText(importText, containingFile)
-                if (imports.isNotEmpty()) {
-                    val firstImport = imports.first()
-                    firstImport.parent.addBefore(importStmt, firstImport)
-                } else {
-                    val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                    if (firstStatement != null) {
-                        containingFile.addBefore(importStmt, firstStatement)
-                    } else {
-                        containingFile.add(importStmt)
-                    }
-                }
-            }
-            // 2) React 别名注入：$t 别名（injectReactGlobalDollarT）或 i18n 别名
-            //    （reactNeedsI18nAlias：i18n.t 语义 + locale 不可用 + 无导入 → const i18n = getI18n()）
-            val needReactConstAlias =
-                (injectReactGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) ||
-                    (reactNeedsI18nAlias && dollarTText != null && !reactI18nAliasAlreadyPresent)
-            if (needReactConstAlias) {
-                val stmt = createStringExpressionNode(dollarTText, containingFile)
-                val latestImports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-                if (latestImports.isNotEmpty()) {
-                    val lastImport = latestImports.last()
-                    lastImport.parent.addAfter(stmt, lastImport)
-                } else {
-                    val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                    if (firstStatement != null) {
-                        containingFile.addBefore(stmt, firstStatement)
-                    } else {
-                        containingFile.add(stmt)
-                    }
-                }
-            }
-        }
-    }
+    ) = injector.ensureI18nInstanceImported(
+        psiFile, isVue, injectGlobalDollarT, injectReactGlobalDollarT
+    )
 
     /**
      * 为 Vue 全局 i18n 实例构造 import 语句。
@@ -1291,19 +841,8 @@ class I18nProcessor(
      * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
      * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
      */
-    private fun buildVueI18nInstanceImport(psiFile: PsiElement): String {
-        val containingFile = psiFile.containingFile ?: return FALLBACK_VUE_I18N_IMPORT
-        val i18nVFile = Util.findVueI18nInstanceFile(containingFile)
-            ?: return FALLBACK_VUE_I18N_IMPORT
-        val importPath = Util.resolveVueI18nImportPath(containingFile, i18nVFile)
-            ?: return FALLBACK_VUE_I18N_IMPORT
-        val isDefault = Util.isVueI18nDefaultExport(i18nVFile)
-        return if (isDefault) {
-            "import i18n from '$importPath';\n"
-        } else {
-            "import { i18n } from '$importPath';\n"
-        }
-    }
+    private fun buildVueI18nInstanceImport(psiFile: PsiElement): String =
+        injector.buildVueI18nInstanceImport(psiFile)
 
     /**
      * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
@@ -1315,21 +854,12 @@ class I18nProcessor(
      *
      * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
      */
-    private fun buildReactI18nInstanceImport(psiFile: PsiElement): String? {
-        val containingFile = psiFile.containingFile ?: return null
-        val projectRoot = Util.findProjectRoot(containingFile) ?: return null
-        val initFile = Util.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
-        val importPath = Util.resolveVueI18nImportPath(containingFile, initFile) ?: return null
-        return if (Util.isVueI18nDefaultExport(initFile)) {
-            "import i18n from '$importPath';\n"
-        } else {
-            "import { i18n } from '$importPath';\n"
-        }
-    }
+    private fun buildReactI18nInstanceImport(psiFile: PsiElement): String? =
+        injector.buildReactI18nInstanceImport(psiFile)
 
     companion object {
         /** 找不到 createI18n 文件时的回退：直接从 vue-i18n 包导入命名导出 i18n */
-        private const val FALLBACK_VUE_I18N_IMPORT = "import { i18n } from 'vue-i18n';\n"
+        internal const val FALLBACK_VUE_I18N_IMPORT = "import { i18n } from 'vue-i18n';\n"
     }
 
     /**
@@ -1344,18 +874,8 @@ class I18nProcessor(
      * "已有全局 i18n 能力"，因为 getI18n() 就是 react-i18next 返回 i18next i18n 实例的
      * 官方 API，不应该重复再注入 `import i18n from 'i18next'`。
      */
-    private fun hasI18nInstanceImported(root: PsiElement): Boolean {
-        if (hasReactGetI18nImported(root)) return true
-        val imports = PsiTreeUtil.findChildrenOfType(root, ES6ImportDeclaration::class.java)
-        val namedImport = Regex("""import\s*\{[^}]*\bi18n\b[^}]*\}""")
-        val defaultImport = Regex("""import\s+i18n\s+(?:,|from)""")
-        val namespaceImport = Regex("""import\s+\*\s+as\s+i18n\s+from""")
-        return imports.any { imp ->
-            namedImport.containsMatchIn(imp.text) ||
-                defaultImport.containsMatchIn(imp.text) ||
-                namespaceImport.containsMatchIn(imp.text)
-        }
-    }
+    private fun hasI18nInstanceImported(root: PsiElement): Boolean =
+        injector.hasI18nInstanceImported(root)
 
     /**
      * 检查文件是否已导入 react-i18next 的 getI18n（React 新模板）。
@@ -1365,11 +885,7 @@ class I18nProcessor(
      *   - 路径中含 `react-i18next`（容忍引号/反引号差异）
      */
     private fun hasReactGetI18nImported(root: PsiElement): Boolean =
-        I18nPsiTools.hasReactGetI18nImported(root)
-
-    /** 找到第一个非空白符、非注释的子元素 */
-    private fun findFirstNonWhitespaceChild(element: PsiElement): PsiElement? =
-        I18nPsiTools.findFirstNonWhitespaceChild(element)
+        injector.hasReactGetI18nImported(root)
 
 
     fun getCharactersText(textNode: XmlElement): List<XmlToken> =
@@ -1518,7 +1034,7 @@ class I18nProcessor(
         }
     }
 
-    private val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
+    internal val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
     /**
      * Vue-i18n 不支持数字占位符 `$t('默认模型配置{0}子', { '0': "123" })` 这种
@@ -1527,119 +1043,17 @@ class I18nProcessor(
      * 前缀（默认 `N`）可在设置面板配置，但必须是非空变量名。
      * React i18next 的 `{{0}}` + `{ "0": val }` 原生支持，保持不变。
      */
-    private fun vuePlaceholderKey(rawIndex: Int): String = "${I18nSettings.getInstance().vuePlaceholderPrefix()}$rawIndex"
+    private fun vuePlaceholderKey(rawIndex: Int): String = jsCollector.vuePlaceholderKey(rawIndex)
 
     fun collectJSStringTemplate(
         raw: String,
         changes: MutableList<CollectedChange>,
         ele: PsiElement,
         creator: (String) -> String
-    ) {
-        // 模板字符串形式的索引键（例：P[`中文键${suffix}`]）→ 也不翻译
-        if (isInIndexKeyPosition(ele)) return
-        // 步骤1：提取模板字符串纯内容（去掉首尾反引号）
-        val content = raw.substring(1, raw.length - 1)
-        val params = LinkedHashMap<String, String>()
-        var index = 0
+    ) = jsCollector.collectJSStringTemplate(raw, changes, ele, creator)
 
-        // 步骤2：替换所有${任意内容}为占位符，并收集${}内的原始内容
-        // 三分枝占位符策略（以 containingFile + package.json 依赖双判定）：
-        //   Vue    → 资源 {N0} 单括号命名插值，参数对象 { N0: xxx }（标识符 key，避开 vue-i18n 不识别的数字字符串 key）
-        //   React  → 资源 {{0}} 双括号索引插值，参数对象 { "0": xxx }（i18next 原生支持，保持不变）
-        //   Generic（.ts 纯工具、package.json 无 React/Vue 依赖等）→ 兼容旧行为：资源 {0}、参数 { "0": xxx }
-        val containingFile = ele.containingFile
-        val isVue = (containingFile != null && isVueFile(containingFile)) || Util.isVue(ele)
-        val isReact = !isVue && Util.isReact(ele)
-        val message = templateVarRegex.replace(content) { match ->
-            val innerContent = match.groupValues[1].trim()
-            // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
-            val pureString = extractPureStringContent(innerContent)
-            if (pureString != null) {
-                return@replace pureString
-            }
-            val rawIndex = index++
-            val (key, placeholder) = when {
-                isReact -> {
-                    val k = rawIndex.toString()
-                    k to "{{$k}}"
-                }
-                isVue -> {
-                    val k = vuePlaceholderKey(rawIndex)
-                    k to "{$k}"
-                }
-                else -> {
-                    val k = rawIndex.toString()
-                    k to "{$k}"
-                }
-            }
-            params[key] = innerContent
-            placeholder
-        }
-
-
-        // 步骤4：检查 message 是否包含中文，不含中文则跳过
-        if (!hasChinese(message, SiteKind.JS_TEMPLATE)) {
-            return
-        }
-
-        // 步骤5：保存提取的message（按trim后的value去重）
-        val key = generateKey(message, ele)
-        extractedStrings.putIfAbsent(key, message)
-
-        // 步骤5：预生成 paramsObject
-        // - Vue ：标识符 key，无引号（因为 key 形如 N0/N1）
-        // - React / Generic ：字符串 key，加引号（因为 key 形如 "0"/"1"）
-        val paramKeyNeedsQuote = !isVue
-        val paramsObject = params.entries.joinToString(
-            prefix = "{ ",
-            postfix = " }"
-        ) { (k, v) ->
-            val paramExpr = if (isJSTemplateLiteral(v)) {
-                buildNestedTExprFromText(v, ele)
-            } else {
-                v
-            }
-            if (paramKeyNeedsQuote) "\"$k\": $paramExpr" else "$k: $paramExpr"
-        }
-
-        // 步骤6：添加替换逻辑（包装为 CollectedChange，允许后续因子化阻止旧替换）
-        recordChange(
-            message = message,
-            replaceRoot = ele,
-            anchor = ele,
-            changes = changes
-        ) {
-            val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
-            val text = creator(newExprText)
-            val newElement = createStringExpressionNode(text, ele)
-            ele.replace(newElement)
-        }
-    }
-
-    fun buildTFunctionExpr(message: String, paramsObject: String): String {
-        // 步骤1：处理 message（trim 并转义特殊字符）
-        val trimmedMsg = message.trim()
-
-        // 步骤2：转义特殊字符（避免引号闭合、语法错误）
-        val escapedMsg = if (trimmedMsg.contains("\n")) {
-            // 模板字符串：转义反引号
-            trimmedMsg.replace("`", "\\`")
-        } else {
-            // 单引号字符串：转义单引号
-            trimmedMsg.replace("'", "\\'")
-        }
-
-        // 步骤3：判断是否包含换行符，选择引号类型
-        val quote = if (trimmedMsg.contains("\n")) "`" else "'"
-
-        // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
-        val fn = tFunctionName
-        return if (paramsObject.replace(" ", "") == "{}") {
-            "$fn($quote$escapedMsg$quote)"
-        } else {
-            "$fn($quote$escapedMsg$quote, $paramsObject)"
-        }
-    }
+    fun buildTFunctionExpr(message: String, paramsObject: String): String =
+        jsCollector.buildTFunctionExpr(message, paramsObject)
 
     /**
      * 纯文本构建 t() 调用，不依赖当前 processor 已探测到的 tFunctionName 注入上下文，
@@ -1652,7 +1066,7 @@ class I18nProcessor(
         isVue: Boolean,
         isReact: Boolean,
         skeletonKeyOverride: String? = null,
-    ): String = I18nPsiTools.buildTExprForRawText(
+    ): String = jsCollector.buildTExprForRawText(
         message, paramsObject, isVue, isReact, skeletonKeyOverride
     )
 
@@ -1661,71 +1075,22 @@ class I18nProcessor(
      * - Vue：资源文件占位 `{N0}`，调用侧 `{ N0: val }` 无引号键
      * - React：资源文件占位 `{{0}}`，调用侧 `{ "0": val }` 保持原样
      */
-    fun buildNestedTExprFromText(raw: String, ele: PsiElement): String {
-        val content = raw.substring(1, raw.length - 1)
-        val params = LinkedHashMap<String, String>()
-        var index = 0
-        val containingFile = ele.containingFile
-        val isVue = (containingFile != null && isVueFile(containingFile)) || Util.isVue(ele)
-        val isReact = !isVue && Util.isReact(ele)
-
-        val message = templateVarRegex.replace(content) { match ->
-            val innerContent = match.groupValues[1].trim()
-            val pureString = extractPureStringContent(innerContent)
-            if (pureString != null) return@replace pureString
-            val rawIndex = index++
-            val (key, placeholder) = when {
-                isReact -> {
-                    val k = rawIndex.toString()
-                    k to "{{$k}}"
-                }
-                isVue -> {
-                    val k = vuePlaceholderKey(rawIndex)
-                    k to "{$k}"
-                }
-                else -> {
-                    val k = rawIndex.toString()
-                    k to "{$k}"
-                }
-            }
-            params[key] = innerContent
-            placeholder
-        }
-
-        val key = generateKey(message, ele)
-        extractedStrings.putIfAbsent(key, message)
-
-        // 参数对象：Vue 用标识符 key（无引号）；React/Generic 用字符串 key（加引号）
-        val paramKeyNeedsQuote = !isVue
-        val paramsObject = params.entries.joinToString(
-            prefix = "{ ",
-            postfix = " }"
-        ) { (k, v) ->
-            if (paramKeyNeedsQuote) "\"$k\": $v" else "$k: $v"
-        }
-
-        return buildTFunctionExpr(message.trim(), paramsObject)
-    }
+    fun buildNestedTExprFromText(raw: String, ele: PsiElement): String =
+        jsCollector.buildNestedTExprFromText(raw, ele)
 
     fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
-        I18nPsiTools.createStringExpressionNode(text, context)
+        jsCollector.createStringExpressionNode(text, context)
 
     /**
      * 从文本创建 JS 语句（使用 PsiFileFactory 构造完整 PSI 语句节点）。
      * 相比直接操作 AST 节点，这种方式创建的语句结构完整，
      * 不会导致 Document is locked 异常。
      */
-    private fun createJSStatementFromText(text: String, context: PsiElement): PsiElement =
-        I18nPsiTools.createJSStatementFromText(text, context)
+    internal fun createJSStatementFromText(text: String, context: PsiElement): PsiElement =
+        jsCollector.createJSStatementFromText(text, context)
 
-    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<CollectedChange>) {
-        val raw = stringExpr.text
-        if (raw.isEmpty()) return
-        if (isTransformedCalled(stringExpr)) {
-            return
-        }
-        collectJSStringTemplate(raw, changes, stringExpr) { value -> value }
-    }
+    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<CollectedChange>) =
+        jsCollector.collectJSStringTemplateFromExpression(stringExpr, changes)
 
     /**
      * 检查字符串字面量是否已经处于某一层 i18n 翻译调用的作用域内。
@@ -1749,60 +1114,32 @@ class I18nProcessor(
      * 仅对裸名 t/tc 生效；$t/$tc（插件统一的全局别名）与 i18n.t/tc 链式调用不受影响。
      */
     private fun isLocalFunctionNamedTCall(call: JSCallExpression): Boolean =
-        I18nPsiTools.isLocalFunctionNamedTCall(call)
+        jsCollector.isLocalFunctionNamedTCall(call)
 
     fun detectTSemantic(stringExpr: JSLiteralExpression): TSem =
-        I18nPsiTools.detectTSemantic(stringExpr)
+        jsCollector.detectTSemantic(stringExpr)
 
     /** 旧名兼容：其他地方只需要「DIRECT_ARG 就跳过」——保留 true/false 语义：
      *  仅 DIRECT_ARG 返回 true（完全跳过）；OUTER_T_EXPRESSION 返回 false（仍然进入收集/替换分支，
      *  但在 collectJSStringChange 内部再走 key-text-only 替换分支）。 */
     fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean =
-        I18nPsiTools.isTransformedCalled(stringExpr)
+        jsCollector.isTransformedCalled(stringExpr)
 
     /**
      * 核心方法：提取 XmlText 中的纯文本（过滤注释、空白符、换行符）
      * 处理场景：<h1>123<!-- 注释 -->这是我的测试</h1> → 输出 "123这是我的测试"
      */
     private fun getPureXmlText(xmlText: XmlText): String =
-        I18nPsiTools.getPureXmlText(xmlText)
+        jsCollector.getPureXmlText(xmlText)
 
-    fun collectExtractedStrings(ele: PsiElement): String? {
-        val text = when (ele) {
-            // JS 字面量：取纯字符串值（去掉引号）
-            is JSLiteralExpression -> ele.stringValue ?: ""
-            // XML 属性值：取纯值
-            is XmlAttributeValue -> ele.value
-            // XML 文本：过滤注释+空白符，只保留有效文本
-            is XmlText -> getPureXmlText(ele)
-            // 其他类型：直接取文本
-            else -> ele.text ?: ""
-        }
-        val trimmed = text.trim()
-        // 最小提取长度：过短的文案不提取
-        if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
-        val key = generateKey(trimmed, ele)
-        extractedStrings.putIfAbsent(key, trimmed)
-        return key;
-    }
+    fun collectExtractedStrings(ele: PsiElement): String? =
+        jsCollector.collectExtractedStrings(ele)
 
     /** 用已合并好的 [pureText] 生成 key 并登记（供跨节点合并的文本段使用）。 */
-    fun collectExtractedStrings(pureText: String, element: PsiElement): String? {
-        val trimmed = pureText.trim()
-        // 最小提取长度：过短的文案不提取
-        if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
-        val key = generateKey(trimmed, element)
-        extractedStrings.putIfAbsent(key, trimmed)
-        return key
-    }
+    fun collectExtractedStrings(pureText: String, element: PsiElement): String? =
+        jsCollector.collectExtractedStrings(pureText, element)
 
     fun hasEqInExpression(expr: PsiElement?): Boolean = I18nPsiTools.hasEqInExpression(expr)
-
-    /**
-     * 判断这个字符串字面量是否是 enum entry 的初始化值
-     * 如 enum X { A = "中文" } 中的 "中文"
-     */
-    private val processedEnums = mutableSetOf<PsiElement>()
 
     // ───────────────────────────────────────────────
     // 跳过：成员变量/数组下标/index 访问中的中文 key（用户需求）
@@ -1815,7 +1152,7 @@ class I18nProcessor(
     //   因此"标准路径"在 Vue SFC 场景下同样适用。
     // ───────────────────────────────────────────────
     private fun isInIndexKeyPosition(ele: PsiElement): Boolean =
-        I18nPsiTools.isInIndexKeyPosition(ele)
+        jsCollector.isInIndexKeyPosition(ele)
 
     /**
      * 判断 ele 是否是一个「指令属性值整体」的字符串字面量，即 `:title="'中文'"` 里的 `'中文'`。
@@ -1823,7 +1160,7 @@ class I18nProcessor(
      * 避免 collectJSStringChange 重复提取。
      */
     private fun isDirectiveSoleStringLiteral(ele: JSLiteralExpression): Boolean =
-        I18nPsiTools.isDirectiveSoleStringLiteral(ele)
+        jsCollector.isDirectiveSoleStringLiteral(ele)
 
     /**
      * 【Bug A1】判断 ele 是否位于「纯字符串拼接」内：自 ele 向上找到最顶层的 `+` 表达式，
@@ -1832,151 +1169,33 @@ class I18nProcessor(
      * ele 应交给它而不再单独提取。
      */
     private fun isWithinPureStringConcat(ele: PsiElement): Boolean =
-        I18nPsiTools.isWithinPureStringConcat(ele)
+        jsCollector.isWithinPureStringConcat(ele)
 
     /** 判断某操作数是否为可被整体合并的纯字符串（字面量、纯模板，或嵌套的纯字符串拼接）。 */
     private fun isPureStringOperand(e: PsiElement?): Boolean =
-        I18nPsiTools.isPureStringOperand(e)
+        jsCollector.isPureStringOperand(e)
 
     // ───────────────────────────────────────────────
 // JS 字符串字面量
 // ───────────────────────────────────────────────
-    private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<CollectedChange>) {
-        // 【Bug A1 修复】仅当字面量位于「纯字符串拼接」(`"a" + "b" + ...`，所有操作数都是字符串字面量)
-        // 中时，其提取交由 collectJSBinaryExpressionChange 统一合并成一个 key，这里必须跳过，
-        // 否则操作数会被重复提取，且 binary change 先替换整节点后操作数 change 会作用在失效 PSI 上。
-        // 注意：若拼接中有变量/引用（如 `prefix.value + "正在执行操作，请稍候"`），则该字面量仍需单独提取，
-        // 不能被跳过（collectJSBinaryExpressionChange 会把它包进 \${}，语义不同）。
-        if (ele.parent is JSBinaryExpression && isWithinPureStringConcat(ele)) return
-
-        // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
-        // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
-        // Vue SFC 指令表达式 v-if="P['中文']" 中注入的 JS 字符串字面量都要被跳过。
-        if (isInIndexKeyPosition(ele)) return
-
-        // 指令属性值整体就是一个字符串字面量（如 :title="'中文'"）→ 交给
-        // collectXmlAttributeValueChange 统一处理，这里跳过以免重复提取。
-        if (isDirectiveSoleStringLiteral(ele)) return
-
-        val raw = ele.text
-
-        if (raw.isEmpty()) {
-            return
-        }
-        if (ele is XmlTag) {
-            return
-        }
-        // parent 不是赋值=表达式和 没有==
-        /*if (ele.parent is JSBinaryExpression && ele.parent !is JSAssignmentExpression && !hasEqInExpression(ele.parent)) {
-            return
-        }*/
-
-        if (!hasChinese(raw, SiteKind.JS_STRING)) {
-            return
-        }
-
-        // 跳过模板字面量内部的字符串字面量（如 `${'中文'}` 中的 '中文'），
-        // 因为外层模板字面量的处理逻辑会统一处理
-        if (PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java) != null) {
-            return
-        }
-
-        if (isJSTemplateLiteral(raw)) {
-            return collectJSStringTemplateFromExpression(ele, changes);
-        }
-        //跳过Enum['中文']
-        if (ele.parent is JSIndexedPropertyAccessExpression && ele.prevSibling.prevSibling is JSReferenceExpression && ele.prevSibling.prevSibling.reference?.resolve() is TypeScriptEnum) {
-            return
-        }
-
-        // 通用：索引/键访问里的中文 key 一律不翻译
-        //   例：P['中文']、obj['姓名']、P[("中文括号")]、嵌套链式 arr[0]['第1个']
-        //   （拼接、模板字符串形式的索引在下面的对应入口也做了同样防御）
-        if (isInIndexKeyPosition(ele)) return
-
-        if (ele.parent is TypeScriptEnumField) {
-            if (processedEnums.add(ele.parent.parent)) {
-                val notificationGroup = NotificationGroupManager.getInstance()
-                    .getNotificationGroup("Vue i18n 提取提示")  // 自定义组名
-
-                val notification = notificationGroup.createNotification(
-                    "跳过枚举成员 i18n 提取",
-                    "枚举成员初始化值（如 ${ele.parent.parent.parent.text}）不支持运行时 \$t()，会报 TS18033 错误。\n" +
-                            "建议改为 const 对象",
-                    NotificationType.WARNING
-                )
-
-                Notifications.Bus.notify(notification, project)
-            }
-            return
-        }
-        val text = ele.stringValue ?: return
-
-        if (text.isEmpty()) return
-        //print("$text,contains${raw.contains("\$t(")}\n")
-
-        // ── 先检查是否处于 i18n 翻译调用作用域（3 档）
-        val tSem = detectTSemantic(ele)
-        if (tSem == TSem.DIRECT_ARG) {
-            // 字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
-            return
-        }
-
-        val key = collectExtractedStrings(ele) ?: return
-
-        // Bug4 修复：外层祖先有 $t(...)，但参数是表达式不是字符串字面量，
-        //  内层字符串不能再包一层 $t(...)，否则出现 $t(isPinned ? $t(...) : $t(...))。
-        //  正确：直接把字符串字面量替换为 'key' 文本 → $t(isPinned ? 'key1' : 'key2')
-        val newExprText: String = if (tSem == TSem.OUTER_T_EXPRESSION) {
-            val quote = if (raw.startsWith("'")) "'" else "\""
-            "$quote$key$quote"
-        } else {
-            // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
-            buildTFunctionExpr(key, "{}")
-        }
-        if (ele.text == newExprText) return
-
-        recordChange(
-            message = key,
-            replaceRoot = ele,
-            anchor = ele,
-            changes = changes
-        ) {
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, newExprText, null, false)
-            if (newExpr != null) {
-                val newElement = newExpr.psi
-                ele.replace(newElement)
-            }
-        }
-    }
+    private fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<CollectedChange>) =
+        jsCollector.collectJSStringChange(ele, changes)
 
     // ───────────────────────────────────────────────
 // JS 字符串拼接 (+)
 // ───────────────────────────────────────────────
-    private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<CollectedChange>) {
-        // 拼接形式的索引键（例：P['姓' + '名']）→ 也不翻译
-        if (isInIndexKeyPosition(binaryExpr)) return
-        if (binaryExpr.parent is JSBinaryExpression) {
-            return
-        }
-        if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
-        if (!hasChinese(binaryExpr.text, SiteKind.JS_CONCAT)) {
-            return
-        }
-        val template = convertConcatTextToTemplate(binaryExpr)
-        //println("template${template}${binaryExpr.text}")
-        collectJSStringTemplate(template, changes, binaryExpr) { value -> value }
-    }
+    private fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<CollectedChange>) =
+        jsCollector.collectJSBinaryExpressionChange(binaryExpr, changes)
 
     private fun convertConcatTextToTemplate(binaryExpr: JSBinaryExpression): String =
-        I18nPsiTools.convertConcatTextToTemplate(binaryExpr)
+        jsCollector.convertConcatTextToTemplate(binaryExpr)
 
 
     // ───────────────────────────────────────────────
 // 生成 key：直接用中文（简单清理）
 // ───────────────────────────────────────────────
     private fun generateKey(value: String, element: PsiElement): String =
-        I18nPsiTools.generateKey(value, element)
+        jsCollector.generateKey(value, element)
 
     private fun isInComment(element: PsiElement): Boolean = I18nPsiTools.isInComment(element)
 
