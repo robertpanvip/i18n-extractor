@@ -120,6 +120,38 @@ class I18nProcessor(
     private var needInjectGlobalDollarT: Boolean = false
     private var needInjectReactGlobalDollarT: Boolean = false
 
+    /**
+     * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 \$t 别名：
+     * 顶部注入 `import { getI18n } from 'react-i18next'` + `const \$t = getI18n().t;`，
+     * 并把文件里已有的 i18n.t('...') 调用改写为 \$t('...')（否则 i18n 标识符会悬空）。
+     * 命中后在 collect 阶段锁死 tFunctionName=\$t。
+     */
+    private var reactI18nTFallbackToDollarT: Boolean = false
+    private var reactFallbackChecked: Boolean = false
+    private var reactFallbackResult: Boolean = false
+
+    /**
+     * React 文件 + 无任何 i18n 实例导入 + locale 初始化不可用 → 需要回退 getI18n。
+     * 结果在 collect 阶段只算一次（避免对每个 i18n.t 调用都重复走项目目录扫描）。
+     */
+    private fun reactFallsBackToGetI18n(): Boolean {
+        if (reactFallbackChecked) return reactFallbackResult
+        reactFallbackChecked = true
+        reactFallbackResult = run {
+            if (isVueFile(psiFile.containingFile) || Util.isVue(psiFile)) return@run false
+            val f = psiFile.containingFile ?: (psiFile as? PsiFile) ?: return@run false
+            if (!Util.isReact(f)) return@run false
+            // 已有 i18n 实例导入（locale / ./i18n / i18next / getI18n）→ 直接用，不需回退
+            if (hasI18nInstanceImported(psiFile)) return@run false
+            // locale 初始化文件导出了 i18n 且路径可推断 → 走 locale，不回退
+            val root = Util.findProjectRoot(f) ?: return@run true
+            val initFile = Util.findReactI18nInstanceFileInRoot(root)
+            if (initFile != null && Util.resolveVueI18nImportPath(f, initFile) != null) return@run false
+            true
+        }
+        return reactFallbackResult
+    }
+
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
     }
@@ -481,9 +513,35 @@ class I18nProcessor(
             // React: i18n.t / i18n.tc（i18next 全局实例）
             else if (text == "i18n.t" || text == "i18n.tc") {
                 if (tFunctionName == "\$t") {
-                    tFunctionName = "i18n.t"
+                    if (reactFallsBackToGetI18n()) {
+                        // React i18n.t 语义 + locale 不可用 → 统一回退 getI18n 的 $t 别名：
+                        // 不切 i18n.t、保持 $t；老 i18n.t 调用由 run() 改写为 $t，
+                        // 顶部注入 `import { getI18n }` + `const $t = getI18n().t`。
+                        reactI18nTFallbackToDollarT = true
+                        tFunctionName = "\$t"
+                    } else {
+                        tFunctionName = "i18n.t"
+                    }
                 }
             }
+        }
+    }
+
+    /**
+     * React i18n.t 语义 + locale 不可用（回退 getI18n 的 \$t 别名）时，
+     * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `$t('...')`，
+     * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const \$t = getI18n().t`）。
+     * 必须在 WriteCommandAction 内调用；老调用改写为 $t 与 collect 阶段锁死的 tFunctionName=$t 保持一致。
+     */
+    private fun rewriteExistingI18nTCallsToDollarT(root: PsiElement) {
+        val calls = PsiTreeUtil.findChildrenOfType(root, JSCallExpression::class.java)
+        for (call in calls) {
+            val method = call.methodExpression
+            if (method !is JSReferenceExpression) continue
+            val text = method.text
+            if (text != "i18n.t" && text != "i18n.tc") continue
+            val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, "\$t", null, false) ?: continue
+            method.replace(newExpr.psi)
         }
     }
 
@@ -538,9 +596,15 @@ class I18nProcessor(
             (extractedStrings.isNotEmpty() || existingStrings.isNotEmpty())
         val reactModeNeedsImport = needInjectReactGlobalDollarT &&
             (extractedStrings.isNotEmpty() || existingStrings.isNotEmpty())
+        // 5) React i18n.t 语义 + locale 不可用 → 回退 getI18n 的 $t 别名：
+        //    把已有 i18n.t('...') 调用改写为 $t('...')，再注入 getI18n + const $t = getI18n().t
+        if (reactI18nTFallbackToDollarT) {
+            rewriteExistingI18nTCallsToDollarT(psiFile)
+        }
         val needGlobalI18nImport = (
             hasAnyTCallsNeedingGlobalInstance ||
-                vueModeNeedsImport || reactModeNeedsImport
+                vueModeNeedsImport || reactModeNeedsImport ||
+                reactI18nTFallbackToDollarT
             )
         if (needGlobalI18nImport) {
             if (isVue && (
@@ -552,6 +616,7 @@ class I18nProcessor(
                 ensureI18nInstanceImported(psiFile, isVue = true, injectGlobalDollarT = needInjectGlobalDollarT)
             } else if (isReact && (
                     tFunctionName == "i18n.t" ||
+                        reactI18nTFallbackToDollarT ||
                         (extractedStrings.isNotEmpty() && needInjectReactGlobalDollarT) ||
                         reactModeNeedsImport
                     )
@@ -560,7 +625,7 @@ class I18nProcessor(
                     psiFile,
                     isVue = false,
                     injectGlobalDollarT = false,
-                    injectReactGlobalDollarT = needInjectReactGlobalDollarT
+                    injectReactGlobalDollarT = needInjectReactGlobalDollarT || reactI18nTFallbackToDollarT
                 )
             } else if (
                 vueModeNeedsImport ||
@@ -621,7 +686,9 @@ class I18nProcessor(
                 // 仍然不需要 useTranslation（不能在普通函数中调 hook）。
                 // 只有 tFunctionName!="i18n.t" 且 **没开启 needInjectReactGlobalDollarT** 的场景才注入
                 // useTranslation（典型：React 组件内部 / 自定义 hook）。
-                if (tFunctionName != "i18n.t" && !needInjectReactGlobalDollarT) {
+                // 【统一 $t 回退】：reactI18nTFallbackToDollarT=true 时顶部已注入全局
+                // `const $t = getI18n().t`，组件直接复用全局别名，**不再**注入 useTranslation。
+                if (tFunctionName != "i18n.t" && !needInjectReactGlobalDollarT && !reactI18nTFallbackToDollarT) {
                     ensureReactI18nImported(psiFile)
                 }
             } else {

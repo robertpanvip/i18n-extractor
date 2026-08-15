@@ -555,11 +555,12 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     /**
      * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入。
      *
-     * 新语义：locale 优先、失败回退 getI18n。
+     * 新语义：locale 优先、失败回退 getI18n 的 \$t 别名（用户要求统一 const \$t = getI18n().t）。
      * 本项目没有"导出了 i18n 的 React 初始化文件" → locale 不可用 → 回退 getI18n：
      *   顶部注入 `import { getI18n } from 'react-i18next';`
-     *   并追加 `const i18n = getI18n();` 保持 i18n.t(...) 标识符可用。
-     * 不再硬编码 `import i18n from 'i18next'`。
+     *   并追加 `const \$t = getI18n().t;`（统一 \$t 别名）
+     *   已有 i18n.t("已存在") 调用改写为 $t("已存在")（避免 i18n 标识符悬空）。
+     * 不再硬编码 `import i18n from 'i18next'`，也不再注入 `const i18n = getI18n()`。
      */
     fun testReactI18nTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -590,10 +591,23 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "应注入 import { getI18n } from 'react-i18next', got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
-        // i18n.t 语义：追加 const i18n = getI18n() 保持 i18n 标识符可用
+        // 统一回退别名：追加 const $t = getI18n().t（不再用 const i18n = getI18n()）
         assertTrue(
-            "应追加 const i18n = getI18n(), got:\n$resultText",
+            "应追加 const \$t = getI18n().t, got:\n$resultText",
+            compact.contains("const\$t=getI18n().t")
+        )
+        assertFalse(
+            "不应再注入 const i18n = getI18n(), got:\n$resultText",
             compact.contains("consti18n=getI18n()")
+        )
+        // 已有 i18n.t("已存在") 改写为 $t("已存在")
+        assertTrue(
+            "老 i18n.t(\"已存在\") 应改写为 \$t(\"已存在\"), got:\n$resultText",
+            compact.contains("\$t(\"已存在\")")
+        )
+        assertFalse(
+            "不应残留 i18n.t( 调用, got:\n$resultText",
+            resultText.contains("i18n.t(")
         )
         // 不再硬编码旧的 import i18n from 'i18next'
         assertFalse(
@@ -765,14 +779,23 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "未导出 i18n 的初始化文件不应被用作 locale 导入, got:\n$resultText",
             compact.contains("@/i18n") || compact.contains("@/locale") || compact.contains("@/locales")
         )
-        // 回退 getI18n
+        // 回退 getI18n：注入 import { getI18n } + 统一 \$t 别名 const $t = getI18n().t
         assertTrue(
             "应回退 import { getI18n } from 'react-i18next', got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
         assertTrue(
-            "i18n.t 语义回退应追加 const i18n = getI18n(), got:\n$resultText",
-            compact.contains("consti18n=getI18n()")
+            "i18n.t 语义回退应追加 const \$t = getI18n().t, got:\n$resultText",
+            compact.contains("const\$t=getI18n().t")
+        )
+        // 已有 i18n.t("已存在") 改写为 $t("已存在")
+        assertTrue(
+            "老 i18n.t(\"已存在\") 应改写为 \$t(\"已存在\"), got:\n$resultText",
+            compact.contains("\$t(\"已存在\")")
+        )
+        assertFalse(
+            "不应残留 i18n.t( 调用, got:\n$resultText",
+            resultText.contains("i18n.t(")
         )
     }
 
