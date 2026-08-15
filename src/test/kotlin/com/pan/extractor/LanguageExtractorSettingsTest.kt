@@ -123,17 +123,18 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
 
     fun testEnglishAcceptsContext() {
         assertTrue(EnglishExtractor.accepts(SiteKind.TEXT))
+        assertTrue(EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
         assertTrue(EnglishExtractor.accepts(SiteKind.JS_STRING))
         assertTrue(EnglishExtractor.accepts(SiteKind.JS_TEMPLATE))
-        assertFalse("英文不应接受 ATTRIBUTE 上下文", EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
+        assertTrue(EnglishExtractor.accepts(SiteKind.OTHER))
     }
 
     fun testEnglishTextNodeDetectedWhenEnabled() {
         I18nSettings.getInstance().setLanguageIds(listOf("en"))
         // TEXT 上下文：英文整句命中
         assertTrue(Util.containsTargetLanguage("Hello world", SiteKind.TEXT))
-        // ATTRIBUTE 上下文：即使含英文也不命中（避免 class/id 误报）
-        assertFalse(Util.containsTargetLanguage("main container", SiteKind.ATTRIBUTE))
+        // ATTRIBUTE 上下文：取 = 后面的值，整句同样命中（英文接受所有上下文）
+        assertTrue(Util.containsTargetLanguage("main container", SiteKind.ATTRIBUTE))
         // 单 token 不命中
         assertFalse(Util.containsTargetLanguage("Save", SiteKind.TEXT))
     }

@@ -128,8 +128,6 @@ object EnglishExtractor : LanguageExtractor {
         return hasSpace || hasPunct
     }
 
-    override fun accepts(site: SiteKind): Boolean = site != SiteKind.ATTRIBUTE
-
     override fun localeNameCandidates(): List<String> = listOf("en", "en-US", "en_US", "enUS", "us")
     override val langTagPrefix = "en"
     override val regionCodes: Set<String> = setOf("us", "gb", "au", "ca", "in", "sg", "ie", "nz")
