@@ -201,13 +201,51 @@ object SpanishExtractor : LanguageExtractor {
     override val regionCodes: Set<String> = setOf("es", "mx", "ar", "cl", "co", "pe", "ve", "us")
 }
 
-/** 语言提取器注册表：内置 zh/ja/ko/en/fr/ru/de/es。 */
+/**
+ * 意大利语：拉丁字母 + 意语专属重音元音（à è é ì ò ù）。
+ *
+ * 与英/法/西同为拉丁字母，无法用整段字符区间与英文完全区分；因此用意语专属重音符做确定性判定
+ * （含重音元音 → 意语），纯 ASCII 意语（如 "ciao"）与英文重叠属已知取舍，与英文/法语等方案一致。
+ * 注意 à/è/é/ù 与法语重叠（如 "città" 也会被法语判中），属确定性方案的固有取舍。
+ * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ */
+object ItalianExtractor : LanguageExtractor {
+    override val id = "it"
+    override val displayName = "意大利语"
+    private val RE = Regex("""[àèéìòù]""")
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("it", "it-IT", "it_IT", "itIT", "it-CH", "it_CH")
+    override val langTagPrefix = "it"
+    override val regionCodes: Set<String> = setOf("it", "ch", "sm")
+}
+
+/**
+ * 葡萄牙语：拉丁字母 + 葡语专属字符（ã õ 波浪元音，及 à á â ç é ê í ó ô ú ü）。
+ *
+ * 与英/法/西同为拉丁字母，无法用整段字符区间与英文完全区分；因此用葡语专属字符做确定性判定
+ * （含 ã/õ 等 → 葡语），纯 ASCII 葡语（如 "olá" 无重音形式）与英文重叠属已知取舍，与英文/法语等方案一致。
+ * ã/õ 为葡语（及加利西亚语）特有，可稳定把葡语与西/法/意区分开。
+ * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ */
+object PortugueseExtractor : LanguageExtractor {
+    override val id = "pt"
+    override val displayName = "葡萄牙语"
+    private val RE = Regex("""[àáâãçéêíóôõúü]""")
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("pt", "pt-BR", "pt_PT", "pt-PT", "ptBR", "ptPT", "pt-MO", "pt-AO")
+    override val langTagPrefix = "pt"
+    override val regionCodes: Set<String> = setOf("br", "pt", "mo", "ao", "cv")
+}
+
+/** 语言提取器注册表：内置 zh/ja/ko/en/fr/ru/de/es/it/pt。 */
 object LanguageRegistry {
     val all: List<LanguageExtractor> =
         listOf(
             ChineseExtractor, JapaneseExtractor, KoreanExtractor,
             EnglishExtractor, FrenchExtractor, RussianExtractor,
-            GermanExtractor, SpanishExtractor
+            GermanExtractor, SpanishExtractor, ItalianExtractor, PortugueseExtractor
         )
 
     fun byId(id: String): LanguageExtractor? = all.firstOrNull { it.id == id }
