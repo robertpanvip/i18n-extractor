@@ -98,6 +98,76 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
+    // 英文（句子级启发式 + 上下文收紧）
+    // ─────────────────────────────────────────
+
+    fun testEnglishJudgeAcceptsSentenceLikeText() {
+        assertTrue(EnglishExtractor.judge("Hello world"))
+        assertTrue(EnglishExtractor.judge("Please enter your name"))
+        assertTrue(EnglishExtractor.judge("Save your changes."))
+        assertTrue(EnglishExtractor.judge("Loading, please wait"))
+    }
+
+    fun testEnglishJudgeRejectsCodeLikeText() {
+        assertFalse(EnglishExtractor.judge("hello"))                  // 单 token
+        assertFalse(EnglishExtractor.judge("user_login_success"))     // 下划线单 token
+        assertFalse(EnglishExtractor.judge("main-container"))         // kebab 单 token
+        assertFalse(EnglishExtractor.judge("fooBar"))                 // camelCase 单 token
+        assertFalse(EnglishExtractor.judge("https://example.com/api"))// URL
+        assertFalse(EnglishExtractor.judge("www.example.com"))        // URL
+        assertFalse(EnglishExtractor.judge("你好 world"))              // 含中文
+        assertFalse(EnglishExtractor.judge("こんにちは world"))         // 含日文
+        assertFalse(EnglishExtractor.judge("안녕 world"))              // 含韩文
+        assertFalse(EnglishExtractor.judge("12345"))                  // 纯数字
+    }
+
+    fun testEnglishAcceptsContext() {
+        assertTrue(EnglishExtractor.accepts(SiteKind.TEXT))
+        assertTrue(EnglishExtractor.accepts(SiteKind.JS_STRING))
+        assertTrue(EnglishExtractor.accepts(SiteKind.JS_TEMPLATE))
+        assertFalse("英文不应接受 ATTRIBUTE 上下文", EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
+    }
+
+    fun testEnglishTextNodeDetectedWhenEnabled() {
+        I18nSettings.getInstance().setLanguageIds(listOf("en"))
+        // TEXT 上下文：英文整句命中
+        assertTrue(Util.containsTargetLanguage("Hello world", SiteKind.TEXT))
+        // ATTRIBUTE 上下文：即使含英文也不命中（避免 class/id 误报）
+        assertFalse(Util.containsTargetLanguage("main container", SiteKind.ATTRIBUTE))
+        // 单 token 不命中
+        assertFalse(Util.containsTargetLanguage("Save", SiteKind.TEXT))
+    }
+
+    fun testEnglishJsStringExtractedWhenEnabled() {
+        I18nSettings.getInstance().setLanguageIds(listOf("en"))
+        myFixture.addFileToProject(
+            "package.json",
+            """
+            {
+              "name": "en-proj",
+              "dependencies": { "react": "^18.0.0", "react-dom": "^18.0.0" }
+            }
+            """.trimIndent()
+        )
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            export default function App() {
+                const message = "Hello world"
+                return <div>{message}</div>
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+        assertTrue(
+            "应提取英文整句字符串，实际：${processor.extractedStrings.values}",
+            processor.extractedStrings.values.contains("Hello world")
+        )
+    }
+
+    // ─────────────────────────────────────────
     // Util.containsTargetLanguage / hasChinese 随设置联动
     // ─────────────────────────────────────────
 

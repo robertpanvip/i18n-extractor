@@ -93,9 +93,52 @@ object KoreanExtractor : LanguageExtractor {
     override val regionCodes: Set<String> = setOf("kr")
 }
 
-/** 语言提取器注册表：内置 zh/ja/ko（英文后置，暂不纳入）。 */
+/**
+ * 英文：代码本身全是英文，无法用“字符区间”判定，只能靠上下文 + 内容启发式（Approach A）。
+ *
+ * v1 规则（句子级、控误报）：
+ *  - [judge]：必须是“含英文且看起来像整句/短语”的文本——含空格或句子标点，
+ *    排除纯代码特征（URL、其它语言字符、单 token 标识符）。
+ *  - [accepts]：不接受 ATTRIBUTE 上下文（避免把 `class="main container"`、id、style 等
+ *    非文案属性误当文案；已知文案属性 title/placeholder 等后续可精细化）。
+ */
+object EnglishExtractor : LanguageExtractor {
+    override val id = "en"
+    override val displayName = "英文"
+
+    private val EN_LETTER = Regex("[a-zA-Z]")
+    private val CJK = Regex("""[\u4e00-\u9fff]""")
+    private val KANA = Regex("""[\u3040-\u30ff]""")
+    private val HANGUL = Regex("""[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]""")
+    private val URL_LIKE =
+        Regex("(https?://|www\\.|^[\\w.-]+\\.(com|org|net|io|cn|dev|co)([:/]|$))", RegexOption.IGNORE_CASE)
+    private val SENTENCE_HINT = " .,!?;:，。！？；："
+
+    override fun judge(text: CharSequence): Boolean {
+        val s = text.toString().trim()
+        if (s.isEmpty()) return false
+        if (!EN_LETTER.containsMatchIn(s)) return false
+        // 其它语言字符 → 不是英文
+        if (CJK.containsMatchIn(s) || KANA.containsMatchIn(s) || HANGUL.containsMatchIn(s)) return false
+        // 明显代码特征（URL）
+        if (URL_LIKE.containsMatchIn(s)) return false
+        // 句子/短语特征：含空格 或 句子标点（排除单 token 标识符/常量）
+        val hasSpace = s.any { it.isWhitespace() }
+        val hasPunct = s.any { it in SENTENCE_HINT }
+        return hasSpace || hasPunct
+    }
+
+    override fun accepts(site: SiteKind): Boolean = site != SiteKind.ATTRIBUTE
+
+    override fun localeNameCandidates(): List<String> = listOf("en", "en-US", "en_US", "enUS", "us")
+    override val langTagPrefix = "en"
+    override val regionCodes: Set<String> = setOf("us", "gb", "au", "ca", "in", "sg", "ie", "nz")
+}
+
+/** 语言提取器注册表：内置 zh/ja/ko/en。 */
 object LanguageRegistry {
-    val all: List<LanguageExtractor> = listOf(ChineseExtractor, JapaneseExtractor, KoreanExtractor)
+    val all: List<LanguageExtractor> =
+        listOf(ChineseExtractor, JapaneseExtractor, KoreanExtractor, EnglishExtractor)
 
     fun byId(id: String): LanguageExtractor? = all.firstOrNull { it.id == id }
 }

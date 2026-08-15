@@ -1050,14 +1050,25 @@ object Util {
         }
     }
 
-    /** 判断文件路径/基名是否命中任一已启用语言的标识（locale 候选 或 语言前缀）。 */
+    /** 判断文件路径/基名是否严格命中任一已启用语言的标识（locale 候选 或 `<tag><region>`）。 */
     private fun isTargetLocalePathHit(vf: VirtualFile): Boolean {
         val nameNoExt = vf.nameWithoutExtension
-        val lowerPath = vf.path.lowercase()
-        val active = I18nSettings.getInstance().activeExtractors()
         val candidates = I18nSettings.getInstance().activeLocaleCandidates()
         if (candidates.any { nameNoExt.contains(it, ignoreCase = true) }) return true
-        return active.any { lowerPath.contains(it.langTagPrefix) }
+        // 路径段精确命中 locale 候选（如目录 zh-CN / en-US / ja-JP）
+        val segments = vf.path.split('/').map { it.lowercase() }
+        if (segments.any { seg -> candidates.any { it.lowercase() == seg } }) return true
+        // 兜底：<tag><region>（zhCN / enUS / jaJP 等）
+        for (ex in I18nSettings.getInstance().activeExtractors()) {
+            val lower = nameNoExt.lowercase()
+            val tag = ex.langTagPrefix
+            if (lower.length in 4..7 && lower.startsWith(tag)) {
+                val rest = lower.drop(tag.length)
+                if (rest.all { it.isLetterOrDigit() } && ex.regionCodes.any { rest.contains(it) })
+                    return true
+            }
+        }
+        return false
     }
 
     /**
