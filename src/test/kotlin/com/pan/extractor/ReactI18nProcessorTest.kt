@@ -560,6 +560,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      *   顶部注入 `import { getI18n } from 'react-i18next';`
      *   并追加 `const \$t = getI18n().t;`（统一 \$t 别名）
      *   已有 i18n.t("已存在") 调用改写为 $t("已存在")（避免 i18n 标识符悬空）。
+     * 组件场景**必须注入 useTranslation**（不管顶部有没有全局导入）：
+     *   组件内 `const { t: $t } = useTranslation()` 遮蔽顶部全局别名，二者合法共存。
      * 不再硬编码 `import i18n from 'i18next'`，也不再注入 `const i18n = getI18n()`。
      */
     fun testReactI18nTInjectImportWhenMissing() {
@@ -614,9 +616,9 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "不应再注入 import i18n from 'i18next', got:\n$resultText",
             resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
         )
-        // 不应注入 useTranslation（已使用全局 i18n）
-        assertFalse(
-            "不应注入 useTranslation, got:\n$resultText",
+        // 组件场景必须注入 useTranslation（不管顶部有没有全局导入）
+        assertTrue(
+            "组件场景应注入 useTranslation, got:\n$resultText",
             resultText.contains("useTranslation")
         )
     }
@@ -796,6 +798,11 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertFalse(
             "不应残留 i18n.t( 调用, got:\n$resultText",
             resultText.contains("i18n.t(")
+        )
+        // 组件场景必须注入 useTranslation（不管顶部有没有全局导入）
+        assertTrue(
+            "组件场景应注入 useTranslation, got:\n$resultText",
+            resultText.contains("useTranslation")
         )
     }
 

@@ -686,9 +686,10 @@ class I18nProcessor(
                 // 仍然不需要 useTranslation（不能在普通函数中调 hook）。
                 // 只有 tFunctionName!="i18n.t" 且 **没开启 needInjectReactGlobalDollarT** 的场景才注入
                 // useTranslation（典型：React 组件内部 / 自定义 hook）。
-                // 【统一 $t 回退】：reactI18nTFallbackToDollarT=true 时顶部已注入全局
-                // `const $t = getI18n().t`，组件直接复用全局别名，**不再**注入 useTranslation。
-                if (tFunctionName != "i18n.t" && !needInjectReactGlobalDollarT && !reactI18nTFallbackToDollarT) {
+                // 【用户要求】：组件场景必须注入 useTranslation——**不管顶部有没有全局导入**。
+                // 即使顶部已注入 `const $t = getI18n().t`，组件内仍注入 hook 解构的 $t
+                //（函数作用域 $t 遮蔽顶部全局别名，二者合法共存；组件用 hook 保证响应式）。
+                if (tFunctionName != "i18n.t" && !needInjectReactGlobalDollarT) {
                     ensureReactI18nImported(psiFile)
                 }
             } else {
@@ -867,8 +868,11 @@ class I18nProcessor(
         if (allTargets.isEmpty()) return
 
         // 1. 确保 react-i18next 导入存在（仅当有合法调用目标时才注入 import）
+        //    注意：必须按"是否已导入 useTranslation"去重，而不是按模块名 react-i18next——
+        //    否则顶部已有 `import { getI18n } from 'react-i18next'` 时会把 useTranslation
+        //    import 吞掉，导致组件里用了 useTranslation 却没导入（运行时报错）。
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("react-i18next") }) {
+        if (imports.none { it.text.contains("useTranslation") }) {
             val importText = "import { useTranslation } from 'react-i18next';\n"
             val importStmt = createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
