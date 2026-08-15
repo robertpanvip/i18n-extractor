@@ -166,12 +166,13 @@ object MergeApplier {
         pairs: List<Pair<String, String>>,
     ): Map<String, Pair<String, String>> {
         val result = mutableMapOf<String, Pair<String, String>>()
+        val vuePrefix = I18nSettings.getInstance().vuePlaceholderPrefix()
         pairs.forEachIndexed { i, (key, _) ->
             require(key.startsWith("N")) { "placeholder keys should be N0/N1 form" }
             val rawIndex = key.substring(1).toIntOrNull() ?: i
             when {
                 isVue -> {
-                    val k = "N$rawIndex"
+                    val k = "$vuePrefix$rawIndex"
                     result[key] = "{$k}" to k
                 }
                 isReact -> {

@@ -34,6 +34,7 @@ class I18nSettingsConfigurable : Configurable {
     private var mergeThresholdSpinner: JSpinner? = null
     private var excludeDirsField: JTextField? = null
     private var customDirsField: JTextField? = null
+    private var vuePrefixField: JTextField? = null
 
     override fun getDisplayName(): String = "I18n Extractor"
 
@@ -75,6 +76,10 @@ class I18nSettingsConfigurable : Configurable {
         customDirsField = JTextField(settings.customTranslationDirs().joinToString(","))
         center.add(customDirsField!!)
 
+        center.add(JLabel("Vue 占位符前缀（如 N→{N0}，不能为空）:"))
+        vuePrefixField = JTextField(settings.vuePlaceholderPrefix())
+        center.add(vuePrefixField!!)
+
         root.add(center, BorderLayout.CENTER)
 
         // ── 下半：输出去向单选 ──
@@ -110,7 +115,8 @@ class I18nSettingsConfigurable : Configurable {
             mergeThresholdSpinner?.value as? Int != settings.mergeAffixThreshold()
         val listChanged = splitList(excludeDirsField?.text) != settings.excludeDirs() ||
             splitList(customDirsField?.text) != settings.customTranslationDirs().toSet()
-        return langChanged || outChanged || numChanged || listChanged
+        val prefixChanged = vuePrefixField?.text?.trim()?.takeIf { it.isNotEmpty() } != settings.vuePlaceholderPrefix()
+        return langChanged || outChanged || numChanged || listChanged || prefixChanged
     }
 
     override fun apply() {
@@ -123,6 +129,7 @@ class I18nSettingsConfigurable : Configurable {
         (mergeThresholdSpinner?.value as? Int)?.let { settings.setMergeAffixThreshold(it) }
         settings.setExcludeDirs(splitList(excludeDirsField?.text))
         settings.setCustomTranslationDirs(splitList(customDirsField?.text))
+        vuePrefixField?.text?.let { settings.setVuePlaceholderPrefix(it) }
     }
 
     override fun reset() {
@@ -135,6 +142,7 @@ class I18nSettingsConfigurable : Configurable {
         mergeThresholdSpinner?.model = SpinnerNumberModel(settings.mergeAffixThreshold(), 1, 100, 1)
         excludeDirsField?.text = settings.excludeDirs().joinToString(",")
         customDirsField?.text = settings.customTranslationDirs().joinToString(",")
+        vuePrefixField?.text = settings.vuePlaceholderPrefix()
     }
 
     override fun disposeUIResources() {
@@ -145,6 +153,7 @@ class I18nSettingsConfigurable : Configurable {
         mergeThresholdSpinner = null
         excludeDirsField = null
         customDirsField = null
+        vuePrefixField = null
     }
 
     /** 把逗号分隔的文本拆成去空白后的集合。 */

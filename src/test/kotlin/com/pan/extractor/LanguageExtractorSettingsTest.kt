@@ -24,6 +24,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     private var originalMerge: Int = 2
     private lateinit var originalExclude: Set<String>
     private lateinit var originalCustomDirs: List<String>
+    private var originalVuePrefix: String = "N"
 
     override fun setUp() {
         super.setUp()
@@ -33,6 +34,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         originalMerge = I18nSettings.getInstance().mergeAffixThreshold()
         originalExclude = I18nSettings.getInstance().excludeDirs()
         originalCustomDirs = I18nSettings.getInstance().customTranslationDirs()
+        originalVuePrefix = I18nSettings.getInstance().vuePlaceholderPrefix()
         // 每测从干净默认开始
         I18nSettings.getInstance().setLanguageIds(listOf("zh"))
         I18nSettings.getInstance().setOutputDestination(OutputDestination.ASK)
@@ -42,6 +44,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
             listOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
         )
         I18nSettings.getInstance().setCustomTranslationDirs(emptyList())
+        I18nSettings.getInstance().setVuePlaceholderPrefix("N")
     }
 
     override fun tearDown() {
@@ -52,6 +55,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
             I18nSettings.getInstance().setMergeAffixThreshold(originalMerge)
             I18nSettings.getInstance().setExcludeDirs(originalExclude)
             I18nSettings.getInstance().setCustomTranslationDirs(originalCustomDirs)
+            I18nSettings.getInstance().setVuePlaceholderPrefix(originalVuePrefix)
         } finally {
             super.tearDown()
         }
@@ -96,6 +100,17 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     // ─────────────────────────────────────────
     // 各语言判定函数
     // ─────────────────────────────────────────
+
+    fun testVuePlaceholderPrefixDefaultAndCoerce() {
+        val s = I18nSettings.getInstance()
+        assertEquals("默认应为 N", "N", s.vuePlaceholderPrefix())
+        s.setVuePlaceholderPrefix("param")
+        assertEquals("param", s.vuePlaceholderPrefix())
+        s.setVuePlaceholderPrefix("   ")
+        assertEquals("空值应钳制回默认 N（vue-i18n 不支持数字 key）", "N", s.vuePlaceholderPrefix())
+        s.setVuePlaceholderPrefix("")
+        assertEquals("空值应钳制回默认 N", "N", s.vuePlaceholderPrefix())
+    }
 
     fun testChineseJudge() {
         assertTrue(ChineseExtractor.judge("你好世界"))

@@ -1668,11 +1668,12 @@ class I18nProcessor(
 
     /**
      * Vue-i18n 不支持数字占位符 `$t('默认模型配置{0}子', { '0': "123" })` 这种
-     * 数字 key 对象写法，必须用命名插值。统一把 Vue 侧占位符改成 {N0} / {N1} ...，
+     * 数字 key 对象写法，必须用命名插值。统一把 Vue 侧占位符改成 {<prefix>0} / {<prefix>1} ...，
      * 调用侧参数对象写成 `{ N0: "123" }`（无引号，合法 JS identifier）。
+     * 前缀（默认 `N`）可在设置面板配置，但必须是非空变量名。
      * React i18next 的 `{{0}}` + `{ "0": val }` 原生支持，保持不变。
      */
-    private fun vuePlaceholderKey(rawIndex: Int): String = "N$rawIndex"
+    private fun vuePlaceholderKey(rawIndex: Int): String = "${I18nSettings.getInstance().vuePlaceholderPrefix()}$rawIndex"
 
     fun collectJSStringTemplate(
         raw: String,

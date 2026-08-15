@@ -2167,6 +2167,41 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testVuePlaceholderPrefixConfigurable() {
+        val settings = I18nSettings.getInstance()
+        val savedPrefix = settings.vuePlaceholderPrefix()
+        try {
+            settings.setVuePlaceholderPrefix("arg")
+            val file = configureFile(
+                "src/prefix.ts",
+                """
+                function demo(model: string, suffix: string): string {
+                    return "默认模型配置" + model + suffix
+                }
+                """.trimIndent()
+            )
+            val processor = I18nProcessor(project, file)
+            processor.collect()
+            val extractedValues: Collection<String> = processor.extractedStrings.values
+            assertTrue(
+                "使用配置前缀 arg 后应提取出 {arg0}/{arg1} 命名占位，got: ${processor.extractedStrings}",
+                extractedValues.any { it.contains("{arg0}") && it.contains("{arg1}") }
+            )
+            assertFalse(
+                "不应再出现默认前缀 {N0}/{N1}，got: ${processor.extractedStrings}",
+                extractedValues.any { it.contains("{N0}") || it.contains("{N1}") }
+            )
+            processor.execute()
+            val result = file.text
+            assertTrue(
+                "Vue 调用侧参数对象应使用配置前缀 arg0:/arg1:（不带引号）",
+                Regex("""\{\s*arg0\s*:""").containsMatchIn(result) && Regex("""arg1\s*:""").containsMatchIn(result)
+            )
+        } finally {
+            settings.setVuePlaceholderPrefix(savedPrefix)
+        }
+    }
+
     // ============================================================
     // Vue SFC · lang=ts 方向 1：<script setup lang="ts"> + ref/computed
     //   场景：ref('中文') / computed(() => 中文) / defineProps<Props>()

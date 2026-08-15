@@ -111,6 +111,22 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
     fun setCustomTranslationDirs(v: Collection<String>) {
         state.customTranslationDirs = v.map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
     }
+
+    /**
+     * Vue 项目的数字占位符前缀（默认 `N`，生成 `{N0}`/`{N1}`，参数对象 `{ N0: xxx }`）。
+     * vue-i18n 不支持数字 key，占位符必须是合法变量名，因此不允许为空；
+     * 为空时回退默认 `N`，保证不生成非法占位符。
+     */
+    fun vuePlaceholderPrefix(): String {
+        val p = state.vuePlaceholderPrefix.trim()
+        return if (p.isEmpty()) "N" else p
+    }
+
+    /** 更新 Vue 占位符前缀（空值钳制回默认 `N`）。 */
+    fun setVuePlaceholderPrefix(v: String) {
+        val p = v.trim()
+        state.vuePlaceholderPrefix = if (p.isEmpty()) "N" else p
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
@@ -122,4 +138,5 @@ class I18nSettingsState {
     var excludeDirs: MutableSet<String> =
         mutableSetOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
     var customTranslationDirs: MutableList<String> = mutableListOf()
+    var vuePlaceholderPrefix: String = "N"
 }

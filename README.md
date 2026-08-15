@@ -86,6 +86,7 @@ Open `Settings → Tools → I18n Extractor`:
 | Merge affix threshold | Combined common prefix/suffix chars required to generate a merge suggestion | 2 |
 | Exclude directories | Directory names skipped during scanning (comma-separated) | `node_modules, .git, dist, ...` |
 | Custom translation dirs | Extra translation-resource directory names (comma-separated) | *(empty)* |
+| Vue placeholder prefix | Prefix for Vue named placeholders (e.g. `N` → `{N0}`; must not be empty) | `N` |
 
 The output destination controls behaviour after extraction: choosing **Clipboard** or **Write to file** skips the dialog prompt and outputs directly; choosing **Ask every time** shows the options in the dialog (backward compatible).
 
