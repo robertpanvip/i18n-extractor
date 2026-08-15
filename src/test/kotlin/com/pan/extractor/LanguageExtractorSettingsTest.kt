@@ -167,6 +167,35 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         )
     }
 
+    fun testEnglishJsxTextMergedAndExtracted() {
+        I18nSettings.getInstance().setLanguageIds(listOf("en"))
+        myFixture.addFileToProject(
+            "package.json",
+            """
+            {
+              "name": "en-proj",
+              "dependencies": { "react": "^18.0.0", "react-dom": "^18.0.0" }
+            }
+            """.trimIndent()
+        )
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            export default function App() {
+                return <div>Hello world</div>
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.execute()
+        assertTrue(
+            "应合并相邻文本节点并提取英文整句，实际：${processor.extractedStrings.values}",
+            processor.extractedStrings.values.contains("Hello world")
+        )
+        assertTrue("应注入 \$t 调用", file.text.contains("\$t("))
+    }
+
     // ─────────────────────────────────────────
     // Util.containsTargetLanguage / hasChinese 随设置联动
     // ─────────────────────────────────────────

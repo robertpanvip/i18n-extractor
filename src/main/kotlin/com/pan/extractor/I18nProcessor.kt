@@ -304,7 +304,11 @@ class I18nProcessor(
                             // 只用 collectXmlText 统一处理，避免 visitMustache 重复提取单个表达式
                             collectXmlText(element, changes)
                         } else {
-                            collectTemplateTextChange(element, changes)
+                            // 合并相邻、仅被空白分隔的文本节点（JSX 会把 "Hello world" 拆成两个单 token 节点）
+                            val run = collectTextRun(element)
+                            if (run.first() === element) {
+                                collectTemplateTextChange(run, changes)
+                            }
                         }
                     }
 
@@ -1451,56 +1455,82 @@ class I18nProcessor(
 
     // Template 文本节点
     // ───────────────────────────────────────────────
-    private fun collectTemplateTextChange(textNode: XmlElement, changes: MutableList<CollectedChange>) {
-        val original = textNode.text
-        val trimmed = original.trim()
-        if (trimmed === "") {
-            return;
-        }
-
-        // 去除所有 HTML 注释后检查是否有实际内容
-        val withoutComments = trimmed.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "").trim()
-        if (withoutComments.isEmpty()) {
+    /**
+     * 处理一段（可能由多个仅被空白分隔的 XmlText 节点组成的）纯文本。
+     * JSX 会把 "Hello world" 解析成 "Hello"、"world" 两个相邻 XmlText 节点，
+     * 此处把它们合并成一个整体来判定目标语言并生成单一 key，再整体替换。
+     */
+    private fun collectTemplateTextChange(nodes: List<XmlText>, changes: MutableList<CollectedChange>) {
+        val first = nodes.first()
+        // 合并纯文本：各节点去注释/空白后以单个空格连接
+        val pureText = nodes.joinToString(" ") { getPureXmlText(it) }.trim()
+        if (pureText.isEmpty()) {
             return
         }
+        // 过滤掉已在调用里的内容（避免重复提取）
+        if (pureText.contains("\$t(") || pureText.contains("i18n.global.t(") || pureText.contains("i18n.t(")) return
 
-        // 使用纯文本（过滤注释）检查是否包含中文，避免注释中的中文被误提取
-        val pureText = if (textNode is XmlText) getPureXmlText(textNode) else withoutComments
+        // 使用纯文本（过滤注释）检查是否包含目标语言，避免注释中的内容被误提取
         if (!hasChinese(pureText, SiteKind.TEXT)) {
             return
         }
 
-        val isJSX = Util.isJSX(textNode);
-
-        if (trimmed.contains("\$t(") || trimmed.contains("i18n.global.t(") || trimmed.contains("i18n.t(")) return
-
-        val key = collectExtractedStrings(textNode)
+        val isJSX = Util.isJSX(first)
+        val key = collectExtractedStrings(pureText, first)
 
         recordChange(
             message = pureText,
-            replaceRoot = textNode,
-            anchor = textNode,
+            replaceRoot = first,
+            anchor = first,
             changes = changes
         ) {
-            // 只找“同一个父节点”下的 XmlText（非常关键）
-            val textChild = getCharactersText(textNode)
-            val textNodes = textChild.ifEmpty { listOf(textNode) }
+            // 只处理“同一个父节点”下的 XmlText（合并后的整段节点）
             val newContent =
                 if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
 
-            textNodes.forEachIndexed { index, node ->
-                if (!node.isValid) return@forEachIndexed
-
-                if (index == 0) {
-                    val newElement = createStringExpressionNode(newContent, node)
-                    // 第一个：替换
-                    node.replace(newElement)
-                } else {
-                    // 其他：删除
-                    node.delete()
+            var firstToken = true
+            for (node in nodes) {
+                if (!node.isValid) continue
+                val textChild = getCharactersText(node)
+                val tokens = textChild.ifEmpty { listOf(node) }
+                for (token in tokens) {
+                    if (!token.isValid) continue
+                    if (firstToken) {
+                        val newElement = createStringExpressionNode(newContent, token)
+                        token.replace(newElement)
+                        firstToken = false
+                    } else {
+                        token.delete()
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * 收集从 [start] 开始、相邻且仅被空白分隔的文本节点序列。
+     * 用于把 JSX 中被空白拆开的英文短语（"Hello" / "world"）合并成一段。
+     */
+    private fun collectTextRun(start: XmlText): List<XmlText> {
+        val result = mutableListOf(start)
+        var cur: PsiElement? = start.nextSibling
+        var pendingWhitespace = false
+        while (cur != null) {
+            when (cur) {
+                is PsiWhiteSpace -> pendingWhitespace = true
+                is XmlText -> {
+                    if (pendingWhitespace && cur.text.trim().isNotEmpty()) {
+                        result.add(cur)
+                        pendingWhitespace = false
+                    } else {
+                        break // 无空白分隔，或该节点为空文本，不再向后合并
+                    }
+                }
+                else -> break // 遇到表达式/标签等，停止合并
+            }
+            cur = cur.nextSibling
+        }
+        return result
     }
 
     /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
@@ -1983,6 +2013,14 @@ class I18nProcessor(
         val key = generateKey(trimmed, ele)
         extractedStrings.putIfAbsent(key, trimmed)
         return key;
+    }
+
+    /** 用已合并好的 [pureText] 生成 key 并登记（供跨节点合并的文本段使用）。 */
+    fun collectExtractedStrings(pureText: String, element: PsiElement): String {
+        val trimmed = pureText.trim()
+        val key = generateKey(trimmed, element)
+        extractedStrings.putIfAbsent(key, trimmed)
+        return key
     }
 
     fun hasEqInExpression(expr: PsiElement?): Boolean {
