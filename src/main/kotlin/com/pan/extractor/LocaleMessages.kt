@@ -2,6 +2,8 @@ package com.pan.extractor
 
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 
 /**
@@ -17,10 +19,17 @@ object LocaleMessages {
 
     private data class CacheKey(val entryPath: String, val displayLang: String, val modStamp: Long)
 
-    /** 缓存上限：防止长期打开大量项目时内存无限增长。 */
+    /** 入口定位缓存键：宿主文件路径 + 折叠展示语言。 */
+    private data class EntryKey(val contextPath: String, val displayLang: String)
+
+    /** 翻译映射缓存上限：防止长期打开大量项目时内存无限增长。 */
     private const val MAX_CACHE_ENTRIES = 200
 
+    /** 入口定位缓存上限。 */
+    private const val MAX_ENTRY_CACHE_ENTRIES = 200
+
     private val cacheLock = Any()
+    private val entryLock = Any()
 
     /** 按入口文件路径 + 修改时间缓存，文件改动后自动失效；LRU 淘汰，容量有上限。 */
     private val cache = object : java.util.LinkedHashMap<CacheKey, Map<String, String>>(16, 0.75f, true) {
@@ -29,18 +38,46 @@ object LocaleMessages {
         ): Boolean = size > MAX_CACHE_ENTRIES
     }
 
+    /**
+     * 定位入口文件的结果缓存（宿主文件 + 语言 → 入口路径）。
+     * 折叠场景下项目目录结构稳定，缓存可避免每次折叠都做项目目录扫描。
+     */
+    private val entryCache = object : java.util.LinkedHashMap<EntryKey, String>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<EntryKey, String>): Boolean =
+            size > MAX_ENTRY_CACHE_ENTRIES
+    }
+
     /** 折叠场景使用的带缓存入口：按当前折叠展示语言解析翻译资源。 */
     fun loadCached(project: Project, contextPsiFile: PsiFile?): Map<String, String> {
         val displayLang = I18nSettings.getInstance().foldDisplayLanguage()
-        val extractor = LanguageRegistry.byId(displayLang)
-        val entry = extractor?.let { Util.findLocaleFileForLanguage(project, contextPsiFile, it) }
-            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
-            ?: return emptyMap()
+        val entry = entryVirtualFile(project, contextPsiFile, displayLang) ?: return emptyMap()
         val key = CacheKey(entry.path, displayLang, entry.modificationStamp)
         synchronized(cacheLock) {
             cache[key]?.let { return it }
             return parseEntry(project, entry).also { cache[key] = it }
         }
+    }
+
+    /**
+     * 定位指定语言的翻译入口文件（带缓存，避免每次折叠都做项目目录扫描）。
+     * 入口文件失效（被删除/改名）时自动回退重新定位。
+     */
+    private fun entryVirtualFile(project: Project, contextPsiFile: PsiFile?, displayLang: String): VirtualFile? {
+        val contextPath = contextPsiFile?.virtualFile?.path ?: ""
+        val locKey = EntryKey(contextPath, displayLang)
+        synchronized(entryLock) {
+            val cached = entryCache[locKey]
+            if (cached != null) {
+                LocalFileSystem.getInstance().findFileByPath(cached)?.let { if (it.isValid && !it.isDirectory) return it }
+            }
+        }
+        val extractor = LanguageRegistry.byId(displayLang)
+        val entry = extractor?.let { Util.findLocaleFileForLanguage(project, contextPsiFile, it) }
+            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
+        if (entry != null && entry.isValid && !entry.isDirectory) {
+            synchronized(entryLock) { entryCache[locKey] = entry.path }
+        }
+        return entry
     }
 
     /** 按折叠展示语言解析出扁平 key→文案 映射；解析失败返回空 map（不抛错）。 */

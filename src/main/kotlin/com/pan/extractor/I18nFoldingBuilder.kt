@@ -26,6 +26,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
 
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
+        // quick=true 表示 IntelliJ 在快速输入/滚动时请求，期望尽快返回；
+        // 此时跳过全量 PSI 遍历与翻译加载，避免输入卡顿（非 quick 时再完整计算）。
+        if (quick) return FoldingDescriptor.EMPTY_ARRAY
         val containingFile = root.containingFile ?: return FoldingDescriptor.EMPTY_ARRAY
         // 对注入代码（如 Vue 模板插值 {{ $t('x') }}）折叠时，root 是注入片段；
         // 翻译入口需基于其所属的顶层源文件定位，故映射回宿主文件。
