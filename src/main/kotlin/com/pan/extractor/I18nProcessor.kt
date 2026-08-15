@@ -350,18 +350,20 @@ class I18nProcessor(
         //        const $t = getI18n().t;
         //    翻译函数仍是 $t('key')，与 Vue/React hook 内部一致。
         //
-        //    预判规则：React 项目 + （当前默认翻译函数仍是 $t）+ （既没有组件也没有自定义 hook）
-        if (tFunctionName == "\$t") {
-            val f = containingFile ?: (psiFile as? PsiFile)
-            if (f != null && Util.isReact(f)) {
-                val components = Util.findReactComponentFunctions(f)
-                val hooks = Util.findHookFunctions(f)
-                if (components.isEmpty() && hooks.isEmpty()) {
-                    needInjectReactGlobalDollarT = true
-                }
-            } else if (f != null &&
-                !f.name.endsWith(".vue", ignoreCase = true) &&
-                Util.isVue(f)) {   // ★ 用户新要求：Vue 项目判定必须看 package.json 依赖
+        //    预判规则：React 项目 + （当前翻译函数仍是默认值）+ （既没有组件也没有自定义 hook）
+        val f = containingFile ?: (psiFile as? PsiFile)
+        if (f != null && Util.isReact(f)) {
+            // React 文件统一用短 t（useTranslation / getI18n 的 t），不再用全局 $t 别名。
+            // 老 $t / i18n.t 调用保留不管，新提取一律写 t('key')。
+            if (tFunctionName == "\$t") tFunctionName = "t"
+            val components = Util.findReactComponentFunctions(f)
+            val hooks = Util.findHookFunctions(f)
+            if (components.isEmpty() && hooks.isEmpty()) {
+                needInjectReactGlobalDollarT = true
+            }
+        } else if (f != null && tFunctionName == "\$t" &&
+            !f.name.endsWith(".vue", ignoreCase = true) &&
+            Util.isVue(f)) {   // ★ 用户新要求：Vue 项目判定必须看 package.json 依赖
                 // 「用户要求：全部都用 \$t 减少复杂度」
                 //
                 // 之前实现是切 tFunctionName = i18n.global.t，替换结果变成
@@ -387,7 +389,6 @@ class I18nProcessor(
                         needInjectGlobalDollarT = true
                     }
                 }
-            }
         }
 
         collectExistingTKeys()
@@ -502,9 +503,9 @@ class I18nProcessor(
      * 老调用只作"兼容保留"，**新提取一律写短 $t('xxx')**。
      */
     private fun detectTFunctionName(call: JSCallExpression) {
-        // 预判为「统一 $t 别名模式」时：锁死 tFunctionName=$t，老调用只兼容不影响新提取形式
+        // 预判为「纯工具别名模式」时锁死翻译函数：Vue 锁 $t，React 锁 t；老调用只兼容不影响新提取形式
         if (needInjectGlobalDollarT || needInjectReactGlobalDollarT) {
-            tFunctionName = "\$t"
+            tFunctionName = if (needInjectReactGlobalDollarT) "t" else "\$t"
             return
         }
         val method = call.methodExpression
@@ -517,8 +518,11 @@ class I18nProcessor(
             // React: i18n.t / i18n.tc（i18next 全局实例）
             else if (text == "i18n.t" || text == "i18n.tc") {
                 if (tFunctionName == "\$t") {
-                    if (reactFallsBackToGetI18n()) {
-                        // React i18n.t 语义 + locale 不可用 → 统一回退 getI18n 的 $t 别名：
+                    if (Util.isReact(psiFile.containingFile ?: psiFile)) {
+                        // React 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
+                        tFunctionName = "t"
+                    } else if (reactFallsBackToGetI18n()) {
+                        // 非 React 场景且 i18n.t 语义 + locale 不可用 → 统一回退 getI18n 的 $t 别名：
                         // 不切 i18n.t、保持 $t；老 i18n.t 调用由 run() 改写为 $t，
                         // 顶部注入 `import { getI18n }` + `const $t = getI18n().t`。
                         reactI18nTFallbackToDollarT = true

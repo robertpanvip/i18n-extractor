@@ -11,10 +11,10 @@ import org.junit.Assert.assertTrue
  * 的补充边界测试。
  *
  * 核心语义（与 ReactI18nProcessorTest 互补，聚焦"组件场景"与"去重/优先"交叉点）：
- *   1. 组件场景：不管顶部有没有全局导入，**必须**注入 useTranslation（hook 的 \$t 遮蔽全局 \$t）。
- *   2. locale 优先：locale 初始化文件导出了 i18n → 切 locale import，不回退 getI18n。
- *      locale 不可用 / 未导出 → 回退 `import { getI18n }` + `const \$t = getI18n().t`。
- *   3. 已有 i18n.t('...') 调用在回退场景下改写为 \$t('...')，避免 i18n 标识符悬空。
+ *   1. 组件场景：不管顶部有没有全局导入，**必须**注入 useTranslation（hook 的 t 遮蔽全局 t）。
+ *   2. React 文件统一用短 t：组件 / 自定义 hook 注入 `const { t } = useTranslation()`；
+ *      纯工具文件（无组件无 hook）注入 `const t = getI18n().t`。
+ *   3. 老 i18n.t('...') / $t('...') 调用一律保留，不再改写（React 不再回退 getI18n）。
  */
 class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
@@ -48,16 +48,16 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
     private fun compact(file: PsiFile): String = file.text.replace("\\s+".toRegex(), "")
 
     // ─────────────────────────────────────────────────────────────
-    // 1. 组件场景：回退 getI18n + 注入 useTranslation（核心语义）
+    // 1. 组件场景：注入 useTranslation（核心语义）
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * 组件 + 已有 i18n.t + 无 locale → 同时注入：
-     *   - import { getI18n } from 'react-i18next'  +  const \$t = getI18n().t（全局别名）
-     *   - import { useTranslation } + 组件内 const { t: \$t } = useTranslation()
-     *   - 已有 i18n.t("已存在") 改写为 \$t("已存在")
+     * 组件 + 已有 i18n.t + 无 locale → 组件场景：
+     *   - import { useTranslation } + 组件内 const { t } = useTranslation()
+     *   - 已有 i18n.t("已存在") 保留（不改写）
+     *   - 不回退 getI18n
      */
-    fun testComponentWithI18nTFallbackInjectsBothGlobalAndHook() {
+    fun testComponentWithI18nTFallbackInjectsUseTranslation() {
         val file = myFixture.configureByText(
             "App.tsx",
             """
@@ -80,20 +80,19 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        // 顶部全局别名（getI18n 回退）
-        assertTrue("应注入 getI18n import", c.contains("import{getI18n}from'react-i18next'"))
-        assertTrue("应注入全局 const \$t = getI18n().t", c.contains("const\$t=getI18n().t"))
-        // 组件场景必须注入 useTranslation（不管顶部有没有全局导入）
+        // 组件场景直接注入 useTranslation，不再回退 getI18n 全局别名
+        assertFalse("组件场景不应注入 getI18n import", c.contains("import{getI18n}from'react-i18next'"))
         assertTrue("组件场景应注入 useTranslation import", file.text.contains("useTranslation"))
-        assertTrue("组件内应注入 const { t: \$t } = useTranslation()", c.contains("const{t:\$t}=useTranslation()"))
-        // 老调用改写
-        assertTrue("i18n.t(\"已存在\") 应改写为 \$t(\"已存在\")", c.contains("\$t(\"已存在\")"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("组件内应注入 const { t } = useTranslation()", c.contains("const{t}=useTranslation()"))
+        // 老 i18n.t 调用保留（不改写）
+        assertTrue("i18n.t(\"已存在\") 应保留", file.text.contains("i18n.t("))
+        // 新提取写短 t
+        assertTrue("新提取应写 t(`新标题`)", c.contains("t(`新标题`)"))
     }
 
     /**
      * 组件 + i18n.t + locale 优先（导出了 i18n）→
-     * 注入 locale import + useTranslation，**不**回退 getI18n。
+     * 组件场景注入 useTranslation，老 i18n.t 保留，不切 locale import。
      */
     fun testComponentWithI18nTAndLocaleExportUsesLocaleImport() {
         myFixture.addFileToProject(
@@ -127,15 +126,18 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("locale 优先应注入 import i18n from '@/locales'", c.contains("importi18nfrom'@/locales'"))
-        assertFalse("locale 可用时不应回退 getI18n", c.contains("getI18n"))
-        // locale 可用 → i18n.t 视为有效全局调用，保留原样（不 rewrite、不注入 useTranslation）
+        // 组件场景不再切 locale import（也不回退 getI18n）
+        assertFalse("组件场景不应注入 locale import", c.contains("importi18nfrom'@/locales'"))
+        assertFalse("组件场景不应回退 getI18n", c.contains("getI18n"))
+        // 老 i18n.t 保留（不改写）
         assertTrue("i18n.t 应保留", c.contains("i18n.t(\"已存在\")"))
-        assertFalse("locale 可用时不应注入 useTranslation", file.text.contains("useTranslation"))
+        // 组件场景必须注入 useTranslation
+        assertTrue("组件场景应注入 useTranslation", file.text.contains("useTranslation"))
     }
 
     /**
-     * 组件 + i18n.t + locale 初始化文件存在但**未导出 i18n** → 回退 getI18n + useTranslation。
+     * 组件 + i18n.t + locale 初始化文件存在但**未导出 i18n** →
+     * 组件场景仍只注入 useTranslation，老 i18n.t 保留，不回退 getI18n。
      */
     fun testComponentWithI18nTAndLocaleInitNoExportFallsBack() {
         myFixture.addFileToProject(
@@ -163,10 +165,11 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val c = compact(file)
         assertFalse("未导出 i18n 不应切 locale", c.contains("@/i18n") || c.contains("@/locale"))
-        assertTrue("应回退 getI18n import", c.contains("import{getI18n}from'react-i18next'"))
-        assertTrue("应追加全局 const \$t = getI18n().t", c.contains("const\$t=getI18n().t"))
+        assertFalse("组件场景不应回退 getI18n", c.contains("getI18n"))
+        // 组件场景必须注入 useTranslation（不管 locale 是否可用）
         assertTrue("组件场景应注入 useTranslation", file.text.contains("useTranslation"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        // 老 i18n.t 保留（不改写）
+        assertTrue("老 i18n.t 应保留", file.text.contains("i18n.t("))
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -174,7 +177,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * 多个组件共存 + 各自 i18n.t → 每个组件都注入 useTranslation。
+     * 多个组件共存 + 各自 i18n.t → 每个组件都注入 useTranslation，老 i18n.t 保留。
      */
     fun testMultipleComponentsWithI18nTEachGetUseTranslation() {
         val file = myFixture.configureByText(
@@ -195,14 +198,14 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        val hookCount = c.split("const{t:\$t}=useTranslation()").size - 1
+        val hookCount = c.split("const{t}=useTranslation()").size - 1
         assertEquals("两个组件都应注入 useTranslation, 实际 $hookCount 次", 2, hookCount)
-        assertTrue("应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertFalse("组件场景不应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
+        assertTrue("老 i18n.t 应保留", file.text.contains("i18n.t("))
     }
 
     /**
-     * 箭头函数组件 + i18n.t → 注入 useTranslation + 回退 getI18n。
+     * 箭头函数组件 + i18n.t → 注入 useTranslation，老 i18n.t 保留。
      */
     fun testArrowComponentWithI18nTFallback() {
         val file = myFixture.configureByText(
@@ -220,9 +223,9 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("箭头组件应注入 useTranslation", c.contains("const{t:\$t}=useTranslation()"))
-        assertTrue("应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("箭头组件应注入 useTranslation", c.contains("const{t}=useTranslation()"))
+        assertFalse("组件场景不应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
+        assertTrue("老 i18n.t 应保留", file.text.contains("i18n.t("))
     }
 
     /**
@@ -244,9 +247,9 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("自定义 hook 应注入 useTranslation", c.contains("const{t:\$t}=useTranslation()"))
-        assertTrue("应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("自定义 hook 应注入 useTranslation", c.contains("const{t}=useTranslation()"))
+        assertFalse("自定义 hook 场景不应回退 getI18n", c.contains("import{getI18n}from'react-i18next'"))
+        assertTrue("老 i18n.t 应保留", file.text.contains("i18n.t("))
     }
 
     /**
@@ -271,9 +274,9 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        val hookCount = c.split("const{t:\$t}=useTranslation()").size - 1
+        val hookCount = c.split("const{t}=useTranslation()").size - 1
         assertEquals("组件和 hook 都应注入 useTranslation, 实际 $hookCount 次", 2, hookCount)
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("老 i18n.t 应保留", file.text.contains("i18n.t("))
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -281,7 +284,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * i18n.t 在 JSX 属性表达式里 → 改写为 \$t。
+     * i18n.t 在 JSX 属性表达式里 → 老调用保留（不再改写为 $t）。
      */
     fun testI18nTInJsxAttributeRewrite() {
         val file = myFixture.configureByText(
@@ -298,12 +301,12 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("JSX 属性里的 i18n.t 应改写为 \$t", c.contains("title={\$t(\"提示\")}"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("JSX 属性里的 i18n.t 应保留", c.contains("title={i18n.t(\"提示\")}"))
+        assertFalse("不应改写为 \$t", c.contains("title={\$t(\"提示\")}"))
     }
 
     /**
-     * i18n.t 使用反引号模板字符串 → 改写为 \$t，保留模板字符串。
+     * i18n.t 使用反引号模板字符串 → 老调用保留（不再改写为 $t）。
      */
     fun testI18nTWithTemplateLiteralRewrite() {
         val file = myFixture.configureByText(
@@ -320,12 +323,12 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("模板字符串 i18n.t 应改写为 \$t", c.contains("\$t(`模板文本`)"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("模板字符串 i18n.t 应保留", c.contains("i18n.t(`模板文本`)"))
+        assertFalse("不应改写为 \$t", c.contains("\$t(`模板文本`)"))
     }
 
     /**
-     * 复数 i18n.tc('用户', 2) → 改写为 \$t('用户', 2)，保留数量参数。
+     * 复数 i18n.tc('用户', 2) → 老调用保留（不再改写为 $t），数量参数保留。
      */
     fun testI18nTcPluralRewritePreservesCount() {
         val file = myFixture.configureByText(
@@ -342,12 +345,12 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("i18n.tc 应改写为 \$t 并保留数量参数", c.contains("\$t(\"用户\",2)"))
-        assertFalse("不应残留 i18n.tc(", file.text.contains("i18n.tc("))
+        assertTrue("i18n.tc 应保留并带数量参数", c.contains("i18n.tc(\"用户\",2)"))
+        assertFalse("不应改写为 \$t", c.contains("\$t(\"用户\",2)"))
     }
 
     /**
-     * 嵌套 i18n.t(i18n.t(...)) → 外层改写为 \$t，内层调用也改写（各自独立 methodExpression）。
+     * 嵌套 i18n.t(i18n.t(...)) → 老调用整体保留（不再改写为 $t）。
      */
     fun testNestedI18nTRewrite() {
         val file = myFixture.configureByText(
@@ -364,8 +367,8 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         processor.execute()
 
         val c = compact(file)
-        assertTrue("内层 i18n.t 应改为 \$t", c.contains("\$t(\"内层\")"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        assertTrue("嵌套 i18n.t 应保留", c.contains("i18n.t(i18n.t(\"内层\"))"))
+        assertFalse("不应改写为 \$t", c.contains("\$t("))
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -373,7 +376,8 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * 组件已有 useTranslation import + 调用，但缺 i18n 能力 → 只补 getI18n，不重复 useTranslation。
+     * 组件已有 useTranslation import + 解构调用，但文件里还有老 i18n.t →
+     * 不重复注入 useTranslation，老 i18n.t 保留，不回退 getI18n。
      */
     fun testExistingUseTranslationNoDuplicateWhenGetI18nNeededClean() {
         val file = myFixture.configureByText(
@@ -401,14 +405,13 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         // useTranslation 仅一次（import 一次 + 调用一次，调用只在此处）
         val callCount = c.split("useTranslation()").size - 1
         assertEquals("useTranslation() 调用应恰好一次", 1, callCount)
-        // 缺 getI18n → 回退补上
-        assertTrue("应回退补 getI18n import", c.contains("import{getI18n}from'react-i18next'"))
+        // 组件场景不回退 getI18n
+        assertFalse("组件场景不应回退 getI18n import", c.contains("import{getI18n}from'react-i18next'"))
         // 已有 useTranslation import 时不应重复 import useTranslation
         val importCount = c.split("import{useTranslation}from'react-i18next'").size - 1
         assertEquals("useTranslation import 应恰好一次", 1, importCount)
-        // 老 i18n.t 改写为 $t
-        assertTrue("i18n.t(\"已存在\") 应改写为 \$t", c.contains("\$t(\"已存在\")"))
-        assertFalse("不应残留 i18n.t(", file.text.contains("i18n.t("))
+        // 老 i18n.t 保留（不改写）
+        assertTrue("i18n.t(\"已存在\") 应保留", file.text.contains("i18n.t("))
     }
 
     /**

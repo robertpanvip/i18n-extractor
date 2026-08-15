@@ -246,7 +246,9 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
             "应合并相邻文本节点并提取英文整句，实际：${processor.extractedStrings.values}",
             processor.extractedStrings.values.contains("Hello world")
         )
-        assertTrue("应注入 \$t 调用", file.text.contains("\$t("))
+        assertTrue("React 文件应注入 useTranslation", file.text.contains("useTranslation"))
+        assertTrue("React 提取应写 t 调用", file.text.contains("t("))
+        assertFalse("React 提取不再统一用 \$t", file.text.contains("\$t("))
     }
 
     // ─────────────────────────────────────────

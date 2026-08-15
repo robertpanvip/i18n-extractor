@@ -147,9 +147,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
         assertTrue(
             "Should contain useTranslation hook, got:\n$resultText",
-            resultText.contains("useTranslation()") && resultText.contains("\$t")
+            compact.contains("useTranslation()") && compact.contains("const{t}=useTranslation()")
         )
     }
 
@@ -172,9 +173,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.execute()
 
         val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
         assertTrue(
             "Arrow function should contain useTranslation hook, got:\n$resultText",
-            resultText.contains("useTranslation()") && resultText.contains("\$t")
+            compact.contains("useTranslation()") && compact.contains("const{t}=useTranslation()")
         )
     }
 
@@ -553,16 +555,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * 测试使用 i18n.t 但缺少 i18n 实例导入时，应自动注入。
-     *
-     * 新语义：locale 优先、失败回退 getI18n 的 \$t 别名（用户要求统一 const \$t = getI18n().t）。
-     * 本项目没有"导出了 i18n 的 React 初始化文件" → locale 不可用 → 回退 getI18n：
-     *   顶部注入 `import { getI18n } from 'react-i18next';`
-     *   并追加 `const \$t = getI18n().t;`（统一 \$t 别名）
-     *   已有 i18n.t("已存在") 调用改写为 $t("已存在")（避免 i18n 标识符悬空）。
-     * 组件场景**必须注入 useTranslation**（不管顶部有没有全局导入）：
-     *   组件内 `const { t: $t } = useTranslation()` 遮蔽顶部全局别名，二者合法共存。
-     * 不再硬编码 `import i18n from 'i18next'`，也不再注入 `const i18n = getI18n()`。
+     * 测试使用 i18n.t 但缺少 i18n 实例导入时，组件场景注入 useTranslation，
+     * 老 i18n.t("已存在") 保留（React 不再回退 getI18n 改写为 $t）。
      */
     fun testReactI18nTInjectImportWhenMissing() {
         val file = myFixture.configureByText(
@@ -588,27 +582,19 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
-        // locale 不可用 → 回退 getI18n：注入 import { getI18n } from 'react-i18next'
-        assertTrue(
-            "应注入 import { getI18n } from 'react-i18next', got:\n$resultText",
+        // 组件场景不回退 getI18n
+        assertFalse(
+            "组件场景不应注入 import { getI18n } from 'react-i18next', got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
-        // 统一回退别名：追加 const $t = getI18n().t（不再用 const i18n = getI18n()）
-        assertTrue(
-            "应追加 const \$t = getI18n().t, got:\n$resultText",
-            compact.contains("const\$t=getI18n().t")
-        )
+        // 组件场景不注入 const t = getI18n().t
         assertFalse(
-            "不应再注入 const i18n = getI18n(), got:\n$resultText",
-            compact.contains("consti18n=getI18n()")
+            "组件场景不应注入 const t = getI18n().t, got:\n$resultText",
+            compact.contains("constt=getI18n().t")
         )
-        // 已有 i18n.t("已存在") 改写为 $t("已存在")
+        // 老 i18n.t("已存在") 保留（不改写）
         assertTrue(
-            "老 i18n.t(\"已存在\") 应改写为 \$t(\"已存在\"), got:\n$resultText",
-            compact.contains("\$t(\"已存在\")")
-        )
-        assertFalse(
-            "不应残留 i18n.t( 调用, got:\n$resultText",
+            "老 i18n.t(\"已存在\") 应保留, got:\n$resultText",
             resultText.contains("i18n.t(")
         )
         // 不再硬编码旧的 import i18n from 'i18next'
@@ -630,8 +616,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * locale 初始化文件导出了 i18n，且文件用 i18n.t 但缺导入 →
-     * 应注入 `import i18n from '@/locales'`，**不**回退 getI18n。
+     * locale 初始化文件导出了 i18n，组件场景 + i18n.t 但缺导入 →
+     * 组件场景注入 useTranslation，老 i18n.t 保留，不切 locale import、不回退 getI18n。
      */
     fun testReactI18nTWithLocaleExportUsesLocaleImport() {
         // locale 初始化文件：React 初始化 + 导出了 i18n
@@ -670,26 +656,31 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
-        // locale 优先：从 locale 初始化文件导入 i18n 实例（默认导出 → @/locales）
-        assertTrue(
-            "应注入 import i18n from '@/locales', got:\n$resultText",
+        // 组件场景不切 locale import
+        assertFalse(
+            "组件场景不应注入 import i18n from '@/locales', got:\n$resultText",
             compact.contains("importi18nfrom'@/locales'")
         )
         // 不落回 getI18n
         assertFalse(
-            "locale 可用时不应回退 getI18n, got:\n$resultText",
+            "组件场景不应回退 getI18n, got:\n$resultText",
             compact.contains("getI18n")
         )
-        // 不用旧的 i18next 包导入
-        assertFalse(
-            "不应注入 import i18n from 'i18next', got:\n$resultText",
-            resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
+        // 老 i18n.t 保留（不改写）
+        assertTrue(
+            "老 i18n.t 应保留, got:\n$resultText",
+            resultText.contains("i18n.t(")
+        )
+        // 组件场景注入 useTranslation
+        assertTrue(
+            "组件场景应注入 useTranslation, got:\n$resultText",
+            resultText.contains("useTranslation")
         )
     }
 
     /**
-     * locale 初始化文件导出了 i18n，纯工具 TS 文件（\$t 语义）→
-     * 注入 `import i18n from '@/locales'` + `const \$t = i18n.t;`，不回退 getI18n。
+     * locale 初始化文件导出了 i18n，纯工具 TS 文件（t 语义）→
+     * 注入 `import i18n from '@/locales'` + `const t = i18n.t;`，不回退 getI18n。
      */
     fun testReactPureTsWithLocaleExportUsesLocaleImport() {
         myFixture.addFileToProject(
@@ -728,8 +719,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             compact.contains("importi18nfrom'@/locales'")
         )
         assertTrue(
-            "纯工具 TS 应追加 const \$t = i18n.t（用 locale i18n，而非 getI18n）, got:\n$resultText",
-            compact.contains("const\$t=i18n.t")
+            "纯工具 TS 应追加 const t = i18n.t（用 locale i18n，而非 getI18n）, got:\n$resultText",
+            compact.contains("constt=i18n.t")
         )
         assertFalse(
             "locale 可用时纯工具 TS 不应回退 getI18n, got:\n$resultText",
@@ -738,8 +729,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
-     * 用户指定语义："失败回退才走到现在的 getI18n"。
-     * locale 初始化文件**存在但未导出 i18n** → 视为不可用 → 回退 getI18n。
+     * locale 初始化文件**存在但未导出 i18n** → 组件场景仍只注入 useTranslation，
+     * 老 i18n.t 保留，不回退 getI18n。
      */
     fun testReactI18nTWithLocaleInitNoExportFallsBackToGetI18n() {
         // locale 初始化文件：React 初始化了，但**没有导出 i18n**
@@ -781,22 +772,18 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "未导出 i18n 的初始化文件不应被用作 locale 导入, got:\n$resultText",
             compact.contains("@/i18n") || compact.contains("@/locale") || compact.contains("@/locales")
         )
-        // 回退 getI18n：注入 import { getI18n } + 统一 \$t 别名 const $t = getI18n().t
-        assertTrue(
-            "应回退 import { getI18n } from 'react-i18next', got:\n$resultText",
+        // 组件场景不回退 getI18n
+        assertFalse(
+            "组件场景不应回退 import { getI18n } from 'react-i18next', got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
-        assertTrue(
-            "i18n.t 语义回退应追加 const \$t = getI18n().t, got:\n$resultText",
-            compact.contains("const\$t=getI18n().t")
-        )
-        // 已有 i18n.t("已存在") 改写为 $t("已存在")
-        assertTrue(
-            "老 i18n.t(\"已存在\") 应改写为 \$t(\"已存在\"), got:\n$resultText",
-            compact.contains("\$t(\"已存在\")")
-        )
         assertFalse(
-            "不应残留 i18n.t( 调用, got:\n$resultText",
+            "组件场景不应追加 const t = getI18n().t, got:\n$resultText",
+            compact.contains("constt=getI18n().t")
+        )
+        // 老 i18n.t("已存在") 保留（不改写）
+        assertTrue(
+            "老 i18n.t(\"已存在\") 应保留, got:\n$resultText",
             resultText.contains("i18n.t(")
         )
         // 组件场景必须注入 useTranslation（不管顶部有没有全局导入）
@@ -908,11 +895,11 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
      * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
      *
-     * 【用户指定新规则】：全部都用 $t 减少复杂度。
+     * 【用户指定新规则】：React 纯工具文件统一用短 t。
      *   顶部注入两行（来自 react-i18next 官方 getI18n API）：
      *       import { getI18n } from 'react-i18next';
-     *       const $t = getI18n().t;
-     *   替换结果仍是短写法 $t('key')，与 React Hook / Vue 内部完全一致，
+     *       const t = getI18n().t;
+     *   替换结果仍是短写法 t('key')，与 React Hook / 组件内部完全一致，
      *   **不再**写冗长 i18n.t('key') 调用。
      */
     fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
@@ -953,19 +940,19 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "纯工具 TS 文件不应再写旧的 import i18n from 'i18next', got:\n$resultText",
             resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
         )
-        // ★ 替换结果必须是短写法 $t('总共') 等，**不**是 i18n.t(...)
+        // ★ 替换结果必须是短写法 t('总共') 等，**不**是 i18n.t(...)
         assertTrue(
-            "替换必须是短写法 \$t('总共') / \$t('提示') / \$t('说明文本'), got:\n$resultText",
-            resultText.contains("\$t(")
+            "替换必须是短写法 t('总共') / t('提示') / t('说明文本'), got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").contains("t('")
         )
         assertFalse(
             "不应再出现冗长 i18n.t(...) 调用, got:\n$resultText",
             resultText.contains("i18n.t(")
         )
-        // ★ 必须追加 const $t = getI18n().t;
+        // ★ 必须追加 const t = getI18n().t;
         assertTrue(
-            "必须追加 const \$t = getI18n().t; 全局别名, got:\n$resultText",
-            resultText.replace("\\s+".toRegex(), "").contains("const\$t=getI18n().t")
+            "必须追加 const t = getI18n().t; 全局别名, got:\n$resultText",
+            resultText.replace("\\s+".toRegex(), "").contains("constt=getI18n().t")
         )
 
         // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
@@ -974,13 +961,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor2.execute()
         val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
         val getI18nCnt = textAfterTwice.split("import{getI18n}from'react-i18next'").size - 1
-        val constCnt = textAfterTwice.split("const\$t=getI18n().t").size - 1
+        val constCnt = textAfterTwice.split("constt=getI18n().t").size - 1
         assertEquals(
             "React getI18n import 重复出现 $getI18nCnt 次（expect 1）, txt:\n$textAfterTwice",
             1, getI18nCnt
         )
         assertEquals(
-            "React const \$t 别名重复出现 $constCnt 次（expect 1）, txt:\n$textAfterTwice",
+            "React const t 别名重复出现 $constCnt 次（expect 1）, txt:\n$textAfterTwice",
             1, constCnt
         )
     }
@@ -1013,7 +1000,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue(
             "自定义 hook 体内应注入 useTranslation() 调用, got:\n$resultText",
             resultText.replace("\\s+".toRegex(), "")
-                .contains("const{t:\$t}=useTranslation()")
+                .contains("const{t}=useTranslation()")
         )
     }
 
@@ -1123,15 +1110,15 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "新模式必须额外追加 import { getI18n } from 'react-i18next'（不能因老 i18n 已导入就跳过）, got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
-        // ★ 关键断言 3：还要追加 const $t = getI18n().t
+        // ★ 关键断言 3：还要追加 const t = getI18n().t
         assertTrue(
-            "还要追加 const \$t = getI18n().t 全局别名, got:\n$resultText",
-            compact.contains("const\$t=getI18n().t")
+            "还要追加 const t = getI18n().t 全局别名, got:\n$resultText",
+            compact.contains("constt=getI18n().t")
         )
-        // ★ 关键断言 4：替换是短 $t（不是老 i18n.t）
+        // ★ 关键断言 4：替换是短 t（不是老 i18n.t / $t）
         assertTrue(
-            "替换应该是短 \$t('提示'), got:\n$resultText",
-            resultText.contains("\$t('提示')")
+            "替换应该是短 t('提示'), got:\n$resultText",
+            resultText.contains("t('提示')")
         )
         assertFalse(
             "替换不应再用老 i18n.t('提示'), got:\n$resultText",
@@ -1307,8 +1294,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      *   ③ 因为有新提取 → 命中 React 新模式 getI18n：
      *        - 老 import i18n from i18next 保留（不破坏）
      *        - 额外追加 import { getI18n } from 'react-i18next'
-     *        - 追加 const $t = getI18n().t
-     *   ④ 新中文替换是短 $t('新提示')；老 i18n.t('老调用中文') 保留
+     *        - 追加 const t = getI18n().t
+     *   ④ 新中文替换是短 t('新提示')；老 i18n.t('老调用中文') 保留
      */
     fun testReactPureTsMixExistingI18nTAndNewChineseInjectsBothImports() {
         val file = configureFile(
@@ -1348,15 +1335,15 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "新模式必须追加 import { getI18n } from 'react-i18next', got:\n$resultText",
             compact.contains("import{getI18n}from'react-i18next'")
         )
-        // ③ 追加 const $t = getI18n().t
+        // ③ 追加 const t = getI18n().t
         assertTrue(
-            "新模式必须追加 const \$t = getI18n().t, got:\n$resultText",
-            compact.contains("const\$t=getI18n().t")
+            "新模式必须追加 const t = getI18n().t, got:\n$resultText",
+            compact.contains("constt=getI18n().t")
         )
-        // ④ 新中文替换是短 $t
+        // ④ 新中文替换是短 t
         assertTrue(
-            "新中文「新提示」应替换为 \$t('新提示'), got:\n$resultText",
-            resultText.contains("\$t('新提示')")
+            "新中文「新提示」应替换为 t('新提示'), got:\n$resultText",
+            resultText.contains("t('新提示')")
         )
         // ⑤ 老 i18n.t('老调用中文') 保留
         assertTrue(
@@ -1403,10 +1390,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "const \$t = getI18n().t 重复了 $constCnt 次（expect 1）, txt:\n$txt",
             1, constCnt
         )
-        // 新提取替换仍为短 $t
+        // 新提取替换仍为短 t
         assertTrue(
-            "「品牌好」应替换为 \$t('品牌好'), got:\n${file.text}",
-            file.text.contains("\$t('品牌好')")
+            "「品牌好」应替换为 t('品牌好'), got:\n${file.text}",
+            file.text.contains("t('品牌好')")
         )
     }
 
@@ -1430,13 +1417,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         val importCnt = txt.split("import{useTranslation}from'react-i18next'").size - 1
-        val constCnt = txt.split("const{t:\$t}=useTranslation()").size - 1
+        val constCnt = txt.split("const{t}=useTranslation()").size - 1
         assertEquals(
             "useTranslation import 重复了 $importCnt 次（expect 1）, txt:\n$txt",
             1, importCnt
         )
         assertEquals(
-            "const { t: \$t } = useTranslation() 重复了 $constCnt 次（expect 1）, txt:\n$txt",
+            "const { t } = useTranslation() 重复了 $constCnt 次（expect 1）, txt:\n$txt",
             1, constCnt
         )
     }
@@ -1446,7 +1433,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      *   顶部用户手删了 const 别名，只剩 `import { getI18n } from 'react-i18next'`；
      *   文件里既有新硬编码中文要提取。
      *
-     * 预期：只补 `const $t = getI18n().t`，**不能**再重复追加 import { getI18n }。
+     * 预期：只补 `const t = getI18n().t`，**不能**再重复追加 import { getI18n }。
      */
     fun testReactPureTsGetI18nImportedButConstMissingOnlyInjectsConst() {
         val file = configureFile(
@@ -1473,14 +1460,14 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "import { getI18n } from 'react-i18next' 已经有了，不应重复追加；实际出现 $getI18nImportCnt 次, txt:\n$compact",
             1, getI18nImportCnt
         )
-        val constCnt = compact.split("const\$t=getI18n().t").size - 1
+        val constCnt = compact.split("constt=getI18n().t").size - 1
         assertEquals(
-            "必须补齐 const \$t = getI18n().t 别名（expect 1）, 实际 $constCnt 次, txt:\n$compact",
+            "必须补齐 const t = getI18n().t 别名（expect 1）, 实际 $constCnt 次, txt:\n$compact",
             1, constCnt
         )
         assertTrue(
-            "「残缺提示」替换成短 \$t('残缺提示'), got:\n$txt",
-            txt.contains("\$t('残缺提示')")
+            "「残缺提示」替换成短 t('残缺提示'), got:\n$txt",
+            txt.contains("t('残缺提示')")
         )
     }
 
@@ -1721,27 +1708,27 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "commonProps.tip 不应残留硬编码 \"鼠标悬停提示\"，got:\n$result",
             result.contains("tip: \"鼠标悬停提示\"")
         )
-        // NOTE：如果替换形式是 $t("首页") → result.contains("\"首页\"") 会 TRUE，所以判断是
-        //       「如果命中字符串字面量，就必须紧邻包在 $t( 调用里」，而不是字面量 0 出现。
+        // NOTE：如果替换形式是 t("首页") → result.contains("\"首页\"") 会 TRUE，所以判断是
+        //       「如果命中字符串字面量，就必须紧邻包在 t( 调用里」，而不是字面量 0 出现。
         assertFalse(
             "tabs 数组中 '首页' 不应残留裸硬编码（应包进 \$t(\"首页\") 形式），got:\n$result",
-            (result.contains("\"首页\"") && !result.contains("\$t(\"首页\"")) ||
-                (result.contains("'首页'") && !result.contains("\$t('首页')"))
+            (result.contains("\"首页\"") && !result.contains("t(\"首页\"")) ||
+                (result.contains("'首页'") && !result.contains("t('首页')"))
         )
         assertFalse(
             "tabs 数组中 '发现页' 不应残留裸硬编码，got:\n$result",
-            (result.contains("\"发现页\"") && !result.contains("\$t(\"发现页\"")) ||
-                (result.contains("'发现页'") && !result.contains("\$t('发现页')"))
+            (result.contains("\"发现页\"") && !result.contains("t(\"发现页\"")) ||
+                (result.contains("'发现页'") && !result.contains("t('发现页')"))
         )
         assertFalse(
             "tabs 数组中 '我的' 不应残留裸硬编码，got:\n$result",
-            (result.contains("\"我的\"") && !result.contains("\$t(\"我的\"")) ||
-                (result.contains("'我的'") && !result.contains("\$t('我的')"))
+            (result.contains("\"我的\"") && !result.contains("t(\"我的\"")) ||
+                (result.contains("'我的'") && !result.contains("t('我的')"))
         )
         assertFalse(
             "Button label=\"主按钮\" 不应残留裸硬编码，got:\n$result",
-            (result.contains("\"主按钮\"") && !result.contains("\$t(\"主按钮\"")) ||
-                (result.contains("'主按钮'") && !result.contains("\$t('主按钮')"))
+            (result.contains("\"主按钮\"") && !result.contains("t(\"主按钮\"")) ||
+                (result.contains("'主按钮'") && !result.contains("t('主按钮')"))
         )
     }
 

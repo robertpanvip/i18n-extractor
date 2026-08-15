@@ -166,7 +166,10 @@ object MergeApplier {
         pairs: List<Pair<String, String>>,
     ): Map<String, Pair<String, String>> {
         val result = mutableMapOf<String, Pair<String, String>>()
-        val vuePrefix = I18nSettings.getInstance().vuePlaceholderPrefix()
+        // 纯函数：仅在存在 Application（插件运行上下文）时才读取设置里的前缀，
+        // 否则回退默认 "N"，保证纯单元测试（无平台）也能运行。
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        val vuePrefix = if (app != null) I18nSettings.getInstance().vuePlaceholderPrefix() else "N"
         pairs.forEachIndexed { i, (key, _) ->
             require(key.startsWith("N")) { "placeholder keys should be N0/N1 form" }
             val rawIndex = key.substring(1).toIntOrNull() ?: i

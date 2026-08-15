@@ -151,7 +151,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
             val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
             if (existingVars.none { it.text.contains("useTranslation") }) {
                 val hookStmt = processor.createJSStatementFromText(
-                    "\n    const { t: \$t } = useTranslation();",
+                    "\n    const { t } = useTranslation();",
                     func
                 )
                 // 插入到 body 的 '{' 之后（即第一个 LeafElement 之后）
@@ -373,14 +373,20 @@ class I18nImportInjector(private val processor: I18nProcessor) {
                     }
             }
         }
-        // React 版：检查是否已经存在 `const $t = getI18n().t`
+        // React 版：检查是否已经存在 `const t = getI18n().t`（或兼容老写法 `const $t = getI18n().t`）
         fun hasReactGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val reSimple = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+            val reT = Regex("""const\s+t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+            val reDollarT = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+            val reTLocale = Regex("""const\s+t\s*=\s*i18n\s*\.\s*t""")
             return vars.any {
-                reSimple.containsMatchIn(it.text) ||
+                reT.containsMatchIn(it.text) ||
+                    reDollarT.containsMatchIn(it.text) ||
+                    reTLocale.containsMatchIn(it.text) ||
                     it.text.replace("\\s+", "").let { t ->
-                        t.contains("const\$t=getI18n().t")
+                        t.contains("constt=getI18n().t") ||
+                            t.contains("const\$t=getI18n().t") ||
+                            t.contains("constt=i18n.t")
                     }
             }
         }
@@ -456,9 +462,9 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         }
         val dollarTText: String? = when {
             isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
-            // React $t 别名：locale → i18n.t；回退 → getI18n().t
+            // React t 别名：locale → i18n.t；回退 → getI18n().t
             !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
-                if (reactLocaleImport != null) "const \$t = i18n.t;\n" else "const \$t = getI18n().t;\n"
+                if (reactLocaleImport != null) "const t = i18n.t;\n" else "const t = getI18n().t;\n"
             // React i18n.t 语义 + 回退 getI18n：注入 const i18n = getI18n() 保持 i18n 标识符可用
             reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
             else -> null
