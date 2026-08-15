@@ -1,69 +1,106 @@
 # I18n-Extractor
 
-> IntelliJ IDEA 插件，一键提取 Vue / React 项目中的中文字符串，自动替换为 i18n 国际化调用。
+> An IntelliJ IDEA plugin that extracts hard-coded strings (Chinese, Japanese, Korean, English, and more) from Vue / React projects and replaces them with i18n calls in one click.
+
+[简体中文](README.zh-CN.md) | English
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![GitHub release](https://img.shields.io/github/v/release/robertpanvip/i18n-extractor?color=blue)
 ![Tests](https://github.com/robertpanvip/i18n-extractor/actions/workflows/test.yml/badge.svg)
 
-## 功能特性
+## Features
 
-- **多框架支持**：自动识别 Vue / React 项目，分别使用 vue-i18n 和 react-i18next 语法
-- **智能提取**：扫描模板文本、属性值、TS 字符串字面量、字符串拼接、模板字面量
-- **自动注入**：自动添加 import 语句和 hook 声明（Vue 的 `useI18n` / React 的 `useTranslation`）
-- **幂等安全**：跳过已国际化的文本，不会重复提取
-- **批量处理**：支持单文件提取和项目级批量提取
-- **JSON 导出**：提取结果自动格式化为 JSON，一键复制到剪贴板
-- **撤销支持**：所有修改包裹在 WriteCommandAction 中，完整支持 Ctrl+Z 撤销
-- **模板插值**：支持 `${变量}` 模板字符串插值，自动转换为 i18n 插值格式
+- **Multi-framework support**: auto-detects Vue / React projects and uses vue-i18n / react-i18next syntax accordingly
+- **Multi-language extraction**: extracts Chinese, Japanese, Korean, English, French, Russian, German, Spanish, Italian and Portuguese — the target languages are configurable in Settings
+- **Smart extraction**: scans template text, attribute values, TS string literals, string concatenation and template literals
+- **Context-aware**: decides whether a string is user-facing copy based on its role in the syntax tree (text node, attribute, JS string, etc.), not just raw characters
+- **Auto-injection**: automatically adds `import` statements and hook declarations (`useI18n` for Vue / `useTranslation` for React)
+- **Idempotent & safe**: skips already-internationalized text and never re-extracts
+- **Batch processing**: supports both single-file extraction and project-wide batch extraction
+- **JSON export**: formats extraction results as JSON and copies them to the clipboard with one click
+- **Undo support**: all edits are wrapped in `WriteCommandAction`, so Ctrl+Z works fully
+- **Template interpolation**: supports `${variable}` template-literal interpolation and converts it into the i18n placeholder format
+- **Merge suggestions**: automatically detects common prefixes/suffixes and digit placeholders to suggest merging similar strings
 
-## 支持的文件类型
+## Supported File Types
 
-| 类型 | 扩展名 |
-|------|--------|
-| Vue 单文件组件 | `.vue` |
-| React 组件 |  `.tsx` |
+| Type | Extension |
+|------|-----------|
+| Vue single-file components | `.vue` |
+| React components | `.tsx` |
 | TypeScript | `.ts` |
 
-## 安装
+## Supported Languages
 
-### 从 JetBrains Marketplace 安装
+| Language | Code | Notes |
+|----------|------|-------|
+| Chinese | `zh` | CJK ideographs, enabled by default |
+| Japanese | `ja` | Hiragana + Katakana |
+| Korean | `ko` | Hangul syllables |
+| English | `en` | Sentence/phrase heuristic (Approach A) |
+| French | `fr` | Accented characters |
+| Russian | `ru` | Cyrillic |
+| German | `de` | Umlauts + `ß` |
+| Spanish | `es` | `ñ` + accented vowels |
+| Italian | `it` | Accented vowels |
+| Portuguese | `pt` | Tilde vowels |
 
-在 IDE 中打开 `Settings → Plugins → Marketplace`，搜索 **I18n-Extractor** 安装。
+> Note: Latin-script languages (English, French, German, Spanish, Italian, Portuguese) overlap on pure-ASCII text. Each is detected deterministically via its distinctive characters; pure-ASCII text is only picked up by the English heuristic. This is a known and intentional trade-off.
 
-### 手动安装
+## Installation
 
-1. 前往 [Releases](https://github.com/robertpanvip/i18n-extractor/releases) 下载最新的 `.zip` 包
-2. 在 IDE 中打开 `Settings → Plugins → ⚙ → Install Plugin from Disk...`
-3. 选择下载的 zip 文件，重启 IDE
+### From the JetBrains Marketplace
 
-## 使用方法
+Open `Settings → Plugins → Marketplace` in your IDE, search **I18n-Extractor** and install it.
 
-### 单文件提取
+### Manual installation
 
-1. 打开 `.vue` / `.tsx` / `.ts` 文件
-2. 在编辑器中右键 → **中文国际化提取**
-3. 预览提取结果 JSON，确认后点击 OK
-4. 代码自动替换为 `$t()` 调用，JSON 自动复制到剪贴板
+1. Download the latest `.zip` from [Releases](https://github.com/robertpanvip/i18n-extractor/releases)
+2. Open `Settings → Plugins → ⚙ → Install Plugin from Disk...` in your IDE
+3. Select the downloaded zip and restart the IDE
 
-### 项目级批量提取
+## Usage
 
-1. 打开 `Refactor` 菜单 → **项目中文国际提取**
-2. 插件会根据 `tsconfig.json` 的 `include` 配置扫描匹配的文件
-3. 预览所有提取结果，确认后批量替换
+### Single-file extraction
 
-## 转换示例
+1. Open a `.vue` / `.tsx` / `.ts` file
+2. Right-click in the editor → **I18n Extraction**
+3. Preview the extracted JSON, confirm with OK
+4. Code is automatically replaced with `$t()` calls, and the JSON is sent to the configured output (clipboard / file / ask)
 
-### Vue 模板
+### Project-level batch extraction
+
+1. Open the `Refactor` menu → **Project I18n Extraction**
+2. The plugin scans matching files based on the `include` configuration of `tsconfig.json`
+3. Preview all extractions, confirm and apply the batch replacement
+
+## Settings
+
+Open `Settings → Tools → I18n Extractor`:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| Target languages | Which languages to extract (multi-select) | Chinese only |
+| Output destination | Clipboard / Write to file / Ask every time | Ask every time |
+| Min string length | Strings shorter than this are not extracted | 1 |
+| Merge affix threshold | Combined common prefix/suffix chars required to generate a merge suggestion | 2 |
+| Exclude directories | Directory names skipped during scanning (comma-separated) | `node_modules, .git, dist, ...` |
+| Custom translation dirs | Extra translation-resource directory names (comma-separated) | *(empty)* |
+
+The output destination controls behaviour after extraction: choosing **Clipboard** or **Write to file** skips the dialog prompt and outputs directly; choosing **Ask every time** shows the options in the dialog (backward compatible).
+
+## Conversion Examples
+
+### Vue template
 
 ```vue
-<!-- 转换前 -->
+<!-- Before -->
 <template>
   <div>你好，世界</div>
   <button type="primary" @click="handleSubmit">确定</button>
 </template>
 
-<!-- 转换后 -->
+<!-- After -->
 <template>
   <div>{{ $t('你好，世界') }}</div>
   <button type="primary" @click="handleSubmit">{{ $t('确定') }}</button>
@@ -75,15 +112,15 @@ const { t: $t } = useI18n();
 </script>
 ```
 
-### React 组件
+### React component
 
 ```tsx
-// 转换前
+// Before
 export default function App() {
   return <div title="提示信息">你好</div>
 }
 
-// 转换后
+// After
 import { useTranslation } from 'react-i18next';
 
 export default function App() {
@@ -92,85 +129,94 @@ export default function App() {
 }
 ```
 
-### 模板字符串插值
+### Template-literal interpolation
 
 ```ts
-// 转换前
+// Before
 const msg = `欢迎，${userName}！`
 
-// 转换后（Vue）
+// After (Vue)
 const msg = $t('欢迎，{0}！', { "0": userName })
 
-// 转换后（React）
+// After (React)
 const msg = $t('欢迎，{{0}}！', { "0": userName })
 ```
 
-## 提取规则
+## Extraction Rules
 
-### 会被提取的内容
+### What gets extracted
 
-- Vue 模板中的纯文本节点：`<div>中文</div>`
-- Vue 属性值（含指令动态绑定内的字符串）
-- React JSX 文本节点和属性值
-- JS/TS 中的字符串字面量：`'中文'`、`"中文"`、`` `中文` ``
-- 字符串拼接：`"你好" + name`
-- 模板字面量：`` `欢迎，${name}` ``
+- Plain text nodes in Vue templates: `<div>中文</div>`
+- Vue attribute values (including strings inside dynamic directive bindings)
+- React JSX text nodes and attribute values
+- JS/TS string literals: `'中文'`, `"中文"`, `` `中文` ``
+- String concatenation: `"你好" + name`
+- Template literals: `` `欢迎，${name}` ``
+- Explicit string literals inside directives such as `:title="'中文'"`
 
-### 不会被提取的内容
+### What does NOT get extracted
 
-- 已国际化的文本：`$t('xxx')`、`t('xxx')`
-- 注释中的文本
-- `<style>` 标签内的文本
-- TypeScript 枚举成员值（运行时不支持 `$t()`，会报 TS18033）
-- 纯英文/数字/符号字符串
-- `Enum['中文']` 索引访问
+- Already-internationalized text: `$t('xxx')`, `t('xxx')`
+- Text inside comments
+- Text inside `<style>` tags
+- TypeScript enum member values (not supported at runtime, would raise TS18033)
+- Pure English/symbol/pre-existing-code strings that are `$t` calls or identifiers
+- `Enum['中文']` indexed access
+- Strings shorter than the configured minimum length
 
-## 项目结构
+## Project Structure
 
 ```
 src/
 ├── main/kotlin/com/pan/extractor/
-│   ├── AllI18nExtractorAction.kt    # 项目级批量提取 Action
-│   ├── I18nExtractorAction.kt       # 单文件提取 Action
-│   ├── I18nProcessor.kt             # 核心提取与替换逻辑
-│   ├── ExtractedStringsDialog.kt    # 结果预览对话框
-│   └── Util.kt                      # 工具函数（React/Vue 检测等）
+│   ├── AllI18nExtractorAction.kt       # Project-level batch extraction action
+│   ├── I18nExtractorAction.kt          # Single-file extraction action
+│   ├── I18nProcessor.kt                # Core extraction & replacement logic
+│   ├── LanguageExtractor.kt            # Pluggable multi-language extractors (zh/ja/ko/en/fr/ru/de/es/it/pt)
+│   ├── I18nSettings.kt                 # Global settings & persistence
+│   ├── I18nSettingsConfigurable.kt     # Settings panel (Settings → Tools → I18n Extractor)
+│   ├── CommonPrefixSuffixFactorizer.kt # Merge-suggestion factorizer (prefix/suffix & digit groups)
+│   ├── MergeApplier.kt                 # Applies merge suggestions to code & resource files
+│   ├── ExtractedStringsDialog.kt       # Result preview dialog
+│   └── Util.kt                         # Utilities (framework detection, write-back, etc.)
 ├── main/resources/META-INF/
-│   └── plugin.xml                   # 插件配置
+│   └── plugin.xml                      # Plugin configuration
 └── test/kotlin/com/pan/extractor/
-    ├── I18nProcessorTest.kt         # JS/TS 通用逻辑测试（34 例）
-    ├── VueI18nProcessorTest.kt      # Vue 专属测试（22 例）
-    └── ReactI18nProcessorTest.kt    # React 专属测试（12 例）
+    ├── I18nProcessorTest.kt            # JS/TS general logic tests
+    ├── VueI18nProcessorTest.kt         # Vue-specific tests
+    ├── ReactI18nProcessorTest.kt       # React-specific tests
+    ├── LanguageExtractorSettingsTest.kt# Multi-language & settings tests
+    └── ...                             # Merge, write-back, factorizer and regression tests
 ```
 
-## 开发
+## Development
 
-### 环境要求
+### Requirements
 
-- JDK 25+
+- JDK 21+
 - Gradle 9.0+
 
-### 构建
+### Build
 
 ```bash
 ./gradlew build
 ```
 
-### 运行测试
+### Run tests
 
 ```bash
 ./gradlew test
 ```
 
-### 本地调试
+### Local debug
 
 ```bash
 ./gradlew runIde
 ```
 
-## 贡献
+## Contributing
 
-欢迎提交 Issue 和 Pull Request！
+Issues and Pull Requests are welcome!
 
 ## License
 
