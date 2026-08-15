@@ -1,7 +1,10 @@
 package com.pan.extractor
 
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiLanguageInjectionHost
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -100,5 +103,26 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         val text = doc.getText(d.range)
         assertTrue("折叠范围应覆盖整个调用，实际: $text", text.contains("\$t"))
         assertTrue("折叠范围应含 key，实际: $text", text.contains("你好世界"))
+    }
+
+    fun testFoldVueTemplateInterpolation() {
+        val file = configureFile(
+            "src/App.vue",
+            """
+            <template>
+              <div>{{ ${'$'}t('你好世界') }}</div>
+            </template>
+            """.trimIndent()
+        )
+        // Vue 模板插值会被注入为 VueJS PSI，折叠实际作用于注入片段。
+        val inj = InjectedLanguageManager.getInstance(project)
+        val host = PsiTreeUtil.collectElementsOfType(
+            file, PsiLanguageInjectionHost::class.java
+        ).firstOrNull { it.text.contains("${'$'}t") }!!
+        val injected = inj.getInjectedPsiFiles(host)!!.first().first
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+        assertTrue("Vue 模板插值应折叠", descriptors.isNotEmpty())
+        assertEquals("占位文本应为翻译值", "你好世界", descriptors.first().placeholderText)
     }
 }

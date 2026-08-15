@@ -3,6 +3,7 @@ package com.pan.extractor
 import com.intellij.lang.ASTNode
 import com.intellij.lang.folding.FoldingBuilderEx
 import com.intellij.lang.folding.FoldingDescriptor
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
@@ -25,7 +26,11 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
 
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
-        val messages = LocaleMessages.loadCached(project, root.containingFile)
+        val containingFile = root.containingFile ?: return FoldingDescriptor.EMPTY_ARRAY
+        // 对注入代码（如 Vue 模板插值 {{ $t('x') }}）折叠时，root 是注入片段；
+        // 翻译入口需基于其所属的顶层源文件定位，故映射回宿主文件。
+        val contextFile = InjectedLanguageManager.getInstance(project).getTopLevelFile(containingFile) ?: containingFile
+        val messages = LocaleMessages.loadCached(project, contextFile)
         if (messages.isEmpty()) return FoldingDescriptor.EMPTY_ARRAY
 
         val descriptors = mutableListOf<FoldingDescriptor>()

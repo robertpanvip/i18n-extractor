@@ -17,8 +17,17 @@ object LocaleMessages {
 
     private data class CacheKey(val entryPath: String, val displayLang: String, val modStamp: Long)
 
-    /** 按入口文件路径 + 修改时间缓存，文件改动后自动失效。 */
-    private val cache = java.util.concurrent.ConcurrentHashMap<CacheKey, Map<String, String>>()
+    /** 缓存上限：防止长期打开大量项目时内存无限增长。 */
+    private const val MAX_CACHE_ENTRIES = 200
+
+    private val cacheLock = Any()
+
+    /** 按入口文件路径 + 修改时间缓存，文件改动后自动失效；LRU 淘汰，容量有上限。 */
+    private val cache = object : java.util.LinkedHashMap<CacheKey, Map<String, String>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<CacheKey, Map<String, String>>
+        ): Boolean = size > MAX_CACHE_ENTRIES
+    }
 
     /** 折叠场景使用的带缓存入口：按当前折叠展示语言解析翻译资源。 */
     fun loadCached(project: Project, contextPsiFile: PsiFile?): Map<String, String> {
@@ -28,7 +37,10 @@ object LocaleMessages {
             ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
             ?: return emptyMap()
         val key = CacheKey(entry.path, displayLang, entry.modificationStamp)
-        return cache.getOrPut(key) { parseEntry(project, entry) }
+        synchronized(cacheLock) {
+            cache[key]?.let { return it }
+            return parseEntry(project, entry).also { cache[key] = it }
+        }
     }
 
     /** 按折叠展示语言解析出扁平 key→文案 映射；解析失败返回空 map（不抛错）。 */

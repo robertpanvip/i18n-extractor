@@ -48,6 +48,9 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
         <lang.folding
                 language="JavaScript"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.folding
+                language="VueJS"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->
