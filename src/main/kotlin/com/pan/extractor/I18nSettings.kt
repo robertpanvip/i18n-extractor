@@ -6,8 +6,28 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 
 /**
+ * 提取结果的输出去向（全局设置，默认「每次询问」）。
+ *  - [CLIPBOARD]：明确选「剪贴板」→ 每次提取后直接把 JSON 复制到剪贴板，不再弹窗询问。
+ *  - [FILE]：明确选「写入文件」→ 每次提取后自动写回入口多语言文件，不再弹窗询问。
+ *  - [ASK]：每次弹窗时展示输出方式选项（默认，向后兼容）。
+ */
+enum class OutputDestination(val label: String) {
+    CLIPBOARD("剪贴板"),
+    FILE("写入文件"),
+    ASK("每次询问");
+
+    companion object {
+        fun safeValueOf(raw: String?): OutputDestination = when (raw?.trim()) {
+            "CLIPBOARD" -> CLIPBOARD
+            "FILE" -> FILE
+            else -> ASK
+        }
+    }
+}
+
+/**
  * 插件全局设置（应用级，跨项目共享）。
- * 目前只存“目标语言集合”——用户勾选要提取的语言，默认只启用中文（向后兼容）。
+ * 目前存“目标语言集合”与“输出去向”（默认每次询问）。
  */
 @State(
     name = "I18nExtractorSettings",
@@ -50,9 +70,19 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
     /** 当前启用语言的全部 locale 命名候选（去重）。 */
     fun activeLocaleCandidates(): List<String> =
         activeExtractors().flatMap { it.localeNameCandidates() }.distinct()
+
+    /** 当前输出去向（默认「每次询问」）。 */
+    fun outputDestination(): OutputDestination =
+        OutputDestination.safeValueOf(state.outputDestination)
+
+    /** 更新输出去向。 */
+    fun setOutputDestination(d: OutputDestination) {
+        state.outputDestination = d.name
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
 class I18nSettingsState {
     var languageIds: MutableSet<String> = mutableSetOf("zh")
+    var outputDestination: String = OutputDestination.ASK.name
 }

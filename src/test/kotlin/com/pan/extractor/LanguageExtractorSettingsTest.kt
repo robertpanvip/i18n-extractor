@@ -19,17 +19,21 @@ import org.junit.Assert.assertTrue
 class LanguageExtractorSettingsTest : BasePlatformTestCase() {
 
     private lateinit var originalIds: Set<String>
+    private lateinit var originalDest: OutputDestination
 
     override fun setUp() {
         super.setUp()
         originalIds = I18nSettings.getInstance().languageIds().toSet()
+        originalDest = I18nSettings.getInstance().outputDestination()
         // 每测从干净默认开始
         I18nSettings.getInstance().setLanguageIds(listOf("zh"))
+        I18nSettings.getInstance().setOutputDestination(OutputDestination.ASK)
     }
 
     override fun tearDown() {
         try {
             I18nSettings.getInstance().setLanguageIds(originalIds)
+            I18nSettings.getInstance().setOutputDestination(originalDest)
         } finally {
             super.tearDown()
         }
@@ -492,5 +496,39 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         val found = Util.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用葡语后应命中 pt 入口", found)
         assertTrue("应命中 src/locales/pt.ts，实际：${found?.path}", found!!.path.endsWith("locales/pt.ts"))
+    }
+
+    // ─────────────────────────────────────────
+    // 输出去向设置（剪贴板 / 写入文件 / 每次询问）
+    // ─────────────────────────────────────────
+
+    fun testOutputDestinationDefaultsToAsk() {
+        assertEquals("默认应为「每次询问」", OutputDestination.ASK, I18nSettings.getInstance().outputDestination())
+    }
+
+    fun testOutputDestinationSafeValueOf() {
+        assertEquals(OutputDestination.CLIPBOARD, OutputDestination.safeValueOf("CLIPBOARD"))
+        assertEquals(OutputDestination.FILE, OutputDestination.safeValueOf("FILE"))
+        assertEquals(OutputDestination.ASK, OutputDestination.safeValueOf("ASK"))
+        assertEquals("空值回退为每次询问", OutputDestination.ASK, OutputDestination.safeValueOf(null))
+        assertEquals("未知值回退为每次询问", OutputDestination.ASK, OutputDestination.safeValueOf("WHATEVER"))
+    }
+
+    fun testOutputDestinationRoundTrip() {
+        assertEquals(OutputDestination.CLIPBOARD, OutputDestination.valueOf(
+            I18nSettings.getInstance().run {
+                setOutputDestination(OutputDestination.CLIPBOARD); outputDestination().name
+            }
+        ))
+        assertEquals(OutputDestination.FILE, OutputDestination.valueOf(
+            I18nSettings.getInstance().run {
+                setOutputDestination(OutputDestination.FILE); outputDestination().name
+            }
+        ))
+        assertEquals(OutputDestination.ASK, OutputDestination.valueOf(
+            I18nSettings.getInstance().run {
+                setOutputDestination(OutputDestination.ASK); outputDestination().name
+            }
+        ))
     }
 }
