@@ -25,6 +25,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     private lateinit var originalExclude: Set<String>
     private lateinit var originalCustomDirs: List<String>
     private var originalVuePrefix: String = "N"
+    private var originalFoldLang: String = "zh"
 
     override fun setUp() {
         super.setUp()
@@ -35,6 +36,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         originalExclude = I18nSettings.getInstance().excludeDirs()
         originalCustomDirs = I18nSettings.getInstance().customTranslationDirs()
         originalVuePrefix = I18nSettings.getInstance().vuePlaceholderPrefix()
+        originalFoldLang = I18nSettings.getInstance().foldDisplayLanguage()
         // 每测从干净默认开始
         I18nSettings.getInstance().setLanguageIds(listOf("zh"))
         I18nSettings.getInstance().setOutputDestination(OutputDestination.ASK)
@@ -45,6 +47,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         )
         I18nSettings.getInstance().setCustomTranslationDirs(emptyList())
         I18nSettings.getInstance().setVuePlaceholderPrefix("N")
+        I18nSettings.getInstance().setFoldDisplayLanguage("zh")
     }
 
     override fun tearDown() {
@@ -56,6 +59,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
             I18nSettings.getInstance().setExcludeDirs(originalExclude)
             I18nSettings.getInstance().setCustomTranslationDirs(originalCustomDirs)
             I18nSettings.getInstance().setVuePlaceholderPrefix(originalVuePrefix)
+            I18nSettings.getInstance().setFoldDisplayLanguage(originalFoldLang)
         } finally {
             super.tearDown()
         }
@@ -110,6 +114,17 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertEquals("空值应钳制回默认 N（vue-i18n 不支持数字 key）", "N", s.vuePlaceholderPrefix())
         s.setVuePlaceholderPrefix("")
         assertEquals("空值应钳制回默认 N", "N", s.vuePlaceholderPrefix())
+    }
+
+    fun testFoldDisplayLanguageDefaultAndCoerce() {
+        val s = I18nSettings.getInstance()
+        assertEquals("默认应为 zh", "zh", s.foldDisplayLanguage())
+        s.setFoldDisplayLanguage("en")
+        assertEquals("en", s.foldDisplayLanguage())
+        s.setFoldDisplayLanguage("xx")
+        assertEquals("非法语言应钳制回默认 zh", "zh", s.foldDisplayLanguage())
+        s.setFoldDisplayLanguage("ja")
+        assertEquals("ja", s.foldDisplayLanguage())
     }
 
     fun testChineseJudge() {

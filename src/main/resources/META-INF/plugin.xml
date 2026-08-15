@@ -45,6 +45,9 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
                 id="com.pan.extractor.settings"
                 displayName="I18n Extractor"
                 instance="com.pan.extractor.I18nSettingsConfigurable"/>
+        <lang.folding
+                language="JavaScript"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->

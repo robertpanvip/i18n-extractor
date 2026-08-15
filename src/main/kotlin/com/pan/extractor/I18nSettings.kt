@@ -127,6 +127,17 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
         val p = v.trim()
         state.vuePlaceholderPrefix = if (p.isEmpty()) "N" else p
     }
+
+    /** $t() 折叠展示所用语言 id（默认 `zh`）。 */
+    fun foldDisplayLanguage(): String {
+        val id = state.foldDisplayLanguage
+        return if (LanguageRegistry.byId(id) != null) id else DEFAULT_LANG
+    }
+
+    /** 更新 $t() 折叠展示语言 id。 */
+    fun setFoldDisplayLanguage(id: String) {
+        state.foldDisplayLanguage = if (LanguageRegistry.byId(id) != null) id else DEFAULT_LANG
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
@@ -139,4 +150,5 @@ class I18nSettingsState {
         mutableSetOf("node_modules", ".git", "dist", "build", ".next", ".nuxt", "out")
     var customTranslationDirs: MutableList<String> = mutableListOf()
     var vuePlaceholderPrefix: String = "N"
+    var foldDisplayLanguage: String = "zh"
 }

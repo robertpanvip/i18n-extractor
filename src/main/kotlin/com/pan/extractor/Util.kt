@@ -974,9 +974,8 @@ object Util {
     // ==========================================================================
 
     /** 找目标语言语言包入口文件的常见基名（不带扩展名）。 */
-    private fun isTargetLocaleBasename(stem: String): Boolean {
+    private fun isTargetLocaleBasename(stem: String, candidates: List<String>, extractors: List<LanguageExtractor>): Boolean {
         val lower = stem.lowercase()
-        val candidates = I18nSettings.getInstance().activeLocaleCandidates()
         // 直接相等
         if (candidates.any { it.equals(lower, ignoreCase = true) }) return true
         // messages.zh-CN / i18n.ja / translations.ko_KR 这种
@@ -988,7 +987,7 @@ object Util {
                 candidates.any { it.equals(suffix, ignoreCase = true) }) return true
         }
         // 兜底：<langtag><region>（zhCN / jaJP / koKR 等）
-        for (ex in I18nSettings.getInstance().activeExtractors()) {
+        for (ex in extractors) {
             val tag = ex.langTagPrefix
             if (lower.length in 4..7 && lower.startsWith(tag)) {
                 val rest = lower.drop(tag.length)
@@ -1008,6 +1007,28 @@ object Util {
      * @return 命中的 VirtualFile 或 null
      */
     fun findChineseLocaleEntryFile(project: Project, contextPsiFile: PsiFile?): VirtualFile? {
+        val settings = I18nSettings.getInstance()
+        return findEntryFile(project, contextPsiFile, settings.activeLocaleCandidates(), settings.activeExtractors())
+    }
+
+    /**
+     * 查找"指定语言"的翻译入口文件（用于 $t() 折叠展示）。
+     * 复用 [findChineseLocaleEntryFile] 的定位逻辑，但只匹配给定语言（[extractor]）。
+     * 若项目中找不到该语言的独立文件，回退到默认目标语言入口文件。
+     */
+    fun findLocaleFileForLanguage(project: Project, contextPsiFile: PsiFile?, extractor: LanguageExtractor): VirtualFile? {
+        val candidates = extractor.localeNameCandidates()
+        val hit = findEntryFile(project, contextPsiFile, candidates, listOf(extractor))
+        if (hit != null) return hit
+        return findChineseLocaleEntryFile(project, contextPsiFile)
+    }
+
+    private fun findEntryFile(
+        project: Project,
+        contextPsiFile: PsiFile?,
+        candidates: List<String>,
+        extractors: List<LanguageExtractor>,
+    ): VirtualFile? {
         // 1) 用户持久化的路径
         val stored = getStoredEntryPath(project)
         if (stored != null) {
@@ -1038,7 +1059,7 @@ object Util {
                 val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
                 if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
                 val nameNoExt = vf.nameWithoutExtension
-                if (isTargetLocaleBasename(nameNoExt)) vf else null
+                if (isTargetLocaleBasename(nameNoExt, candidates, extractors)) vf else null
             }
             if (hit != null) return hit
         }
@@ -1052,23 +1073,22 @@ object Util {
             if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
             // 目录段命中翻译目录 or 基名像目标语言 locale
             val pathLike = isTranslationResourceFile(vf.name, vf.path)
-            val baseLike = isTargetLocaleBasename(vf.nameWithoutExtension)
-            if ((pathLike || baseLike) && isTargetLocalePathHit(vf)) {
+            val baseLike = isTargetLocaleBasename(vf.nameWithoutExtension, candidates, extractors)
+            if ((pathLike || baseLike) && isTargetLocalePathHit(vf, candidates, extractors)) {
                 vf
             } else null
         }
     }
 
-    /** 判断文件路径/基名是否严格命中任一已启用语言的标识（locale 候选 或 `<tag><region>`）。 */
-    private fun isTargetLocalePathHit(vf: VirtualFile): Boolean {
+    /** 判断文件路径/基名是否严格命中指定语言集合的标识（locale 候选 或 `<tag><region>`）。 */
+    private fun isTargetLocalePathHit(vf: VirtualFile, candidates: List<String>, extractors: List<LanguageExtractor>): Boolean {
         val nameNoExt = vf.nameWithoutExtension
-        val candidates = I18nSettings.getInstance().activeLocaleCandidates()
         if (candidates.any { nameNoExt.contains(it, ignoreCase = true) }) return true
         // 路径段精确命中 locale 候选（如目录 zh-CN / en-US / ja-JP）
         val segments = vf.path.split('/').map { it.lowercase() }
         if (segments.any { seg -> candidates.any { it.lowercase() == seg } }) return true
         // 兜底：<tag><region>（zhCN / enUS / jaJP 等）
-        for (ex in I18nSettings.getInstance().activeExtractors()) {
+        for (ex in extractors) {
             val lower = nameNoExt.lowercase()
             val tag = ex.langTagPrefix
             if (lower.length in 4..7 && lower.startsWith(tag)) {
@@ -1168,9 +1188,12 @@ object Util {
 
     /** 从引用列表中选出目标：优先 locale 配置对应的语言，其次命中目标语言 locale 命名，再其次语言前缀，最后第一个。 */
     private fun pickChineseRef(refs: List<Pair<String, String>>, localeCode: String?): Pair<String, String>? {
-        val tags = I18nSettings.getInstance().activeExtractors().map { it.langTagPrefix }
+        val settings = I18nSettings.getInstance()
+        val tags = settings.activeExtractors().map { it.langTagPrefix }
+        val candidates = settings.activeLocaleCandidates()
+        val extractors = settings.activeExtractors()
         return refs.firstOrNull { it.first == localeCode }
-            ?: refs.firstOrNull { isTargetLocaleBasename(it.first) }
+            ?: refs.firstOrNull { isTargetLocaleBasename(it.first, candidates, extractors) }
             ?: refs.firstOrNull { ref -> tags.any { ref.first.lowercase().startsWith(it) } }
             ?: refs.firstOrNull()
     }
@@ -2252,7 +2275,7 @@ object Util {
         return if (path.isEmpty()) k else path.joinToString(".") + "." + k
     }
 
-    private fun readVirtualFileText(project: Project?, vf: VirtualFile): String? {
+    fun readVirtualFileText(project: Project?, vf: VirtualFile): String? {
         return try {
             if (project != null) {
                 val psi = ApplicationManager.getApplication().runReadAction<PsiFile?> {

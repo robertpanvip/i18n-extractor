@@ -7,6 +7,7 @@ import java.awt.GridLayout
 import javax.swing.BorderFactory
 import javax.swing.ButtonGroup
 import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -35,6 +36,7 @@ class I18nSettingsConfigurable : Configurable {
     private var excludeDirsField: JTextField? = null
     private var customDirsField: JTextField? = null
     private var vuePrefixField: JTextField? = null
+    private var foldLangCombo: JComboBox<String>? = null
 
     override fun getDisplayName(): String = "I18n Extractor"
 
@@ -80,6 +82,13 @@ class I18nSettingsConfigurable : Configurable {
         vuePrefixField = JTextField(settings.vuePlaceholderPrefix())
         center.add(vuePrefixField!!)
 
+        center.add(JLabel("\$t() 折叠展示语言:"))
+        foldLangCombo = JComboBox(
+            LanguageRegistry.all.map { "${it.displayName} (${it.id})" }.toTypedArray()
+        )
+        foldLangCombo!!.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
+        center.add(foldLangCombo!!)
+
         root.add(center, BorderLayout.CENTER)
 
         // ── 下半：输出去向单选 ──
@@ -116,7 +125,8 @@ class I18nSettingsConfigurable : Configurable {
         val listChanged = splitList(excludeDirsField?.text) != settings.excludeDirs() ||
             splitList(customDirsField?.text) != settings.customTranslationDirs().toSet()
         val prefixChanged = vuePrefixField?.text?.trim()?.takeIf { it.isNotEmpty() } != settings.vuePlaceholderPrefix()
-        return langChanged || outChanged || numChanged || listChanged || prefixChanged
+        val foldChanged = selectedFoldLangId() != settings.foldDisplayLanguage()
+        return langChanged || outChanged || numChanged || listChanged || prefixChanged || foldChanged
     }
 
     override fun apply() {
@@ -130,6 +140,7 @@ class I18nSettingsConfigurable : Configurable {
         settings.setExcludeDirs(splitList(excludeDirsField?.text))
         settings.setCustomTranslationDirs(splitList(customDirsField?.text))
         vuePrefixField?.text?.let { settings.setVuePlaceholderPrefix(it) }
+        selectedFoldLangId()?.let { settings.setFoldDisplayLanguage(it) }
     }
 
     override fun reset() {
@@ -143,6 +154,7 @@ class I18nSettingsConfigurable : Configurable {
         excludeDirsField?.text = settings.excludeDirs().joinToString(",")
         customDirsField?.text = settings.customTranslationDirs().joinToString(",")
         vuePrefixField?.text = settings.vuePlaceholderPrefix()
+        foldLangCombo?.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
     }
 
     override fun disposeUIResources() {
@@ -154,6 +166,21 @@ class I18nSettingsConfigurable : Configurable {
         excludeDirsField = null
         customDirsField = null
         vuePrefixField = null
+        foldLangCombo = null
+    }
+
+    /** 配置项 "显示名 (id)" → id。 */
+    private fun foldLangLabel(id: String): String {
+        val ex = LanguageRegistry.byId(id) ?: LanguageRegistry.all.firstOrNull()!!
+        return "${ex.displayName} (${ex.id})"
+    }
+
+    /** 从下拉当前选中项解析出语言 id；无法解析返回 null。 */
+    private fun selectedFoldLangId(): String? {
+        val item = foldLangCombo?.selectedItem as? String ?: return null
+        val m = Regex("""\(([a-z]{2})\)\s*$""").find(item)
+        val id = m?.groupValues?.get(1) ?: return null
+        return if (LanguageRegistry.byId(id) != null) id else null
     }
 
     /** 把逗号分隔的文本拆成去空白后的集合。 */

@@ -1,0 +1,104 @@
+package com.pan.extractor
+
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.PsiFile
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+
+/**
+ * $t() 折叠测试：
+ *  - 折叠展示指定语言（默认 zh）的翻译值
+ *  - 仅命中翻译资源中存在的 key
+ *  - 嵌套点号 key / 链式 t() / Vue-模板插值调用均能折叠
+ */
+class I18nFoldingBuilderTest : BasePlatformTestCase() {
+
+    private lateinit var originalFoldLang: String
+
+    override fun setUp() {
+        super.setUp()
+        originalFoldLang = I18nSettings.getInstance().foldDisplayLanguage()
+        I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        // 项目根标记（findProjectRoot 依赖 package.json 定位根）
+        myFixture.addFileToProject("package.json", """{"name":"root"}""")
+        // 中文 locale 入口（含嵌套 key 与普通 key）
+        myFixture.addFileToProject(
+            "src/locales/zh.ts",
+            """
+            export default {
+              '你好世界': '你好世界',
+              'hello': '你好',
+              nested: {
+                'greeting': '嵌套问候'
+              }
+            }
+            """.trimIndent()
+        )
+    }
+
+    override fun tearDown() {
+        try {
+            I18nSettings.getInstance().setFoldDisplayLanguage(originalFoldLang)
+        } finally {
+            super.tearDown()
+        }
+    }
+
+    private fun configureFile(fileName: String, text: String): PsiFile {
+        val psiFile = myFixture.addFileToProject(fileName, text)
+        myFixture.configureFromExistingVirtualFile(psiFile.virtualFile)
+        return psiFile
+    }
+
+    private fun fold(text: String): List<com.intellij.lang.folding.FoldingDescriptor> {
+        val file = configureFile("src/App.ts", text)
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        return I18nFoldingBuilder().buildFoldRegions(file, doc, false).toList()
+    }
+
+    fun testFoldShowsTranslationValueForDirectTCall() {
+        val descriptors = fold("""const a = ${'$'}t('你好世界');""")
+        assertEquals("应折叠 1 处", 1, descriptors.size)
+        assertEquals("占位文本应为翻译值", "你好世界", descriptors.first().placeholderText)
+    }
+
+    fun testFoldTAndChainedCall() {
+        val descriptors = fold(
+            """
+            const a = t('你好世界');
+            const b = i18n.t('hello');
+            """.trimIndent()
+        )
+        assertEquals("应折叠 2 处", 2, descriptors.size)
+        val placeholders = descriptors.map { it.placeholderText }.toSet()
+        assertTrue("应含「你好世界」", placeholders.contains("你好世界"))
+        assertTrue("应含链式 t 的「你好」", placeholders.contains("你好"))
+    }
+
+    fun testFoldNestedDottedKey() {
+        val descriptors = fold("""const a = ${'$'}t('nested.greeting');""")
+        assertEquals("应折叠 1 处", 1, descriptors.size)
+        assertEquals("嵌套点号 key 应命中", "嵌套问候", descriptors.first().placeholderText)
+    }
+
+    fun testUnknownKeyNotFolded() {
+        val descriptors = fold("""const a = ${'$'}t('不存在的key');""")
+        assertEquals("不存在的 key 不应折叠", 0, descriptors.size)
+    }
+
+    fun testNonTranslationCallNotFolded() {
+        val descriptors = fold("""const a = foo('你好世界');""")
+        assertEquals("非翻译调用不应折叠", 0, descriptors.size)
+    }
+
+    fun testFoldRangeSpansWholeCall() {
+        val file = configureFile("src/Range.ts", """const a = ${'$'}t('你好世界');""")
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        val d = descriptors.first()
+        val text = doc.getText(d.range)
+        assertTrue("折叠范围应覆盖整个调用，实际: $text", text.contains("\$t"))
+        assertTrue("折叠范围应含 key，实际: $text", text.contains("你好世界"))
+    }
+}
