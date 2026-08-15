@@ -67,7 +67,7 @@ class I18nProcessor(
             }.getOrDefault(1)
     }
 
-    /** 原来的 effects/change 包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
+    /** 原文包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
     class CollectedChange(val siteId: String, private val runnable: () -> Unit) {
         fun run() = runnable()
     }
@@ -75,7 +75,8 @@ class I18nProcessor(
     /** 公开只读访问器，供进度条 UI 显示文件名（progress 线程里调用） */
     val targetPsiFile: PsiElement get() = psiFile
 
-    var effects = mutableListOf<CollectedChange>()
+    /** 待应用的重写动作（collect 阶段收集，execute/run 阶段逐个执行）。 */
+    var pendingChanges = mutableListOf<CollectedChange>()
     val collectedSites = mutableListOf<CollectedSite>()
     val blockedSiteIds = mutableSetOf<String>()
     private var siteCounter = 0
@@ -293,7 +294,7 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
-    fun pureCollect(psiFile: PsiElement): MutableList<CollectedChange> {
+    fun collectFromPsi(psiFile: PsiElement): MutableList<CollectedChange> {
         val changes = mutableListOf<CollectedChange>();
         psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
             override fun visitElement(element: PsiElement) {
@@ -338,8 +339,8 @@ class I18nProcessor(
         // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
         val containingFile = psiFile.containingFile
         if (containingFile != null && Util.isTranslationResourceFile(containingFile)) {
-            effects = mutableListOf()
-            return effects
+            pendingChanges = mutableListOf()
+            return pendingChanges
         }
 
         // —— 旧：React 普通函数预判切换 tFunctionName=i18n.t，然后注入 import i18n from 'i18next'
@@ -394,9 +395,9 @@ class I18nProcessor(
         collectExistingTKeys()
         // collectExistingTKeys 可能会基于现有调用把 tFunctionName 改成 i18n.t（如文件
         // 已经存在 i18n.t('xxx') 调用）——这是对的，不要覆盖回去。
-        val changes = pureCollect(psiFile)
-        effects = changes;
-        return changes;
+        val changes = collectFromPsi(psiFile)
+        pendingChanges = changes
+        return changes
     }
 
     /**
@@ -561,7 +562,7 @@ class I18nProcessor(
         val containingFile = psiFile.containingFile
         if (containingFile != null && Util.isTranslationResourceFile(containingFile)) return
 
-        this.effects.forEach { if (it.siteId !in blockedSiteIds) it.run() }
+        this.pendingChanges.forEach { if (it.siteId !in blockedSiteIds) it.run() }
         val isVue = isVueFile(psiFile.containingFile) || Util.isVue(psiFile)
         val isReact = Util.isReact(psiFile)
         // 需要全局 i18n 实例 import 的场景：
@@ -695,8 +696,8 @@ class I18nProcessor(
         }
     }
 
-    /** 处理整个 Vue 文件，支持 undo */
-    fun execute() {
+    /** 处理整个 Vue/React 文件：包裹 Command + 写操作以支持 undo。 */
+    fun runWithUndo() {
         CommandProcessor.getInstance().executeCommand(
             project,
             {
@@ -913,7 +914,7 @@ class I18nProcessor(
         if (pureText.contains("\$t(") || pureText.contains("i18n.global.t(") || pureText.contains("i18n.t(")) return
 
         // 使用纯文本（过滤注释）检查是否包含目标语言，避免注释中的内容被误提取
-        if (!hasChinese(pureText, SiteKind.TEXT)) {
+        if (!containsTargetLanguage(pureText, SiteKind.TEXT)) {
             return
         }
 
@@ -957,10 +958,10 @@ class I18nProcessor(
         I18nPsiTools.collectTextRun(start)
 
     /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
-    fun hasChinese(text: String): Boolean = I18nPsiTools.hasChinese(text)
+    fun containsTargetLanguage(text: String): Boolean = I18nPsiTools.containsTargetLanguage(text)
 
     /** 按站点上下文（Approach A）判定文本是否命中任一已启用目标语言。 */
-    fun hasChinese(text: String, site: SiteKind): Boolean = I18nPsiTools.hasChinese(text, site)
+    fun containsTargetLanguage(text: String, site: SiteKind): Boolean = I18nPsiTools.containsTargetLanguage(text, site)
 
 
     fun isJSTemplateLiteral(text: String): Boolean = I18nPsiTools.isJSTemplateLiteral(text)
@@ -992,7 +993,7 @@ class I18nProcessor(
             return
         }
         if (originalText.isEmpty()) return
-        if (!hasChinese(originalText, SiteKind.ATTRIBUTE)) {
+        if (!containsTargetLanguage(originalText, SiteKind.ATTRIBUTE)) {
             return
         }
         if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(") || originalText.contains("i18n.t(")) {

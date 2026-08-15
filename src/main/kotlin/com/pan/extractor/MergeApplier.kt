@@ -78,7 +78,7 @@ object MergeApplier {
                 val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
                 val root = site.replaceRootPointer.element ?: continue
                 if (!root.isValid) continue
-                val diffExpr = if (Util.hasChinese(v.diff)) {
+                val diffExpr = if (Util.containsTargetLanguage(v.diff)) {
                     val diffKey = v.diff.trim()
                     finalExtracted.putIfAbsent(diffKey, v.diff)
                     proc.buildTExprForRawText(v.diff, "{}", site.isVue, site.isReact)

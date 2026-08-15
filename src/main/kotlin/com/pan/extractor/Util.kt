@@ -14,7 +14,6 @@ object Util {
     /** 常见 helper：文本中是否包含至少 1 个目标语言的字符。
      *  - 用于判断差异段是否要嵌套 `$t('差异')`（含目标语言→嵌套；纯英文/数字→直接写字符串字面量）。
      *  - 目标语言取决于全局设置（默认仅中文，向后兼容）。*/
-    fun hasChinese(text: CharSequence?): Boolean = containsTargetLanguage(text)
 
     /** 文本是否包含任一“已启用目标语言”的字符（由全局设置决定，默认仅中文）。 */
     fun containsTargetLanguage(text: CharSequence?): Boolean =
@@ -100,27 +99,22 @@ object Util {
     }
 
     // ==========================================================================
-    // 用户输出方式配置：拷贝到剪贴板 / 覆盖入口中文多语言文件
+    // 用户输出方式配置：拷贝到剪贴板 / 覆盖入口中文多语言文件。
+    // 与 [OutputDestination]（全局设置）统一为同一个枚举，此处仅负责
+    // 对话框内“上次选择”的项目级记忆（只使用 CLIPBOARD / FILE 两值）。
     // ==========================================================================
-    enum class OutputMode {
-        COPY_TO_CLIPBOARD,
-        OVERWRITE_ENTRY_FILE;
-
-        companion object {
-            fun safeValueOf(raw: String?): OutputMode = when (raw?.trim()) {
-                "OVERWRITE_ENTRY_FILE" -> OVERWRITE_ENTRY_FILE
-                else -> COPY_TO_CLIPBOARD
-            }
-        }
-    }
-
     private const val PREF_OUTPUT_MODE = "i18n-extractor.output-mode"
     private const val PREF_ENTRY_PATH = "i18n-extractor.entry-path"
 
-    fun getOutputMode(project: Project): OutputMode =
-        OutputMode.safeValueOf(PropertiesComponent.getInstance(project).getValue(PREF_OUTPUT_MODE))
+    /** 读取对话框上次选择的输出方式；ASK 视为未选择，回退剪贴板。 */
+    fun getDialogOutputMode(project: Project): OutputDestination {
+        val raw = OutputDestination.safeValueOf(
+            PropertiesComponent.getInstance(project).getValue(PREF_OUTPUT_MODE)
+        )
+        return if (raw == OutputDestination.ASK) OutputDestination.CLIPBOARD else raw
+    }
 
-    fun setOutputMode(project: Project, mode: OutputMode) {
+    fun setDialogOutputMode(project: Project, mode: OutputDestination) {
         PropertiesComponent.getInstance(project).setValue(PREF_OUTPUT_MODE, mode.name)
     }
 

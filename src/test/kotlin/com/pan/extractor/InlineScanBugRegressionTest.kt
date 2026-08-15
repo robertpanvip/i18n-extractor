@@ -14,7 +14,7 @@ import java.io.File
  * addFileToProject 不会把文件落到 basePath 磁盘上，因此这里直接写磁盘 + 刷新 VFS。
  *
  * 覆盖：
- *   1. tsconfig 存在但没有 include 数组时，getIncludesFile 返回空列表（未回退到全项目扫描）；
+ *   1. tsconfig 存在但没有 include 数组时，resolveScanFiles 返回空列表（未回退到全项目扫描）；
  *   2. findFilesByIncludePatterns 遍历整个项目目录，不排除 node_modules，会把
  *      node_modules 里的文件也当成可翻译源文件返回。
  */

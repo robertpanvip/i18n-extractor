@@ -77,7 +77,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         // 组件场景直接注入 useTranslation，不再回退 getI18n 全局别名
@@ -123,7 +123,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         // 组件场景不再切 locale import（也不回退 getI18n）
@@ -161,7 +161,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertFalse("未导出 i18n 不应切 locale", c.contains("@/i18n") || c.contains("@/locale"))
@@ -195,7 +195,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         val hookCount = c.split("const{t}=useTranslation()").size - 1
@@ -220,7 +220,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("箭头组件应注入 useTranslation", c.contains("const{t}=useTranslation()"))
@@ -244,7 +244,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("自定义 hook 应注入 useTranslation", c.contains("const{t}=useTranslation()"))
@@ -271,7 +271,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         val hookCount = c.split("const{t}=useTranslation()").size - 1
@@ -298,7 +298,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("JSX 属性里的 i18n.t 应保留", c.contains("title={i18n.t(\"提示\")}"))
@@ -320,7 +320,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("模板字符串 i18n.t 应保留", c.contains("i18n.t(`模板文本`)"))
@@ -342,7 +342,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("i18n.tc 应保留并带数量参数", c.contains("i18n.tc(\"用户\",2)"))
@@ -364,7 +364,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertTrue("嵌套 i18n.t 应保留", c.contains("i18n.t(i18n.t(\"内层\"))"))
@@ -399,7 +399,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         // useTranslation 仅一次（import 一次 + 调用一次，调用只在此处）
@@ -435,7 +435,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertEquals("getI18n import 应恰好一次", 1, c.split("import{getI18n}from'react-i18next'").size - 1)
@@ -463,7 +463,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         assertEquals("getI18n import 应恰好一次", 1, c.split("import{getI18n}from'react-i18next'").size - 1)
@@ -492,7 +492,7 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val c = compact(file)
         // 已有 i18n from i18next → hasI18nInstanceImported=true → 不回退 getI18n

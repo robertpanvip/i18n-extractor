@@ -76,7 +76,7 @@ class I18nExtractorAction : AnAction() {
         val entryVf = dialog.selectedEntryFile
         val jsonPretty = prettyGson.toJson(finalFlatJson)
 
-        if (mode == Util.OutputMode.OVERWRITE_ENTRY_FILE && entryVf != null) {
+        if (mode == OutputDestination.FILE && entryVf != null) {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
@@ -245,7 +245,7 @@ class I18nExtractorAction : AnAction() {
         if (dialog.showAndGet()) {
             // 【问题 1 修复：写入过程加进度提示，避免点确定后"卡住没反馈"】
             //   单文件可能有几十上百处替换 + import/const 注入，之前直接在 EDT 同步调
-            //   processor.execute()，表现就是"点了 OK 后对话框消失，但 UI 完全没变化几秒"。
+            //   processor.runWithUndo()，表现就是"点了 OK 后对话框消失，但 UI 完全没变化几秒"。
             //   改用 Task.Backgroundable（非模态后台任务）+ 进度条 + 阶段文本：
             //     "阶段 1/2：写入 PSI 替换" → 2/2：覆盖入口文件 / 复制 JSON / 发通知
             ProgressManager.getInstance().run(

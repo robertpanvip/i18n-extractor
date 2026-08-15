@@ -14,7 +14,7 @@ import org.junit.Assert.assertTrue
 /**
  * AllI18nExtractorAction「全项目 transform 管线」可测部分：
  *  1) parseTsConfigInclude —— tsconfig include 解析（纯函数）
- *  2) getIncludesFile      —— 文件发现：tsconfig include 命中 / 无 tsconfig 全量回退
+ *  2) resolveScanFiles   —— 文件发现：tsconfig include 命中 / 无 tsconfig 全量回退
  *  3) update()             —— 菜单可用性：翻译资源禁用 / 支持后缀启用 / 其他禁用
  *
  * 可测性评估：管线中 Dialog（模态）、ProgressManager/Task、CopyPasteManager、
@@ -55,7 +55,7 @@ class AllI18nExtractorActionTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
-    // 2. getIncludesFile
+    // 2. resolveScanFiles
     // ─────────────────────────────────────────
     /**
      * findTsConfigFile 走 getBaseDirectories().first()（fixture VFS 根），
@@ -80,7 +80,7 @@ class AllI18nExtractorActionTest : BasePlatformTestCase() {
         writeReal("src/data.json", "{}")
         com.intellij.openapi.vfs.LocalFileSystem.getInstance().refresh(false)
 
-        val found = action.getIncludesFile(project)
+        val found = action.resolveScanFiles(project)
         assertTrue("应命中 src/app.ts，实际：$found", found.any { it.path.endsWith("src/app.ts") })
         assertTrue(
             "不应包含 css/json，实际：$found",
@@ -94,7 +94,7 @@ class AllI18nExtractorActionTest : BasePlatformTestCase() {
         myFixture.addFileToProject("src/comp.vue", "<template><div/></template>")
         myFixture.addFileToProject("src/styles.css", "body {}") // css 不属于 ts/tsx/vue，不应返回
 
-        val found = action.getIncludesFile(project)
+        val found = action.resolveScanFiles(project)
         assertTrue("无 tsconfig 应回退到全量相关文件，实际：$found", found.isNotEmpty())
         assertTrue("应包含 src/app.ts，实际：$found", found.any { it.path.endsWith("src/app.ts") })
         assertTrue("应包含 src/comp.vue，实际：$found", found.any { it.path.endsWith("src/comp.vue") })

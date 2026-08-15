@@ -80,7 +80,7 @@ class AllI18nExtractorAction : AnAction() {
         val entryVf = dialog.selectedEntryFile
         val jsonPretty = prettyGson.toJson(finalFlatJson)
 
-        if (mode == Util.OutputMode.OVERWRITE_ENTRY_FILE && entryVf != null) {
+        if (mode == OutputDestination.FILE && entryVf != null) {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
@@ -233,7 +233,7 @@ class AllI18nExtractorAction : AnAction() {
             .distinct()
     }
 
-    fun getIncludesFile(project: Project): List<VirtualFile> {
+    fun resolveScanFiles(project: Project): List<VirtualFile> {
         val tsConfigFile = findTsConfigFile(project)
         if (tsConfigFile == null) {
             return getAllRelevantFiles(project);
@@ -251,7 +251,7 @@ class AllI18nExtractorAction : AnAction() {
         val project = e.project ?: return
         // 上下文 PsiFile：给 Dialog 推断入口文件位置用
         val contextPsi: PsiFile? = e.getData(CommonDataKeys.PSI_FILE)
-        val allFiles = getIncludesFile(project)
+        val allFiles = resolveScanFiles(project)
         // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
         val files = allFiles.filterNot { Util.isTranslationResourceFile(it) }
         val extracted = mutableMapOf<String, String>()
@@ -329,7 +329,7 @@ class AllI18nExtractorAction : AnAction() {
 
                                     // ── ⑥ 最终输出：覆盖入口文件 or 复制 JSON（在同一 WCA 中执行，保证撤销一致） ──
                                     indicator.text = when (dialog.outputMode) {
-                                        Util.OutputMode.OVERWRITE_ENTRY_FILE -> "合并写回中文多语言入口文件"
+                                        OutputDestination.FILE -> "合并写回中文多语言入口文件"
                                         else -> "复制翻译 JSON 到剪贴板"
                                     }
                                     indicator.fraction = 0.95

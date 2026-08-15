@@ -56,7 +56,7 @@ interface LanguageExtractor {
     val regionCodes: Set<String>
 }
 
-/** 中文：CJK 统一表意文字基本区（与旧 hasChinese 语义一致）。 */
+/** 中文：CJK 统一表意文字基本区。 */
 object ChineseExtractor : LanguageExtractor {
     override val id = "zh"
     override val displayName = "中文"

@@ -23,7 +23,7 @@ import com.intellij.psi.xml.XmlText
  * 「JS 字符串收集 与 $t 表达式生成」辅助类。
  *
  * 从 I18nProcessor 拆分出的状态相关方法群：负责收集 JS 字符串字面量 / 模板 / 二元拼接中的
- * 中文并生成 $t(...) 替换表达式。持有 I18nProcessor 引用以访问其状态（changes/effects、
+ * 中文并生成 $t(...) 替换表达式。持有 I18nProcessor 引用以访问其状态（changes/pendingChanges、
  * extractedStrings、tFunctionName、isVueFile、templateVarRegex、project 等），保证行为不变。
  */
 class JsStringCollector(private val processor: I18nProcessor) {
@@ -94,7 +94,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
 
 
         // 步骤4：检查 message 是否包含中文，不含中文则跳过
-        if (!processor.hasChinese(message, SiteKind.JS_TEMPLATE)) {
+        if (!processor.containsTargetLanguage(message, SiteKind.JS_TEMPLATE)) {
             return
         }
 
@@ -377,7 +377,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
             return
         }*/
 
-        if (!processor.hasChinese(raw, SiteKind.JS_STRING)) {
+        if (!processor.containsTargetLanguage(raw, SiteKind.JS_STRING)) {
             return
         }
 
@@ -466,7 +466,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
             return
         }
         if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
-        if (!processor.hasChinese(binaryExpr.text, SiteKind.JS_CONCAT)) {
+        if (!processor.containsTargetLanguage(binaryExpr.text, SiteKind.JS_CONCAT)) {
             return
         }
         val template = convertConcatTextToTemplate(binaryExpr)

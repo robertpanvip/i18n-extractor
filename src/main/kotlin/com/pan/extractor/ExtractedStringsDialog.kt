@@ -41,8 +41,8 @@ class ExtractedStringsDialog(
     var mergePlan: MergePlan = MergePlan(emptyList(), emptyList())
         private set
 
-    /** OK 后对外暴露：用户选择的输出方式 */
-    var outputMode: Util.OutputMode = Util.OutputMode.COPY_TO_CLIPBOARD
+    /** OK 后对外暴露：用户选择的输出方式（只使用 CLIPBOARD / FILE 两值） */
+    var outputMode: OutputDestination = OutputDestination.CLIPBOARD
         private set
     /** OK 后对外暴露：用户选择的中文入口文件（若选择了覆盖） */
     var selectedEntryFile: VirtualFile? = null
@@ -133,10 +133,10 @@ class ExtractedStringsDialog(
                 initConfigControls()
             }
             OutputDestination.CLIPBOARD -> {
-                outputMode = Util.OutputMode.COPY_TO_CLIPBOARD
+                outputMode = OutputDestination.CLIPBOARD
             }
             OutputDestination.FILE -> {
-                outputMode = Util.OutputMode.OVERWRITE_ENTRY_FILE
+                outputMode = OutputDestination.FILE
                 selectedEntryFile = try {
                     Util.findChineseLocaleEntryFile(project, contextPsiFile)
                 } catch (_: Throwable) { null }
@@ -201,9 +201,9 @@ class ExtractedStringsDialog(
     /** 初始化：读取用户偏好 + 自动探测中文入口文件。 */
     private fun initConfigControls() {
         // 1) 输出方式
-        val savedMode = Util.getOutputMode(project)
-        radioClipboard.isSelected = savedMode == Util.OutputMode.COPY_TO_CLIPBOARD
-        radioOverwrite.isSelected = savedMode == Util.OutputMode.OVERWRITE_ENTRY_FILE
+        val savedMode = Util.getDialogOutputMode(project)
+        radioClipboard.isSelected = savedMode == OutputDestination.CLIPBOARD
+        radioOverwrite.isSelected = savedMode == OutputDestination.FILE
 
         // 2) 入口文件：先读持久化路径，其次自动探测
         val storedPath = Util.getStoredEntryPath(project)
@@ -344,8 +344,8 @@ class ExtractedStringsDialog(
         mergePlan = MergePlan(pickedAffix, pickedDigit)
 
         // ── ③ 持久化用户偏好 & 暴露结果 ──
-        val mode = if (wantOverwrite) Util.OutputMode.OVERWRITE_ENTRY_FILE else Util.OutputMode.COPY_TO_CLIPBOARD
-        Util.setOutputMode(project, mode)
+        val mode = if (wantOverwrite) OutputDestination.FILE else OutputDestination.CLIPBOARD
+        Util.setDialogOutputMode(project, mode)
         outputMode = mode
         selectedEntryFile = entryFile
         if (entryFile != null) {

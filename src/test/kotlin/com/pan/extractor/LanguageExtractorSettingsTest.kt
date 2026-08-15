@@ -10,7 +10,7 @@ import org.junit.Assert.assertTrue
  * 可配置目标语言（中文/日文/韩文）的测试：
  *  - 默认只提取中文（向后兼容）
  *  - LanguageExtractor 各语言判定函数正确
- *  - Util.containsTargetLanguage / Util.hasChinese 随设置联动
+ *  - Util.containsTargetLanguage 随设置联动
  *  - 入口文件识别随设置联动（ja 启用后能命中 ja 入口）
  *
  * 注意：I18nSettings 是应用级单例，测试间共享，必须在 setUp/tearDown 保存并恢复，
@@ -213,7 +213,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
         assertTrue(
             "应提取英文整句字符串，实际：${processor.extractedStrings.values}",
             processor.extractedStrings.values.contains("Hello world")
@@ -241,7 +241,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
         assertTrue(
             "应合并相邻文本节点并提取英文整句，实际：${processor.extractedStrings.values}",
             processor.extractedStrings.values.contains("Hello world")
@@ -252,7 +252,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
-    // Util.containsTargetLanguage / hasChinese 随设置联动
+    // Util.containsTargetLanguage 随设置联动
     // ─────────────────────────────────────────
 
     fun testContainsTargetLanguageDefaultChineseOnly() {
@@ -274,13 +274,13 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertFalse(Util.containsTargetLanguage("你好"))
     }
 
-    fun testHasChineseAliasFollowsSettings() {
-        // 默认：hasChinese 命中中文
-        assertTrue(Util.hasChinese("你好"))
-        assertFalse(Util.hasChinese("こんにちは"))
-        // 启用日文后，hasChinese 也命中日文（语义变为“目标语言”）
+    fun testContainsTargetLanguageAliasFollowsSettings() {
+        // 默认：containsTargetLanguage 命中中文
+        assertTrue(Util.containsTargetLanguage("你好"))
+        assertFalse(Util.containsTargetLanguage("こんにちは"))
+        // 启用日文后，containsTargetLanguage 也命中日文（语义为“目标语言”）
         I18nSettings.getInstance().setLanguageIds(listOf("ja"))
-        assertTrue(Util.hasChinese("こんにちは"))
+        assertTrue(Util.containsTargetLanguage("こんにちは"))
     }
 
     // ─────────────────────────────────────────

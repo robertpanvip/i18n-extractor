@@ -595,7 +595,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "非指令属性 title='提示信息' 应提取，但 got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("提示信息")
         )
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             "重写后不应有多余单引号包裹（结果应形如 title=${'$'}t('提示信息')），got: $result",
@@ -938,7 +938,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
 
@@ -1036,7 +1036,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         println("DEBUG: testVueI18nGlobalTInjectImportWhenMissing result:\n$resultText")
@@ -1071,7 +1071,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         // 不应再注入 @/locales 的 i18n 导入（hasI18nInstanceImported 会匹配已有命名导入）
@@ -1105,7 +1105,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -1137,7 +1137,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -1163,7 +1163,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertTrue(
@@ -1196,7 +1196,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertTrue(
@@ -1227,7 +1227,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val normalizedText = resultText.replace("\\s+".toRegex(), "")
@@ -1270,7 +1270,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         // ★ 用户新规则：全部都用 \$t，替换仍然是 \$t('日期')，不需要写 i18n.global.t('日期')
@@ -1305,7 +1305,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // —— 重复执行不重复注入（问题 4 Vue 纯 TS 版）——
         val processor2 = I18nProcessor(project, file)
         processor2.collect()
-        processor2.execute()
+        processor2.runWithUndo()
         val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
         val importCnt = textAfterTwice.split("import{i18n}from").size - 1
         val constCnt = textAfterTwice.split("const\$t=i18n.global.t").size - 1
@@ -1344,7 +1344,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -1404,7 +1404,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
-     * 问题 3（重复注入回归）：同一个 Vue 文件重复调用 execute() 时，
+     * 问题 3（重复注入回归）：同一个 Vue 文件重复调用 runWithUndo() 时，
      * `import { useI18n } from 'vue-i18n'` 与 `const { t: \$t } = useI18n()`
      * 都只能出现一次（问题 4 语义化 import 去重回归）。
      */
@@ -1420,8 +1420,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         // 连续执行两遍（模拟用户连点 2 次 Extract）
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         val importCnt = txt.split("import{useI18n}from'vue-i18n'").size - 1
@@ -1469,7 +1469,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("应该有至少 1 个新提取（「提示」）, extractedSize=${processor.extractedStrings.size}",
             processor.extractedStrings.size >= 1)
 
-        processor.execute()
+        processor.runWithUndo()
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
         // 必须有 i18n 实例 import + const $t 别名（因为 vueModeNeedsImport=true，existingStrings 非空）
@@ -1485,7 +1485,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             resultText.contains("\$t('已翻译')"))
 
         // 连跑两遍不重复
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
         val txt2 = file.text.replace("\\s+".toRegex(), "")
         val importCnt = txt2.split("import{i18n}from").size - 1
         val constCnt = txt2.split("const\$t=i18n.global.t").size - 1
@@ -1533,7 +1533,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("Vue SFC 混合场景：应该有新提取的中文（保存 + 提示 ≥ 2 个）, got size=${processor.extractedStrings.size}",
             processor.extractedStrings.size >= 2)
 
-        processor.execute()
+        processor.runWithUndo()
         val resultText = file.text
         // 【实现现状说明 / 不阻塞本轮 PR】：
         //   这是一个 **Vue SFC 混合场景**：script 里已经写了 i18n.global.t('确认') 长调用。
@@ -1577,7 +1577,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     /**
      * 【Vue 纯 TS · 去重场景】：
      *   顶部**默认导入**形态 `import i18n from '@/locales/index'` + 已经有 `const \$t = i18n.global.t`
-     *   → 再跑一次 processor.execute() 不应追加新 import 或新 const
+     *   → 再跑一次 processor.runWithUndo() 不应追加新 import 或新 const
      */
     fun testVuePureTsDefaultImportAndConstDollarTAlreadyExistsNotReInjected() {
         val file = configureFile(
@@ -1598,9 +1598,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue("新提取应该有「操作成功」1 个, got size=${processor.extractedStrings.size}",
             processor.extractedStrings.size == 1)
-        processor.execute()
+        processor.runWithUndo()
         // 连跑两遍
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         // default import 只能出现 1 次（不能又加命名 import { i18n }）
@@ -1695,7 +1695,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "应提取 2 个新中文：欢迎使用 + 国际化指南, got size=${processor.extractedStrings.size}",
             processor.extractedStrings.size == 2
         )
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -1753,7 +1753,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "纯工具 TSX 应提取 2 个新中文：手机号格式错误 + 此字段必填, got=${p.extractedStrings.size}",
             p.extractedStrings.size == 2
         )
-        p.execute()
+        p.runWithUndo()
         val result = file.text
         val compact = result.replace("\\s+".toRegex(), "")
         // ✅ 必须有全局 i18n import + const $t = i18n.global.t
@@ -1798,8 +1798,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             })
             """.trimIndent()
         )
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
         val compact = file.text.replace("\\s+".toRegex(), "")
         val importCnt = compact.split("import{useI18n}from'vue-i18n'").size - 1
         val constCnt = compact.split("const{t:${'$'}t}=useI18n()").size - 1
@@ -1847,7 +1847,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "至少提取 2 个新中文（工厂提示 + 另外的提示）, got size=${p.extractedStrings.size}",
             p.extractedStrings.size >= 2
         )
-        p.execute()
+        p.runWithUndo()
         val result = file.text
         val compact = result.replace("\\s+".toRegex(), "")
         // 说明：因为顶级没有 defineComponent 命中 → 允许走 either useI18n or global
@@ -1909,7 +1909,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "索引/键访问里的中文不应进入 extractedStrings, 泄露的 key=$leaked\nvalues=$allValues",
             leaked.isEmpty()
         )
-        p.execute()
+        p.runWithUndo()
         val result = file.text
         // 原始「索引访问的中文 key」必须仍然原样存在（不能被替换成 $t()）
         listOf("P['中文']", "obj['姓名']", "obj.data['出生日期']",
@@ -2005,7 +2005,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             )
         }
 
-        p.execute()
+        p.runWithUndo()
         val result = file.text
 
         // ③ 原文中的索引键必须原样出现（不能被替换成 $t）
@@ -2066,7 +2066,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         val p = I18nProcessor(project, file)
         p.collect()
-        p.execute()
+        p.runWithUndo()
         val result = file.text
 
         // 字符串字面量指令 → 翻译
@@ -2133,9 +2133,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
 
         // ③ run 后检查替换结果：不能出现 `"0":` / `'0':` / `"1":` / `'1':`
-        // 注意：这里必须用 processor.execute()（内部包 CommandProcessor + WriteCommandAction），
+        // 注意：这里必须用 processor.runWithUndo()（内部包 CommandProcessor + WriteCommandAction），
         //       直接 processor.run() 会报 PSI 写操作线程越权。
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         val stringNumKeyPattern = Regex("""['"]\d+['"]\s*:""")
         val badMatches = stringNumKeyPattern.findAll(result).map { it.value }.toList()
@@ -2191,7 +2191,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
                 "不应再出现默认前缀 {N0}/{N1}，got: ${processor.extractedStrings}",
                 extractedValues.any { it.contains("{N0}") || it.contains("{N1}") }
             )
-            processor.execute()
+            processor.runWithUndo()
             val result = file.text
             assertTrue(
                 "Vue 调用侧参数对象应使用配置前缀 arg0:/arg1:（不带引号）",
@@ -2292,7 +2292,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             processor.extractedStrings.containsValue("点击右上角编辑按钮开始修改")
         )
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "<script setup lang=\"ts\"> 头部应保持（不要误删 lang=ts），got:\n$result",
@@ -2377,7 +2377,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("warning 消息 已取消提交 应提取", processor.extractedStrings.containsValue("已取消提交"))
         assertTrue("created 初始化旧版视图 应提取", processor.extractedStrings.containsValue("初始化旧版视图"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "<script lang=\"ts\"> 声明应保留（不要把 lang=ts 去掉），got:\n$result",
@@ -2450,7 +2450,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("modes[1] 按手机号搜索 应提取", processor.extractedStrings.containsValue("按手机号搜索"))
         assertTrue("modes[2] 按工号搜索 应提取", processor.extractedStrings.containsValue("按工号搜索"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             ":aria-label=\"'搜索输入框'\" 这种硬编码字符串属性绑定不应残留（应替换成 :aria-label=\"\$t('...')\"）",
@@ -2538,7 +2538,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // 兼容：7 条明确指定 + 1 条 computed 拼接骨架 = 总共 8 条
         assertEquals(8, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "import { useI18n } from 'vue-i18n' 原本就有 → 不能因为 import 冲突被删（保持 1 次），got:\n$result",
@@ -2573,7 +2573,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertEquals("没有中文 → 提取数量为 0", 0, processor.extractedStrings.size)
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             "无中文场景不应注入 `import { useI18n } from 'vue-i18n'`，got:\n$result",
@@ -2621,7 +2621,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertTrue("title 用户列表 应提取", processor.extractedStrings.containsValue("用户列表"))
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         val destructureRe = Regex("const\\s*\\{\\s*t\\s*:\\s*\\${'$'}t\\s*\\}\\s*=\\s*useI18n\\s*\\(")
         val allD = destructureRe.findAll(result).toList()
@@ -2743,7 +2743,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             )
             val p = I18nProcessor(project, file)
             p.collect()
-            p.execute()
+            p.runWithUndo()
             val result = file.text
 
             // 单字「中」长度 1 < 3 → 不提取，原样保留（标签体走 mustache）

@@ -144,7 +144,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -170,7 +170,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -198,7 +198,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         // 注意：import 中的 useTranslation 不带 ()，只有调用带 ()
@@ -226,7 +226,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val importLine = resultText.lines().firstOrNull { it.contains("react-i18next") }
@@ -261,7 +261,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val lines = resultText.lines()
@@ -293,7 +293,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val count = resultText.split("react-i18next").size - 1
@@ -332,7 +332,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val count = resultText.split("useTranslation()").size - 1
@@ -578,7 +578,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -652,7 +652,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -710,7 +710,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -763,7 +763,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -817,7 +817,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -847,7 +847,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -877,7 +877,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -921,7 +921,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertFalse(
@@ -958,7 +958,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
         val processor2 = I18nProcessor(project, file)
         processor2.collect()
-        processor2.execute()
+        processor2.runWithUndo()
         val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
         val getI18nCnt = textAfterTwice.split("import{getI18n}from'react-i18next'").size - 1
         val constCnt = textAfterTwice.split("constt=getI18n().t").size - 1
@@ -989,7 +989,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         assertTrue(
@@ -1033,7 +1033,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -1096,7 +1096,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
@@ -1149,7 +1149,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         assertEquals(
             "locale 命名的文件不应提取任何字符串, got: ${processor.extractedStrings}",
@@ -1192,7 +1192,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         assertEquals(
             "locales/ 目录下的文件不应提取字符串, got: ${processor.extractedStrings}",
@@ -1322,7 +1322,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "应该有 ≥ 1 个新提取（至少包含「新提示」）, got size=${processor.extractedStrings.size}",
             processor.extractedStrings.size >= 1
         )
-        processor.execute()
+        processor.runWithUndo()
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
         // ① 老 import 保留
@@ -1373,11 +1373,11 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val p1 = I18nProcessor(project, file)
         p1.collect()
         assertEquals("应提取 1 个新中文（品牌好）, got=${p1.extractedStrings.size}", 1, p1.extractedStrings.size)
-        p1.execute()
+        p1.runWithUndo()
         // 再跑一遍：模拟用户第二次点 Extract
         val p2 = I18nProcessor(project, file)
         p2.collect()
-        p2.execute()
+        p2.runWithUndo()
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         val getI18nImportCnt = txt.split("import{getI18n}from'react-i18next'").size - 1
@@ -1412,8 +1412,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         // 连续跑 2 遍
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
-        I18nProcessor(project, file).let { it.collect(); it.execute() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
 
         val txt = file.text.replace("\\s+".toRegex(), "")
         val importCnt = txt.split("import{useTranslation}from'react-i18next'").size - 1
@@ -1451,7 +1451,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val p = I18nProcessor(project, file)
         p.collect()
         assertEquals("应提取 1 个新中文（残缺提示）, got=${p.extractedStrings.size}", 1, p.extractedStrings.size)
-        p.execute()
+        p.runWithUndo()
 
         val txt = file.text
         val compact = txt.replace("\\s+".toRegex(), "")
@@ -1567,7 +1567,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             processor.extractedStrings.containsValue("确认") && processor.extractedStrings.containsValue("取消确认")
         )
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "替换后属性中应包含 t(...)（React 格式），got:\n$result",
@@ -1637,7 +1637,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("List children 第二项描述 应提取", processor.extractedStrings.containsValue("第二项描述"))
         assertEquals(9, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "泛型语法 `select<string>` 应保留（不要把它当字符串删了），got:\n$result",
@@ -1694,7 +1694,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue("Button label=\"主按钮\" 应提取", processor.extractedStrings.containsValue("主按钮"))
         assertEquals(6, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "tabs 尾部 as const 应保留（不要把数组尾删了），got:\n$result",
@@ -1770,7 +1770,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("用户未登录"))
         assertEquals(3, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "declare global / namespace NodeJS 声明应保留（不要删除 TS 类型层），got:\n$result",

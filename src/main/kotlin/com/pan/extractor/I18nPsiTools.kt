@@ -188,10 +188,10 @@ internal object I18nPsiTools {
     }
 
     /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
-    fun hasChinese(text: String): Boolean = Util.containsTargetLanguage(text)
+    fun containsTargetLanguage(text: String): Boolean = Util.containsTargetLanguage(text)
 
     /** 按站点上下文（Approach A）判定文本是否命中任一已启用目标语言。 */
-    fun hasChinese(text: String, site: SiteKind): Boolean = Util.containsTargetLanguage(text, site)
+    fun containsTargetLanguage(text: String, site: SiteKind): Boolean = Util.containsTargetLanguage(text, site)
 
     fun isJSTemplateLiteral(text: String): Boolean {
         return text.startsWith("`") && text.contains("\${")
