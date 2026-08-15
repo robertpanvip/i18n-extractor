@@ -1466,7 +1466,7 @@ class I18nProcessor(
 
         // 使用纯文本（过滤注释）检查是否包含中文，避免注释中的中文被误提取
         val pureText = if (textNode is XmlText) getPureXmlText(textNode) else withoutComments
-        if (!hasChinese(pureText)) {
+        if (!hasChinese(pureText, SiteKind.TEXT)) {
             return
         }
 
@@ -1505,6 +1505,9 @@ class I18nProcessor(
 
     /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
     fun hasChinese(text: String): Boolean = Util.containsTargetLanguage(text)
+
+    /** 按站点上下文（Approach A）判定文本是否命中任一已启用目标语言。 */
+    fun hasChinese(text: String, site: SiteKind): Boolean = Util.containsTargetLanguage(text, site)
 
 
     fun isJSTemplateLiteral(text: String): Boolean {
@@ -1574,7 +1577,7 @@ class I18nProcessor(
             return
         }
         if (originalText.isEmpty()) return
-        if (!hasChinese(originalText)) {
+        if (!hasChinese(originalText, SiteKind.ATTRIBUTE)) {
             return
         }
         if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(") || originalText.contains("i18n.t(")) {
@@ -1678,7 +1681,7 @@ class I18nProcessor(
 
 
         // 步骤4：检查 message 是否包含中文，不含中文则跳过
-        if (!hasChinese(message)) {
+        if (!hasChinese(message, SiteKind.JS_TEMPLATE)) {
             return
         }
 
@@ -2083,7 +2086,7 @@ class I18nProcessor(
             return
         }*/
 
-        if (!hasChinese(raw)) {
+        if (!hasChinese(raw, SiteKind.JS_STRING)) {
             return
         }
 
@@ -2172,7 +2175,7 @@ class I18nProcessor(
             return
         }
         if (binaryExpr.operationSign != JSTokenTypes.PLUS) return
-        if (!hasChinese(binaryExpr.text)) {
+        if (!hasChinese(binaryExpr.text, SiteKind.JS_CONCAT)) {
             return
         }
         val template = convertConcatTextToTemplate(binaryExpr)

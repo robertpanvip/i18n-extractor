@@ -130,6 +130,32 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
+    // SiteKind 上下文判定（Approach A）
+    // ─────────────────────────────────────────
+
+    fun testChineseAcceptsAllSiteKinds() {
+        for (kind in SiteKind.values()) {
+            assertTrue("中文应接受所有站点上下文 $kind", ChineseExtractor.accepts(kind))
+        }
+    }
+
+    fun testContainsTargetLanguageWithSiteKind() {
+        // CJK 语言默认接受所有上下文，因此带上下文判定退化为纯字符判定
+        for (kind in SiteKind.values()) {
+            assertTrue("中文文本应命中上下文 $kind", Util.containsTargetLanguage("你好", kind))
+            assertFalse("非中文文本不应命中上下文 $kind", Util.containsTargetLanguage("hello", kind))
+        }
+    }
+
+    fun testSiteKindJudgmentFollowsSettings() {
+        I18nSettings.getInstance().setLanguageIds(listOf("ja"))
+        // CJK 语言接受所有上下文：任意 SiteKind 下都命中日文
+        for (kind in SiteKind.values()) {
+            assertTrue("日文文本在上下文 $kind 应命中", Util.containsTargetLanguage("こんにちは", kind))
+        }
+    }
+
+    // ─────────────────────────────────────────
     // 入口文件识别随设置联动
     // ─────────────────────────────────────────
 

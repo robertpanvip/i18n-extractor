@@ -52,9 +52,14 @@ object Util {
     fun hasChinese(text: CharSequence?): Boolean = containsTargetLanguage(text)
 
     /** 文本是否包含任一“已启用目标语言”的字符（由全局设置决定，默认仅中文）。 */
-    fun containsTargetLanguage(text: CharSequence?): Boolean {
+    fun containsTargetLanguage(text: CharSequence?): Boolean =
+        containsTargetLanguage(text, SiteKind.OTHER)
+
+    /** 文本在该站点上下文下是否命中任一“已启用目标语言”（Approach A：先看上下文是否接受，再看字符判定）。 */
+    fun containsTargetLanguage(text: CharSequence?, site: SiteKind): Boolean {
         if (text == null) return false
-        return I18nSettings.getInstance().activeExtractors().any { it.judge(text) }
+        return I18nSettings.getInstance().activeExtractors()
+            .any { it.accepts(site) && it.judge(text) }
     }
 
     fun isJSX(element: PsiElement): Boolean {
