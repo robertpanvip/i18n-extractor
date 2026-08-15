@@ -1595,6 +1595,17 @@ class I18nProcessor(
 
     }
 
+    /** 去掉字符串两侧成对的引号（' / " / `）。若不成对则原样返回。 */
+    private fun stripSurroundingQuotes(s: String): String {
+        if (s.length < 2) return s
+        val first = s.first()
+        val last = s.last()
+        val matched = (first == '\'' && last == '\'') ||
+                (first == '"' && last == '"') ||
+                (first == '`' && last == '`')
+        return if (matched) s.substring(1, s.length - 1) else s
+    }
+
 
     // 属性值（重点处理 <slot name="中文"> → :name）
     // ───────────────────────────────────────────────
@@ -1624,11 +1635,13 @@ class I18nProcessor(
         var newText = originalText;
         var key: String? = null;
 
-        if (!(isDirective && !attr.text.startsWith("\"")
-                    && !attr.text.startsWith("'")
-                    && !attr.text.startsWith("`"))
+        if (!(isDirective && !originalText.startsWith("\"")
+                    && !originalText.startsWith("'")
+                    && !originalText.startsWith("`"))
         ) {
-            key = collectExtractedStrings(attrValue);
+            // 指令的字符串字面量值（如 :title="'中文'"）去掉内层引号后再提取
+            val literal = stripSurroundingQuotes(originalText)
+            key = collectExtractedStrings(literal, attrValue);
             newText = "${tFunctionName}('$key')"
         }
 
@@ -2059,6 +2072,19 @@ class I18nProcessor(
     }
 
     /**
+     * 判断 ele 是否是一个「指令属性值整体」的字符串字面量，即 `:title="'中文'"` 里的 `'中文'`。
+     * 此时内层字符串字面量是属性值的唯一内容，应交给 collectXmlAttributeValueChange 统一处理，
+     * 避免 collectJSStringChange 重复提取。
+     */
+    private fun isDirectiveSoleStringLiteral(ele: JSLiteralExpression): Boolean {
+        val attrValue = PsiTreeUtil.getParentOfType(ele, XmlAttributeValue::class.java, false) ?: return false
+        val attr = attrValue.parent as? XmlAttribute ?: return false
+        if (!isVueDirective(attr.name)) return false
+        // 整个属性值就等于这个字符串字面量（含引号），说明它不是表达式里的一部分
+        return ele.text == attrValue.value.trim()
+    }
+
+    /**
      * 【Bug A1】判断 ele 是否位于「纯字符串拼接」内：自 ele 向上找到最顶层的 `+` 表达式，
      * 并递归检查整条拼接链的所有叶子操作数是否都是字符串字面量（无变量/引用/数字/嵌套调用）。
      * 若为 true，此时 collectJSBinaryExpressionChange 会把整条拼接合并成一个 key，
@@ -2110,6 +2136,10 @@ class I18nProcessor(
         // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
         // Vue SFC 指令表达式 v-if="P['中文']" 中注入的 JS 字符串字面量都要被跳过。
         if (isInIndexKeyPosition(ele)) return
+
+        // 指令属性值整体就是一个字符串字面量（如 :title="'中文'"）→ 交给
+        // collectXmlAttributeValueChange 统一处理，这里跳过以免重复提取。
+        if (isDirectiveSoleStringLiteral(ele)) return
 
         val raw = ele.text
 

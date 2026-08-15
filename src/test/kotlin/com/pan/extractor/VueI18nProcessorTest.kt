@@ -2048,6 +2048,37 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * 指令属性值整体就是一个字符串字面量（`:title="'中文'"`）→ 应翻译成 `:title="$t('中文')"`。
+     * 与「指令后面是表达式/变量」(`:title="someVar"` / `:class="obj.x"`) 区分开，后者不翻译。
+     */
+    fun testVueDirectiveStringLiteralValueTranslated() {
+        val file = configureFile(
+            "src/DirectiveString.vue",
+            """
+            <template>
+                <div :title="'中文'">标题</div>
+                <div :data-label="'标签文本'">容器</div>
+                <div :title="someVar">变量不翻译</div>
+                <div :class="obj['状态']">索引不翻译</div>
+            </template>
+            """.trimIndent()
+        )
+        val p = I18nProcessor(project, file)
+        p.collect()
+        p.execute()
+        val result = file.text
+
+        // 字符串字面量指令 → 翻译
+        assertTrue(":title=\"'中文'\" 应翻译为 \$t('中文')，got:\n$result", result.contains(":title=\"\$t('中文')\""))
+        assertTrue(":data-label=\"'标签文本'\" 应翻译，got:\n$result", result.contains(":data-label=\"\$t('标签文本')\""))
+        // 变量 / 索引键指令 → 不翻译原样保留
+        assertTrue(":title=\"someVar\" 应保留，got:\n$result", result.contains(":title=\"someVar\""))
+        assertTrue(":class=\"obj['状态']\" 索引键应保留，got:\n$result", result.contains(":class=\"obj['状态']\""))
+        // 标签体纯文本仍翻译（标签体走 mustache 替换，使用反引号）
+        assertTrue("标签体「标题」应翻译，got:\n$result", result.contains("\$t(`标题`)"))
+    }
+
     // ============================================================
     // Vue 占位符：{N0}/{N1} + 调用侧 { N0: val, N1: val } 标识符 key
     // ============================================================
