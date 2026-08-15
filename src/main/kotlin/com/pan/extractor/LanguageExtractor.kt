@@ -133,10 +133,45 @@ object EnglishExtractor : LanguageExtractor {
     override val regionCodes: Set<String> = setOf("us", "gb", "au", "ca", "in", "sg", "ie", "nz")
 }
 
-/** 语言提取器注册表：内置 zh/ja/ko/en。 */
+/**
+ * 法语：拉丁字母 + 法语专属重音符（é è ê ë à â ä ç î ï ô ù û ü œ æ ÿ）。
+ *
+ * 与英文同为拉丁字母，无法用整段字符区间与英文完全区分；因此用法语专属重音符做确定性判定
+ * （含重音符 → 法语），纯 ASCII 法语（如 "bonjour"）与英文重叠属已知取舍，与英文方案一致。
+ * 重音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文（与 CJK 一致）。
+ */
+object FrenchExtractor : LanguageExtractor {
+    override val id = "fr"
+    override val displayName = "法语"
+    private val RE = Regex(
+        """[éèêëàâäçîïôùûüÿœæ]"""
+    )
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("fr", "fr-FR", "fr_FR", "frFR", "fr-CA", "fr_CH", "frfr", "frCH", "fr-BE", "fr-CH")
+    override val langTagPrefix = "fr"
+    override val regionCodes: Set<String> = setOf("fr", "ca", "ch", "be", "lu", "mc")
+}
+
+/** 俄语：西里尔字母（与中文/日文/韩文一样可按字符区间确定性判定）。 */
+object RussianExtractor : LanguageExtractor {
+    override val id = "ru"
+    override val displayName = "俄语"
+    private val RE = Regex("""[\u0400-\u04ff]""")
+    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun localeNameCandidates(): List<String> =
+        listOf("ru", "ru-RU", "ru_RU", "ruRU", "ru-UA", "ru_UA", "ru-KZ", "ru-BY")
+    override val langTagPrefix = "ru"
+    override val regionCodes: Set<String> = setOf("ru", "ua", "kz", "by")
+}
+
+/** 语言提取器注册表：内置 zh/ja/ko/en/fr/ru。 */
 object LanguageRegistry {
     val all: List<LanguageExtractor> =
-        listOf(ChineseExtractor, JapaneseExtractor, KoreanExtractor, EnglishExtractor)
+        listOf(
+            ChineseExtractor, JapaneseExtractor, KoreanExtractor,
+            EnglishExtractor, FrenchExtractor, RussianExtractor
+        )
 
     fun byId(id: String): LanguageExtractor? = all.firstOrNull { it.id == id }
 }
