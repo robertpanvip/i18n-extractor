@@ -28,8 +28,14 @@ object EntryFileLocator {
     private val TRANSLATION_DIRS_DEFAULT = setOf("locales","i18n","locale","lang","languages","translations")
 
     /** 用于路径片段匹配的翻译目录集合（内置目录 + 设置里自定义的目录）。 */
-    private fun translationDirs(): Set<String> =
-        TRANSLATION_DIRS_DEFAULT + I18nSettings.getInstance().customTranslationDirs().map { it.lowercase() }
+    private fun translationDirs(): Set<String> {
+        // 纯单元测试（无 IntelliJ Application）下读不到设置，回退仅用内置目录。
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        val custom = if (app != null && !app.isDisposed) {
+            try { I18nSettings.getInstance().customTranslationDirs() } catch (_: Throwable) { emptyList() }
+        } else emptyList()
+        return TRANSLATION_DIRS_DEFAULT + custom.map { it.lowercase() }
+    }
 
     /** 常见的文件基名前缀（messages.en / i18n.zh-CN 这种）。 */
     private val TRANSLATION_BASE_PREFIXES = setOf("messages","i18n","translation","translations","strings","resources","lang","locale")
