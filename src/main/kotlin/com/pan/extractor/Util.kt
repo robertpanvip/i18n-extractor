@@ -1243,14 +1243,20 @@ object Util {
                 return ExportAnchor(braceIdx, "default", inferIndent(text, braceIdx))
             }
         }
-        // 模式 3：export const <name> = { / export let / export var
+        // 模式 3：export const <name> = { / export let / export var。
+        // 兼容可选类型标注：export const <name>: <T> = {（T 内不含顶层 '=' 且单行，覆盖 Record<>/接口名/内联对象类型等）。
         run {
-            val re = Regex("""export\s+(const|let|var)\s+([\w$][\w$]*)\s*=\s*\{""")
+            val re = Regex("""export\s+(const|let|var)\s+([\w$][\w$]*)\s*(?::[^=\n]+)?\s*=\s*\{""")
             val m = re.find(text)
             if (m != null) {
-                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
                 val name = m.groupValues[2]
-                return ExportAnchor(braceIdx, "named:$name", inferIndent(text, braceIdx))
+                // 定位 '=' 之后第一个 '{'：类型标注里可能含 '{'（内联对象类型），
+                // 必须用「= 之后第一个 {」而不是「最后一个 {」来定位对象字面量起点。
+                val eqLocal = m.value.lastIndexOf('=')
+                var i = m.range.first + eqLocal + 1
+                while (i < text.length && text[i] != '{') i++
+                if (i >= text.length) return@run
+                return ExportAnchor(i, "named:$name", inferIndent(text, i))
             }
         }
         // 模式 4：module.exports = {
@@ -1269,6 +1275,16 @@ object Util {
             if (m != null) {
                 val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
                 return ExportAnchor(braceIdx, "exports", inferIndent(text, braceIdx))
+            }
+        }
+        // 模式 6：export default defineXxx({ ... }) —— 支持 i18n 常用包裹函数
+        // （defineI18nConfig / defineMessages / defineConfig / createI18n 等），对象字面量在函数括号内。
+        run {
+            val re = Regex("""export\s+default\s+([A-Za-z_$][\w$]*)\s*\(\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
+                return ExportAnchor(braceIdx, "default:${m.groupValues[1]}", inferIndent(text, braceIdx))
             }
         }
         return null
@@ -1711,9 +1727,21 @@ object Util {
         //  - singleRewrites: 单行静态值可重写（记录原始 lineIdx）
         //  - blockRewrites: 多行对象/数组块（key 在 mergedNested 中才重写）
         //  - consumed[i]: 该行属于某个多行块，不应再被当作独立顶层行处理（避免嵌套行被误判为顶层属性）
-        data class SingleRewrite(val lineIdx: Int, val key: String, val colonPosInLine: Int, val trailingComma: Boolean)
+        data class SingleRewrite(
+            val lineIdx: Int,
+            val key: String,
+            val colonPosInLine: Int,
+            val trailingComma: Boolean,
+            val trailingComment: String   // 已有尾注释（如 " // 说明"），重写时保留
+        )
         val singleRewrites = ArrayList<SingleRewrite>()
-        data class BlockRewrite(val start: Int, val end: Int, val key: String, val keyRowPrefix: String)
+        data class BlockRewrite(
+            val start: Int,
+            val end: Int,
+            val key: String,
+            val keyRowPrefix: String,
+            val trailingComment: String
+        )
         val blockRewrites = ArrayList<BlockRewrite>()
         val parsedTopKeys = HashSet<String>()
         val consumed = BooleanArray(lines.size)
@@ -1731,11 +1759,15 @@ object Util {
             val keyExpr = line.substring(0, colonPosInTrimmed).trim()
             val key = parsePropertyKey(keyExpr) ?: run { idx++; continue }
             parsedTopKeys.add(key)
-            val valuePart = line.substring(colonPosInTrimmed + 1).trim()
+            val valuePartRaw = line.substring(colonPosInTrimmed + 1).trim()
+            // 分离值末尾的尾注释（// xxx 或 /* xxx */），使：
+            //   1) 静态判定不受尾注释干扰（否则 `key: 'a', // note` 会被误判为不可重写而漏改）
+            //   2) 重写 value 时能保留原有尾注释，避免格式漂移
+            val (valuePart, trailingComment) = splitTrailingComment(valuePartRaw)
 
             if (isSingleLineStaticValue(valuePart)) {
                 val trailingComma = valuePart.trimEnd().endsWith(",")
-                singleRewrites.add(SingleRewrite(idx, key, indent.length + colonPosInTrimmed, trailingComma))
+                singleRewrites.add(SingleRewrite(idx, key, indent.length + colonPosInTrimmed, trailingComma, trailingComment))
             } else {
                 // 多行对象/数组块：始终定位其范围并"消费"，避免嵌套行被误判为顶层属性；
                 // 只有 key 在合并结果中才整块重写（从而合入新增的嵌套子 key）。
@@ -1747,7 +1779,7 @@ object Util {
                 if (staticBlock && key in mergedKeys) {
                     val keyColonInRow = indent.length + colonPosInTrimmed
                     val keyRowPrefix = rawLine.substring(0, keyColonInRow + 1)  // "  key:"
-                    blockRewrites.add(BlockRewrite(idx, blockEnd, key, keyRowPrefix))
+                    blockRewrites.add(BlockRewrite(idx, blockEnd, key, keyRowPrefix, trailingComment))
                 }
             }
             idx++
@@ -1762,13 +1794,14 @@ object Util {
             if (block != null) {
                 val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2)
                 val rLines = rendered.split("\n")
+                val comment = block.trailingComment
                 if (rLines.size == 1) {
                     // 标量：整块替换成单行
-                    out.add("${block.keyRowPrefix} $rendered,")
+                    out.add("${block.keyRowPrefix} $rendered,$comment")
                 } else {
                     out.add("${block.keyRowPrefix} ${rLines.first()}")
                     out.addAll(rLines.subList(1, rLines.lastIndex))
-                    out.add(rLines.last() + ",")
+                    out.add(rLines.last() + ",$comment")
                 }
                 i = block.end + 1
                 continue
@@ -1779,7 +1812,7 @@ object Util {
                 val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1)
                 val prefix = lines[i].substring(0, rw.colonPosInLine + 1)  // "  key:"
                 val suffix = if (rw.trailingComma) "," else ""
-                out.add("$prefix $valueStr$suffix")
+                out.add("$prefix $valueStr$suffix${rw.trailingComment}")
                 i++
                 continue
             }
@@ -1874,6 +1907,38 @@ object Util {
             }
         }
         return null
+    }
+
+    /**
+     * 从属性值片段末尾剥离尾注释（行注释或块注释），返回 (纯值, 含前导空白的注释)。
+     * 找不到注释时返回 (原值, "")。逐字符扫描以避开字符串内的注释标记。
+     */
+    private fun splitTrailingComment(expr: String): Pair<String, String> {
+        var inString: Char? = null
+        var escapeNext = false
+        var i = 0
+        while (i < expr.length) {
+            val c = expr[i]
+            val next = expr.getOrNull(i + 1)
+            when {
+                escapeNext -> escapeNext = false
+                inString != null -> when (c) {
+                    '\\' -> escapeNext = true
+                    inString -> inString = null
+                }
+                else -> {
+                    if (c == '/' && next == '/') {
+                        return expr.substring(0, i).trimEnd() to expr.substring(i)
+                    } else if (c == '/' && next == '*') {
+                        return expr.substring(0, i).trimEnd() to expr.substring(i)
+                    } else when (c) {
+                        '"', '\'', '`' -> inString = c
+                    }
+                }
+            }
+            i++
+        }
+        return expr to ""
     }
 
     private fun isSingleLineStaticValue(expr: String): Boolean {
@@ -2109,7 +2174,9 @@ object Util {
      * 从对象字面量文本中递归提取 spread 引用（含嵌套对象里的 spread，如 `nav: { ...common }`）。
      * path 记录每个 spread 所在的容器路径，用于把新 key 精确路由到对应目标文件。
      */
-    private fun findSpreadRefs(objBody: String, path: List<String>): List<SpreadRef> {
+    private fun findSpreadRefs(objBody: String, path: List<String>, depth: Int = 0): List<SpreadRef> {
+        // 深度防护：字面嵌套极其罕见会超过此深度，防止病态递归导致栈溢出。
+        if (depth > 32) return emptyList()
         val result = mutableListOf<SpreadRef>()
         val body = objBody.trim().let {
             if (it.startsWith("{") && it.endsWith("}")) it.substring(1, it.length - 1) else it
@@ -2125,7 +2192,7 @@ object Util {
             val (k, v) = parseOneProperty(prop) ?: continue
             val vClean = stripValueSuffixes(v)
             if (vClean.startsWith("{") && vClean.endsWith("}")) {
-                result.addAll(findSpreadRefs(vClean, path + k))
+                result.addAll(findSpreadRefs(vClean, path + k, depth + 1))
             }
         }
         return result
@@ -2170,16 +2237,38 @@ object Util {
         project: Project,
         entryVf: VirtualFile,
         entryText: String,
-        varName: String
+        varName: String,
+        path: List<String> = emptyList(),
+        visited: MutableSet<String> = HashSet()
     ): ResolvedSpreadTarget? {
-        // 1) 同文件 const：const <varName> = { ... }
-        val constRe = Regex("""\bconst\s+${Regex.escape(varName)}\s*=\s*\{""")
+        // 循环防护：const a = {...b} / const b = {...a} 相互 spread 时避免无限递归。
+        if (!visited.add(varName)) return null
+        // 1) 同文件 const：const <varName> = { ... }（兼容可选类型标注 const <varName>: T = { ... }）
+        val constRe = Regex("""\bconst\s+${Regex.escape(varName)}\s*(?::[^=\n]+)?\s*=\s*\{""")
         val cm = constRe.find(entryText)
         if (cm != null) {
-            val braceIdx = cm.value.indexOfLast { it == '{' } + cm.range.first
-            val objEnd = findBalancedCloseBrace(entryText, braceIdx) ?: return null
-            val objBody = entryText.substring(braceIdx, objEnd)
-            return ResolvedSpreadTarget(entryVf, braceIdx until objEnd, parseObjectLiteralBody(objBody), "const")
+            // 定位 '=' 之后第一个 '{'（类型标注里可能含 '{'，不能直接用最后一个 '{'）
+            val eqLocal = cm.value.lastIndexOf('=')
+            var bi = cm.range.first + eqLocal + 1
+            while (bi < entryText.length && entryText[bi] != '{') bi++
+            if (bi >= entryText.length) return null
+            val objEnd = findBalancedCloseBrace(entryText, bi) ?: return null
+            val objBody = entryText.substring(bi, objEnd)
+            val constKeys = parseObjectLiteralBody(objBody)
+            val constTarget = ResolvedSpreadTarget(entryVf, bi until objEnd, constKeys, "const")
+            // 多级递归：仅当 const 是「纯转发光束」（无自身静态 key，如 `const common = {...deeper}`）时，
+            // 才继续下钻到更深的「非入口文件」可写目标，使新 key 写到真正归属的模块文件，
+            // 而不是堆积在入口文件里这个本地 const 块。
+            if (constKeys.isEmpty()) {
+                val inner = findSpreadRefs(objBody, path)
+                for (ref in inner) {
+                    val deeper = resolveSpreadTarget(project, entryVf, entryText, ref.varName, ref.path, visited)
+                    if (deeper != null && !deeper.readOnly && deeper.file.path != entryVf.path) {
+                        return deeper
+                    }
+                }
+            }
+            return constTarget
         }
         // 2) import：import <varName> from '...'、import * as <varName> from '...'、import <varName>, { ... } from '...'
         val importRe = Regex("""import\s+(?:\*\s+as\s+)?(${Regex.escape(varName)})\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
@@ -2300,9 +2389,11 @@ object Util {
         if (spreadRefs.isEmpty()) return null
         val entryKeys = entryInfo.staticKV.keys.toSet()
 
-        // 解析每个 spread 引用指向的目标（含 node_modules 只读识别）
+        // 解析每个 spread 引用指向的目标（含 node_modules 只读识别）。
+        // 共享 visited 集合防止 const 相互 spread 造成重复解析/循环依赖。
+        val visited = HashSet<String>()
         val resolved = spreadRefs.mapNotNull { ref ->
-            resolveSpreadTarget(project, entryVf, entryText, ref.varName)?.let { ref to it }
+            resolveSpreadTarget(project, entryVf, entryText, ref.varName, ref.path, visited)?.let { ref to it }
         }
         if (resolved.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
         // 所有目标已识别的 key（按各自容器路径展开成入口扁平 key），用于避免重复写入
