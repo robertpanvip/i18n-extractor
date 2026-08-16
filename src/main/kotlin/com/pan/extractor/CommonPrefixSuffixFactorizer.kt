@@ -247,14 +247,30 @@ object CommonPrefixSuffixFactorizer {
         var idSeq = 0
         // 按骨架（原句中第一个数字段替换为 {N0}）做 group
         val groups = mutableMapOf<String, MutableList<Pair<SiteRef, List<String>>>>()
+        val noDigitSites = mutableListOf<SiteRef>()
         for (site in allSites) {
             val msg = site.originalMessage
             val hanCount = HAN_RE.findAll(msg).count()
             if (hanCount < 2) continue
-            val m = DIGIT_TOKEN_RE.find(msg) ?: continue
+            val m = DIGIT_TOKEN_RE.find(msg)
+            if (m == null) {
+                noDigitSites.add(site)
+                continue
+            }
             val digitsHere = m.range.let { listOf(msg.substring(it)) }  // MVP 只 1 处
             val skel = msg.replaceRange(m.range, "{N0}")
             groups.getOrPut(skel) { mutableListOf() }.add(site to digitsHere)
+        }
+        // 无数字站点若恰好等于某骨架去占位后的文本（如 你好hello{N0} → 你好hello），
+        // 作为「空数字」变体并入对应组，让 你好hello / 你好hello2 合并成同一个翻译。
+        if (noDigitSites.isNotEmpty() && groups.isNotEmpty()) {
+            for (site in noDigitSites) {
+                val msg = site.originalMessage
+                val skel = groups.keys.firstOrNull { it.replace("{N0}", "") == msg }
+                if (skel != null) {
+                    groups[skel]!!.add(site to listOf(""))
+                }
+            }
         }
         for ((skeleton, entries) in groups) {
             if (entries.size < 2) continue     // 只抽重复的：骨架在多句里命中（与用户特别要求一致）
