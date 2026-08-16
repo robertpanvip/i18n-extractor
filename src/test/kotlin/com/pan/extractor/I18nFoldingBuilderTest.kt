@@ -125,7 +125,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         assertTrue("应含「你好」", placeholders.contains("你好"))
     }
 
-    /** 用户报告的问题复现：key 含 {N0} 占位符时能否正确折叠。 */
+    /** 用户报告的问题复现：key 含 {N0} 占位符时应将 {N0} 替换为实际参数值。 */
     fun testFoldTsxWithPlaceholderInKey() {
         // 额外添加含 {N0} 占位符的翻译条目
         myFixture.addFileToProject(
@@ -153,7 +153,8 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("含 {N0} 占位符的 key 应折叠 2 处", 2, descriptors.size)
             val placeholders = descriptors.map { it.placeholderText }.toSet()
-            assertTrue("应含「Hello{N0}」", placeholders.contains("Hello{N0}"))
+            assertTrue("{\"0\": 2} 应替换为 Hello2", placeholders.contains("Hello2"))
+            assertTrue("{\"0\": ''} 应替换为 Hello", placeholders.contains("Hello"))
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }

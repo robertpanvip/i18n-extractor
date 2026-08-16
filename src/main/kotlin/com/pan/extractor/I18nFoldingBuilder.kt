@@ -20,7 +20,7 @@ import com.intellij.psi.util.PsiTreeUtil
  * 折叠为指定语言（[I18nSettings.foldDisplayLanguage]）的翻译文案。
  *
  * - 折叠占位文本 = 翻译值，因此编辑器内 Ctrl+F 可直接搜到翻译文案。
- * - 带插值参数的调用（如 `$t('key', { n: 1 })`）同样折叠，仅展示 key 对应文案。
+ * - 带插值参数的调用（如 `t('key', { "0": "xxx" })`）会将 {N0} 等占位符替换为实际参数值。
  * - 仅在指定语言资源中查得到 key 时才折叠，避免误折叠。
  */
 class I18nFoldingBuilder : FoldingBuilderEx() {
@@ -64,7 +64,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val project = call.project ?: return null
         val messages = LocaleMessages.loadCached(project, call.containingFile)
         val key = extractKey(call) ?: return null
-        return messages[key]
+        val rawValue = messages[key] ?: return null
+        val params = extractInterpolationParams(call)
+        return interpolatePlaceholders(rawValue, params)
     }
 
     /** 为单个调用创建折叠描述符（若 key 在翻译资源中存在）。 */
@@ -74,7 +76,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         descriptors: MutableList<FoldingDescriptor>,
     ) {
         val key = extractKey(call) ?: return
-        val value = messages[key] ?: return
+        val rawValue = messages[key] ?: return
+        val params = extractInterpolationParams(call)
+        val value = interpolatePlaceholders(rawValue, params)
         val range = call.textRange
         if (!range.isEmpty()) {
             descriptors.add(
@@ -106,5 +110,37 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val calleeText = method?.text ?: return false
         val last = calleeText.substringAfterLast('.')
         return last == "t" || last == "\$t" || last == "tc" || last == "\$tc"
+    }
+
+    /** 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。 */
+    private fun extractInterpolationParams(call: JSCallExpression): Map<String, String> {
+        val secondArg = call.arguments.getOrNull(1) ?: return emptyMap()
+        val text = secondArg.text
+        if (text.isBlank()) return emptyMap()
+        val result = mutableMapOf<String, String>()
+        // 匹配 "key": 'value' / "key": "value" / "key": 数字
+        val re = Regex("""["']?(\w+)["']?\s*:\s*("[^"]*"|'[^']*'|-?\d+)""")
+        re.findAll(text).forEach { match ->
+            val key = match.groupValues[1]
+            val rawValue = match.groupValues[2]
+            val value = if (rawValue.startsWith("\"") || rawValue.startsWith("'"))
+                rawValue.substring(1, rawValue.length - 1)
+            else rawValue
+            result[key] = value
+        }
+        return result
+    }
+
+    /** 将翻译值中的 {N0}/{N1} 等占位符替换为实际参数值。 */
+    private fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
+        if (params.isEmpty()) return value
+        var result = value
+        val re = Regex("""\{N(\d+)\}""")
+        re.findAll(result).forEach { match ->
+            val index = match.groupValues[1]
+            val replacement = params[index] ?: return@forEach
+            result = result.replace(match.value, replacement)
+        }
+        return result
     }
 }
