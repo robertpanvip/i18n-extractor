@@ -1,10 +1,13 @@
 package com.pan.extractor
 
 import com.google.gson.JsonParser
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
 
 /**
  * 读取 $t() 折叠展示所用语言的翻译资源，解析为扁平 key→原始文案 映射。
@@ -51,7 +54,14 @@ object LocaleMessages {
     fun loadCached(project: Project, contextPsiFile: PsiFile?): Map<String, String> {
         val displayLang = I18nSettings.getInstance().foldDisplayLanguage()
         val entry = entryVirtualFile(project, contextPsiFile, displayLang) ?: return emptyMap()
-        val key = CacheKey(entry.path, displayLang, entry.modificationStamp)
+        // 使用 PSI 文档的 modificationStamp 而非 VirtualFile 的，
+        // 确保提取翻译后未保存到磁盘的变更也能让缓存失效。
+        val docStamp = runReadAction {
+            val psi = PsiManager.getInstance(project).findFile(entry)
+            psi?.let { PsiDocumentManager.getInstance(project).getDocument(it) }?.modificationStamp
+        }
+        val modStamp = docStamp ?: entry.modificationStamp
+        val key = CacheKey(entry.path, displayLang, modStamp)
         synchronized(cacheLock) {
             cache[key]?.let { return it }
             return parseEntry(project, entry).also { cache[key] = it }
