@@ -53,6 +53,12 @@ class ExtractedStringsDialog(
     var bootstrapPerformed: Boolean = false
         private set
 
+    /** 检测到的“缺 i18n 依赖且未初始化”状态（null 表示不需要引导） */
+    private var bootstrapMissing: I18nBootstrapSupport.MissingBootstrap? = null
+
+    /** 输出面板里的“自动初始化 i18n”勾选框（仅当项目缺 i18n 初始化时展示） */
+    private var chkI18nBootstrap: JCheckBox? = null
+
     // UI 控件
     private lateinit var radioClipboard: JRadioButton
     private lateinit var radioOverwrite: JRadioButton
@@ -132,6 +138,8 @@ class ExtractedStringsDialog(
      *  - [OutputDestination.FILE]：明确写文件 → 不展示面板，自动探测入口文件后写回。
      */
     private fun initOutputByDestination(root: JPanel) {
+        // 提前检测项目是否缺 i18n 依赖且未初始化（决定是否展示“自动初始化 i18n”勾选框）
+        detectBootstrapState()
         when (I18nSettings.getInstance().outputDestination()) {
             OutputDestination.ASK -> {
                 root.add(buildOutputConfigPanel(), BorderLayout.SOUTH)
@@ -146,6 +154,16 @@ class ExtractedStringsDialog(
                     Util.findChineseLocaleEntryFile(project, contextPsiFile)
                 } catch (_: Throwable) { null }
             }
+        }
+    }
+
+    /** 检测项目是否“缺 i18n 依赖且未初始化”，结果存入 [bootstrapMissing]。 */
+    private fun detectBootstrapState() {
+        val psiFile = contextPsiFile ?: return
+        bootstrapMissing = try {
+            Util.detectMissingI18nBootstrap(psiFile)
+        } catch (_: Throwable) {
+            null
         }
     }
 
@@ -168,6 +186,11 @@ class ExtractedStringsDialog(
         }
         val gbcStatus = GridBagConstraints().apply {
             gridx = 0; gridy = 1; gridwidth = 3; anchor = GridBagConstraints.WEST
+            fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
+            insets = Insets(0, 8, 6, 8)
+        }
+        val gbcBootstrap = GridBagConstraints().apply {
+            gridx = 0; gridy = 2; gridwidth = 3; anchor = GridBagConstraints.WEST
             fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
             insets = Insets(0, 8, 6, 8)
         }
@@ -199,6 +222,23 @@ class ExtractedStringsDialog(
         lblEntryStatus = JLabel()
         lblEntryStatus.putClientProperty("html.disable", null)
         panel.add(lblEntryStatus, gbcStatus)
+
+        // 行 2：项目缺 i18n 初始化时，展示“自动初始化 i18n”勾选框由用户选择
+        val missing = bootstrapMissing
+        if (missing != null) {
+            val frameworkLabel = when (missing.framework) {
+                I18nBootstrapSupport.Framework.REACT -> "React（i18next + react-i18next）"
+                I18nBootstrapSupport.Framework.VUE -> "Vue（vue-i18n）"
+            }
+            val chk = JCheckBox(
+                "<html>项目未安装/初始化多语言依赖（$frameworkLabel）。勾选后自动：<br>" +
+                    "&nbsp;&nbsp;• 在 package.json 添加依赖 ${missing.dependencyLabel}<br>" +
+                    "&nbsp;&nbsp;• 创建 i18n 初始化文件（src/i18n.ts）与中文语言包入口文件（src/locales/&lt;locale&gt;.ts）</html>"
+            )
+            chk.isSelected = true
+            chkI18nBootstrap = chk
+            panel.add(chk, gbcBootstrap)
+        }
 
         return panel
     }
@@ -273,61 +313,39 @@ class ExtractedStringsDialog(
     }
 
     /**
-     * 最后确认阶段的 i18n 引导检测 + 确认弹框 + 实际执行。
-     *
-     * 当项目（React/Vue）既没安装多语言依赖、又没初始化 i18n 时，弹确认框提示用户
-     * 插件将自动在 package.json 添加依赖并创建初始化文件。用户选「确定」则执行，
-     * 选「取消」则中止本次提取（返回 false）。
-     *
-     * @return true 表示可以继续后续提取；false 表示用户取消，中止。
+     * 若用户在输出面板中勾选了“自动初始化 i18n”且未初始化，则执行 bootstrap。
+     * 返回 bootstrap 创建的中文语言包入口文件（若无则为 null）。
      */
-    private fun confirmAndDoBootstrap(): Boolean {
-        val psiFile = contextPsiFile ?: return true
-        val missing = try {
-            Util.detectMissingI18nBootstrap(psiFile)
-        } catch (_: Throwable) {
-            null
-        } ?: return true
-
-        val frameworkLabel = when (missing.framework) {
-            I18nBootstrapSupport.Framework.REACT -> "React"
-            I18nBootstrapSupport.Framework.VUE -> "Vue"
-        }
-        val message = buildString {
-            append("检测到 $frameworkLabel 项目尚未安装多语言依赖，且未初始化 i18n。\n\n")
-            append("插件将自动为你：\n")
-            append("  • 在 package.json 添加依赖：${missing.dependencyLabel}\n")
-            append("  • 自动创建 i18n 初始化文件（src/i18n.ts）\n\n")
-            append("是否继续执行提取并自动配置？")
-        }
-        val choice = JOptionPane.showConfirmDialog(
-            this.contentPanel,
-            message,
-            "自动配置 i18n",
-            JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.QUESTION_MESSAGE
-        )
-        if (choice != JOptionPane.OK_OPTION) return false
-
-        // 用户确认：执行 bootstrap（写 package.json + 建初始化文件）
+    private fun applyBootstrapIfChecked(): VirtualFile? {
+        val chk = chkI18nBootstrap ?: return null
+        if (!chk.isSelected) return null
+        val missing = bootstrapMissing ?: return null
+        val psiFile = contextPsiFile ?: return null
+        var createdEntry: VirtualFile? = null
         try {
             WriteCommandAction.runWriteCommandAction(project) {
-                I18nBootstrap.maybeApply(project, psiFile, missing)
+                createdEntry = I18nBootstrap.maybeApply(project, psiFile, missing)
             }
-            bootstrapPerformed = true
         } catch (_: Throwable) {
-            bootstrapPerformed = false
+            return null
         }
-        return true
+        bootstrapPerformed = true
+        return createdEntry
     }
 
     override fun doOKAction() {
         val destination = I18nSettings.getInstance().outputDestination()
 
-        // ── ⓪ 最后确认阶段：检测缺 i18n 依赖且未初始化 → 弹框确认并自动配置 ──
-        //    用户取消则中止本次提取（不写任何文件）。
-        if (!confirmAndDoBootstrap()) {
-            return
+        // ── ⓪ 用户勾选了“自动初始化 i18n” → 执行 bootstrap ──
+        //    自动创建的中文入口文件直接作为写回目标
+        val bootstrapEntry = if (destination == OutputDestination.ASK) {
+            applyBootstrapIfChecked()
+        } else null
+        if (bootstrapEntry != null) {
+            selectedEntryFile = bootstrapEntry
+            if (::entryPathField.isInitialized) {
+                entryPathField.text = bootstrapEntry.path
+            }
         }
 
         // ── ① 确定输出模式 + 入口文件 ──
@@ -337,7 +355,12 @@ class ExtractedStringsDialog(
             // 弹窗展示了输出面板：读取用户在面板里的选择
             wantOverwrite = radioOverwrite.isSelected
             entryFile = if (wantOverwrite) {
-                val pathText = entryPathField.text?.trim().orEmpty()
+                var pathText = entryPathField.text?.trim().orEmpty()
+                // bootstrap 刚自动创建了入口文件 → 用户未手填时用它兜底
+                if (pathText.isEmpty() && bootstrapEntry != null) {
+                    pathText = bootstrapEntry!!.path
+                    entryPathField.text = pathText
+                }
                 if (pathText.isEmpty()) {
                     JOptionPane.showMessageDialog(
                         this.contentPanel,

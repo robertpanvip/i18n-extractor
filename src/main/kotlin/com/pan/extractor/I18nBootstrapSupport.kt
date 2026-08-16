@@ -118,6 +118,10 @@ object I18nBootstrapSupport {
         """.trimIndent() + "\n"
     }
 
+    /** 生成一个最简可写回的中文语言包入口文件内容（export default 对象字面量）。 */
+    fun buildLocaleEntryFileContent(): String =
+        "export default {\n};\n"
+
     /**
      * 在 package.json 文本的 dependencies（或新增 dependencies）中加入给定依赖。
      * 使用宽松 JSON 解析 + 保留其余字段原文（仅精确改写依赖部分），
