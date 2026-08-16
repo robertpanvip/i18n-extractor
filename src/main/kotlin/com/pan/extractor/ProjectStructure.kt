@@ -433,6 +433,25 @@ object ProjectStructure {
     }
 
     /**
+     * 检测项目是否「缺 i18n 依赖且未初始化」（React 缺 i18next / Vue 缺 vue-i18n）。
+     * 基于 [currentPsiFile] 向上定位项目根，读取 package.json 判定依赖，并检查是否已有初始化文件。
+     *
+     * @return 命中则返回需要补的框架与依赖；项目非 React/Vue、已装依赖、或已初始化时返回 null。
+     */
+    fun detectMissingI18nBootstrap(currentPsiFile: PsiFile): I18nBootstrapSupport.MissingBootstrap? {
+        val root = findProjectRoot(currentPsiFile) ?: return null
+        val pkg = root.findChild("package.json") ?: return null
+        val text = try {
+            String(pkg.contentsToByteArray(), StandardCharsets.UTF_8)
+        } catch (_: Exception) {
+            return null
+        }
+        val (hasReact, hasVue, _) = readPackageJsonDependencies(currentPsiFile)
+        val hasInit = findI18nInitFileInRoot(root) != null
+        return I18nBootstrapSupport.detectMissing(text, hasInit, hasReact, hasVue)
+    }
+
+    /**
      * 在 Vue 项目中查找调用了 `createI18n(` 的文件（通常是 @/locales/index.ts 之类）。
      *
      * 查找顺序：

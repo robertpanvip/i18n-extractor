@@ -161,6 +161,9 @@ object Util {
 
     fun findProjectRoot(currentPsiFile: PsiFile): VirtualFile? = ProjectStructure.findProjectRoot(currentPsiFile)
 
+    fun detectMissingI18nBootstrap(currentPsiFile: PsiFile): I18nBootstrapSupport.MissingBootstrap? =
+        ProjectStructure.detectMissingI18nBootstrap(currentPsiFile)
+
     fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? = ProjectStructure.findVueI18nInstanceFile(currentPsiFile)
 
     fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? = ProjectStructure.findVueI18nInstanceFileInRoot(projectRoot)

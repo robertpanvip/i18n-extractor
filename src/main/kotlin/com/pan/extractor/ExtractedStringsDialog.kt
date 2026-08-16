@@ -2,6 +2,7 @@ package com.pan.extractor
 
 import com.google.gson.GsonBuilder
 import com.intellij.json.JsonFileType
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
@@ -46,6 +47,10 @@ class ExtractedStringsDialog(
         private set
     /** OK 后对外暴露：用户选择的中文入口文件（若选择了覆盖） */
     var selectedEntryFile: VirtualFile? = null
+        private set
+
+    /** OK 后对外暴露：本次是否自动做了 i18n bootstrap（补依赖 + 建初始化文件） */
+    var bootstrapPerformed: Boolean = false
         private set
 
     // UI 控件
@@ -267,8 +272,63 @@ class ExtractedStringsDialog(
         }
     }
 
+    /**
+     * 最后确认阶段的 i18n 引导检测 + 确认弹框 + 实际执行。
+     *
+     * 当项目（React/Vue）既没安装多语言依赖、又没初始化 i18n 时，弹确认框提示用户
+     * 插件将自动在 package.json 添加依赖并创建初始化文件。用户选「确定」则执行，
+     * 选「取消」则中止本次提取（返回 false）。
+     *
+     * @return true 表示可以继续后续提取；false 表示用户取消，中止。
+     */
+    private fun confirmAndDoBootstrap(): Boolean {
+        val psiFile = contextPsiFile ?: return true
+        val missing = try {
+            Util.detectMissingI18nBootstrap(psiFile)
+        } catch (_: Throwable) {
+            null
+        } ?: return true
+
+        val frameworkLabel = when (missing.framework) {
+            I18nBootstrapSupport.Framework.REACT -> "React"
+            I18nBootstrapSupport.Framework.VUE -> "Vue"
+        }
+        val message = buildString {
+            append("检测到 $frameworkLabel 项目尚未安装多语言依赖，且未初始化 i18n。\n\n")
+            append("插件将自动为你：\n")
+            append("  • 在 package.json 添加依赖：${missing.dependencyLabel}\n")
+            append("  • 自动创建 i18n 初始化文件（src/i18n.ts）\n\n")
+            append("是否继续执行提取并自动配置？")
+        }
+        val choice = JOptionPane.showConfirmDialog(
+            this.contentPanel,
+            message,
+            "自动配置 i18n",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.QUESTION_MESSAGE
+        )
+        if (choice != JOptionPane.OK_OPTION) return false
+
+        // 用户确认：执行 bootstrap（写 package.json + 建初始化文件）
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                I18nBootstrap.maybeApply(project, psiFile, missing)
+            }
+            bootstrapPerformed = true
+        } catch (_: Throwable) {
+            bootstrapPerformed = false
+        }
+        return true
+    }
+
     override fun doOKAction() {
         val destination = I18nSettings.getInstance().outputDestination()
+
+        // ── ⓪ 最后确认阶段：检测缺 i18n 依赖且未初始化 → 弹框确认并自动配置 ──
+        //    用户取消则中止本次提取（不写任何文件）。
+        if (!confirmAndDoBootstrap()) {
+            return
+        }
 
         // ── ① 确定输出模式 + 入口文件 ──
         val wantOverwrite: Boolean
