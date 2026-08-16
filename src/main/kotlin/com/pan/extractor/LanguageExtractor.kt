@@ -37,7 +37,7 @@ private val KANA_RE = Regex("""[\u3040-\u30ff]""")
 private val HANGUL_RE = Regex("""[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]""")
 private val URL_LIKE_RE =
     Regex("(https?://|www\\.|^[\\w.-]+\\.(com|org|net|io|cn|dev|co)([:/]|$))", RegexOption.IGNORE_CASE)
-private val SENTENCE_HINT = " .,!?;:，。！？；："
+private val SENTENCE_HINT = " .,!?;:"
 
 /**
  * 拉丁字母语系（Latin script）共享的「字母句子」判定。

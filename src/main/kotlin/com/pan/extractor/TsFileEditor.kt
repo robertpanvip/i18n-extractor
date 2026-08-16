@@ -108,8 +108,9 @@ object TsFileEditor {
         }
         // 模式 6：export default defineXxx({ ... }) —— 支持 i18n 常用包裹函数
         // （defineI18nConfig / defineMessages / defineConfig / createI18n 等），对象字面量在函数括号内。
+        // 兼容 TypeScript 泛型：export default defineMessages<SomeType>({ ... })
         run {
-            val re = Regex("""export\s+default\s+([A-Za-z_$][\w$]*)\s*\(\s*\{""")
+            val re = Regex("""export\s+default\s+([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*\(\s*\{""")
             val m = re.find(text)
             if (m != null) {
                 val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
