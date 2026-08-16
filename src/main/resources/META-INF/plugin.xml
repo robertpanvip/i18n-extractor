@@ -51,6 +51,18 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
         <lang.folding
                 language="TypeScript"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <!-- .tsx 文件的实际语言 ID 是 "TypeScript JSX"（TypeScript 的 dialect），
+             需单独注册，否则 .tsx 中的 $t()/t() 不会触发展开/折叠。 -->
+        <lang.folding
+                language="TypeScript JSX"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <!-- .jsx 文件的实际语言 ID；不同版本可能是 "JSX Harmony" 或 "JSX"，此处同时注册。 -->
+        <lang.folding
+                language="JSX Harmony"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.folding
+                language="JSX"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
         <lang.folding
                 language="VueJS"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
