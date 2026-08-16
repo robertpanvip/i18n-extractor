@@ -49,6 +49,15 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
                 language="JavaScript"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
         <lang.folding
+                language="JSX"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.folding
+                language="TypeScript"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.folding
+                language="TSX"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.folding
                 language="VueJS"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
     </extensions>
