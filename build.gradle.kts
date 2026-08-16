@@ -79,13 +79,6 @@ tasks {
     test {
         useJUnit()
 
-        // 内存受限环境（CI/沙箱）稳定性：整包测试塞进一个 JVM 会累积内存被 SIGKILL（exit 137）。
-        // 每个测试类一个独立 JVM（类间回收内存）+ 串行（一次一个 JVM）+ 显式堆/元空间上界。
-        forkEvery = 1
-        maxParallelForks = 1
-        maxHeapSize = "1g"
-        jvmArgs("-XX:MaxMetaspaceSize=512m")
-
         testLogging {
             showStandardStreams = true
             events(
