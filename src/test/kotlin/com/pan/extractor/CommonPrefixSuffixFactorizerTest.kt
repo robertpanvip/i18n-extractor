@@ -114,6 +114,26 @@ class CommonPrefixSuffixFactorizerTest {
         assertTrue("应存在公共前后缀候选，实际 affix=$affix", affix.any { it.skeleton == "测试{N0}" })
     }
 
+    /**
+     * 用户反馈 Bug：你好hello / 你好hello2 应合并成「一个翻译」。
+     * 其中 你好hello2 含数字 2，骨架为 你好hello{N0}；而 你好hello 恰好等于骨架去占位后的文本
+     * （你好hello{N0} 去掉 {N0} → 你好hello），应作为「空数字」变体并入同一组，
+     * 而不是各自独立成两条翻译。
+     */
+    @Test
+    fun testPrefixOnlyWithDigitSuffixIsMerged() {
+        val sites = siteRefs("你好hello", "你好hello2")
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+
+        val dg = digit.firstOrNull { it.skeleton == "你好hello{N0}" }
+        assertTrue("应生成数字抽取候选，骨架=你好hello{N0}，实际 digit=$digit", dg != null)
+        val perSiteTexts = dg!!.perSites.map { it.site.originalMessage to it.digitValues.first() }.toSet()
+        assertTrue(
+            "你好hello 应以空数字并入，你好hello2 以 2 并入，实际 $perSiteTexts",
+            perSiteTexts == setOf("你好hello" to "", "你好hello2" to "2")
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 追加覆盖：占位提示 / 后缀-only / 数字边界 / 完全重复提示
     // ─────────────────────────────────────────────────────────────

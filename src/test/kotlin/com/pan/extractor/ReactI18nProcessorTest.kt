@@ -1249,6 +1249,42 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
+     * 【用户反馈 Bug】React 中已翻译的 t() 调用（如 t('你好hello') / t('你好hello2')）
+     * 必须被识别进 existingStrings，从而在最终 JSON 中被“复用”，否则 JSON 会是空的。
+     * 该场景同时验证：中英混合 + 数字结尾的已翻译 key 都能被收录，且不会重复提取。
+     */
+    fun testReactExistingTChineseEnglishDigitCollected() {
+        val file = configureFile(
+            "src/mix.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+
+            function App() {
+                const { t } = useTranslation();
+                return (
+                    <div>
+                        <span>{t('你好hello')}</span>
+                        <span>{t('你好hello2')}</span>
+                    </div>
+                );
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val values = processor.existingStrings.values.toSet()
+        assertTrue(
+            "已翻译的 t('你好hello') / t('你好hello2') 必须进 existingStrings, got=$values",
+            values.containsAll(setOf("你好hello", "你好hello2"))
+        )
+        // 已翻译调用不应被当作新文本再次提取
+        assertTrue(
+            "已翻译调用不应进入 extractedStrings, got=${processor.extractedStrings.values}",
+            processor.extractedStrings.values.none { it == "你好hello" || it == "你好hello2" }
+        )
+    }
+
+    /**
      * 问题 3（React）：文件已经写了 `i18n.t('删除')` 或 `t('新增')` 这类调用，
      * 其参数字符串的中文也必须进入 existingStrings（最终对话框里出现，写回语言包）。
      * 之前只识别了简单引用名 $t/t，漏掉了链式 i18n.t / i18n.global.t 分支。

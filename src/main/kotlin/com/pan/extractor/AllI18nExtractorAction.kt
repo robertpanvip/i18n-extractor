@@ -265,6 +265,9 @@ class AllI18nExtractorAction : AnAction() {
                 if (psiFile == null) null else {
                     val processor = I18nProcessor(project, psiFile)
                     processor.collect()
+                    // 已翻译的 t()/i18n.t() 调用（existingStrings）也要并入输出 JSON，
+                    // 与单文件/目录提取保持一致，否则 React 已翻译文案会丢失导致 JSON 为空。
+                    extracted.putAll(processor.existingStrings)
                     extracted.putAll(processor.extractedStrings)
                     processor
                 }
