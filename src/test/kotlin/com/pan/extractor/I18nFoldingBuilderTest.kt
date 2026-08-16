@@ -222,7 +222,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
             val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
-            assertEquals("Vue 双花括号应反转义为单花括号，不替换参数", hint("Hello{0}"), descriptors.first().placeholderText)
+            assertEquals("Vue 双花括号应反转义后替换参数", hint("HelloWorld"), descriptors.first().placeholderText)
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }

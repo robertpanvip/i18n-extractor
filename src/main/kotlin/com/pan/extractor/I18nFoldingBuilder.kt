@@ -140,19 +140,17 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     private fun interpolatePlaceholders(value: String, params: Map<String, String>, isVue: Boolean): String {
         if (params.isEmpty()) return value
         var result = value
-        // Vue 项目中 {{ }} 是花括号转义，需先反转义为 { }，再对单层花括号做插值替换
+        // Vue 项目中 {{ }} 是花括号转义，先反转义为 { }，再对单层花括号做插值替换
+        // 例如：Hello{{0}} → Hello{0} → Hello1
         if (isVue) {
-            result = result.replace("{{", "\u0000").replace("}}", "\u0001")
+            result = result.replace("{{", "{").replace("}}", "}")
         }
-        // 使用负向前瞻/后顾排除双花括号内的 {N}/{N0}（如 {{0}} 中的 {0} 不应替换）
-        val re = Regex("""(?<!\{)\{N?(\d+)\}(?!\})""")
+        // 使用负向前瞻/后顾排除双花括号（React 项目无反转义，{{0}} 中的 {0} 不应替换）
+        val re = if (isVue) Regex("""\{N?(\d+)\}""") else Regex("""(?<!\{)\{N?(\d+)\}(?!\})""")
         re.findAll(result).forEach { match ->
             val index = match.groupValues[1]
             val replacement = params[index] ?: return@forEach
             result = result.replace(match.value, replacement)
-        }
-        if (isVue) {
-            result = result.replace("\u0000", "{").replace("\u0001", "}")
         }
         return result
     }
