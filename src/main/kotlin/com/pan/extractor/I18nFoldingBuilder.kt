@@ -19,8 +19,8 @@ import com.intellij.psi.util.PsiTreeUtil
  * 把 `$t('key')` / `t('key')`（含 Vue 的 `{{ $t('key') }}` 脚本表达式、React 的 `t('key')`）
  * 折叠为指定语言（[I18nSettings.foldDisplayLanguage]）的翻译文案。
  *
- * - 折叠占位文本 = 翻译值，因此编辑器内 Ctrl+F 可直接搜到翻译文案。
- * - 带插值参数的调用（如 `t('key', { "0": "xxx" })`）会将 {N0} 等占位符替换为实际参数值。
+ * - 折叠占位文本 = 翻译值，编辑器内 Ctrl+F 可直接搜到翻译文案。
+ * - 带插值参数的调用会将 {N0}/{0} 等占位符替换为实际参数值，同时支持 Vue（{N0}）和 React（{0}）格式。
  * - 仅在指定语言资源中查得到 key 时才折叠，避免误折叠。
  */
 class I18nFoldingBuilder : FoldingBuilderEx() {
@@ -54,8 +54,8 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return descriptors.toTypedArray()
     }
 
-    /** 打开文件时 $t() 调用默认全部折叠，便于直接看到翻译文案。 */
-    override fun isCollapsedByDefault(node: ASTNode): Boolean = true
+    /** 打开文件时不默认折叠，用户可手动点击行号左侧图标折叠。 */
+    override fun isCollapsedByDefault(node: ASTNode): Boolean = false
 
     /** 兜底占位文本：descriptor 已在构造时携带占位文本，此方法通常不会被调用。 */
     override fun getPlaceholderText(node: ASTNode): String? {
@@ -131,11 +131,11 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return result
     }
 
-    /** 将翻译值中的 {N0}/{N1} 等占位符替换为实际参数值。 */
+    /** 将翻译值中的占位符替换为实际参数值。同时支持 {N0}（Vue）和 {0}（React）两种格式。 */
     private fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
         if (params.isEmpty()) return value
         var result = value
-        val re = Regex("""\{N(\d+)\}""")
+        val re = Regex("""\{N?(\d+)\}""")
         re.findAll(result).forEach { match ->
             val index = match.groupValues[1]
             val replacement = params[index] ?: return@forEach

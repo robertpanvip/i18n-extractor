@@ -160,6 +160,37 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         }
     }
 
+    /** React 项目使用 {0}/{1} 格式（不带 N 前缀），验证插值正常。 */
+    fun testFoldTsxReactStylePlaceholder() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                'hello': 'Hello, {0}!',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/App.tsx",
+                """
+                import {useTranslation} from 'react-i18next';
+                export default function App() {
+                    const {t} = useTranslation();
+                    return <div>{ t('hello', { "0": "World" }) }</div>;
+                }
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+            assertEquals("应折叠 1 处", 1, descriptors.size)
+            assertEquals("React {0} 应替换为 World", "Hello, World!", descriptors.first().placeholderText)
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
     fun testFoldVueTemplateInterpolation() {
         val file = configureFile(
             "src/App.vue",
