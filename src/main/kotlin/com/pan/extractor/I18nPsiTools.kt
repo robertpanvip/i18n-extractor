@@ -529,8 +529,8 @@ internal object I18nPsiTools {
         }
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
         val key = skeletonKeyOverride?.trim()?.ifBlank { null } ?: trimmedMsg
-        // 用户要求：统一用 \$t 减少复杂度（不需要再切 i18n.global.t / i18n.t 长形式）
-        val fn = "\$t"
+        // Vue 用 $t，React 用 t；避免长形式 i18n.global.t / i18n.t
+        val fn = if (isReact) "t" else "\$t"
         val keyEscaped = if (key.contains("\n")) key.replace("`", "\\`") else key.replace("'", "\\'")
         return if (paramsObject.replace(" ", "") == "{}") {
             "$fn($quote$keyEscaped$quote)"
