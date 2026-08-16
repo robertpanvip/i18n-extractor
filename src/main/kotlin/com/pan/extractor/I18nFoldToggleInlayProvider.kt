@@ -47,14 +47,14 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
                     ).firstOrNull { it.renderer is I18nFoldToggleRenderer }
                     if (clickedInlay != null) {
                         val offset = clickedInlay.offset
-                        val foldRegion = editor.foldingModel.getCollapsedRegionAtOffset(offset)
-                        if (foldRegion != null) {
-                            foldRegion.isExpanded = true
-                        } else {
-                            // 尝试折叠：找最近的 fold region
-                            val allFold = editor.foldingModel.allFoldRegions
-                                .firstOrNull { it.startOffset <= offset && offset <= it.endOffset + 1 }
-                            allFold?.isExpanded = false
+                        val fm = editor.foldingModel
+                        fm.runBatchFoldingOperation {
+                            val fold = fm.allFoldRegions.firstOrNull {
+                                it.startOffset <= offset && offset <= it.endOffset
+                            }
+                            if (fold != null) {
+                                fold.isExpanded = !fold.isExpanded
+                            }
                         }
                     }
                 }
