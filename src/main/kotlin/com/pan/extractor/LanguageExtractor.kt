@@ -27,6 +27,40 @@ enum class SiteKind {
     OTHER
 }
 
+// ───────────────────────────────────────────────
+// 拉丁字母语系共享判定（英/法/德/西/意/葡共用 26 个拉丁字母）
+// ───────────────────────────────────────────────
+
+private val LATIN_LETTER_RE = Regex("[a-zA-Z]")
+private val CJK_RE = Regex("""[\u4e00-\u9fff]""")
+private val KANA_RE = Regex("""[\u3040-\u30ff]""")
+private val HANGUL_RE = Regex("""[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]""")
+private val URL_LIKE_RE =
+    Regex("(https?://|www\\.|^[\\w.-]+\\.(com|org|net|io|cn|dev|co)([:/]|$))", RegexOption.IGNORE_CASE)
+private val SENTENCE_HINT = " .,!?;:，。！？；："
+
+/**
+ * 拉丁字母语系（Latin script）共享的「字母句子」判定。
+ *
+ * 拉丁字母语系（英/法/德/西/意/葡）共用 26 个英文字母。文本若看起来是
+ * 「拉丁字母句子」（含 a-zA-Z、无 CJK/假名/谚文、非 URL、含空格或句子标点），
+ * 语系内所有语言都视为命中，从而把纯 ASCII 文案（如 "Hello world" / "Hallo Welt"）
+ * 也纳入提取，而不只是命中英文。
+ *
+ * 单 token（无空格/标点）与 URL 仍被排除，避免把代码标识符 / 超链接误当文案。
+ */
+fun isLatinAlphabetSentence(text: CharSequence): Boolean {
+    val s = text.toString().trim()
+    if (s.isEmpty()) return false
+    if (!LATIN_LETTER_RE.containsMatchIn(s)) return false
+    // 其它文字（CJK / 假名 / 谚文）出现 → 不是拉丁字母句子
+    if (CJK_RE.containsMatchIn(s) || KANA_RE.containsMatchIn(s) || HANGUL_RE.containsMatchIn(s)) return false
+    // 明显代码特征（URL）
+    if (URL_LIKE_RE.containsMatchIn(s)) return false
+    // 句子/短语特征：含空格 或 句子标点（排除单 token 标识符/常量）
+    return s.any { it.isWhitespace() } || s.any { it in SENTENCE_HINT }
+}
+
 /**
  * 可插拔的“目标语言”提取器。每种语言一个实现，统一定义：
  *  - [judge]：文本是否包含该语言（用于提取判定，取代原先硬编码的 `[\u4e00-\u9fff]`）
@@ -106,27 +140,7 @@ object EnglishExtractor : LanguageExtractor {
     override val id = "en"
     override val displayName = "英文"
 
-    private val EN_LETTER = Regex("[a-zA-Z]")
-    private val CJK = Regex("""[\u4e00-\u9fff]""")
-    private val KANA = Regex("""[\u3040-\u30ff]""")
-    private val HANGUL = Regex("""[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]""")
-    private val URL_LIKE =
-        Regex("(https?://|www\\.|^[\\w.-]+\\.(com|org|net|io|cn|dev|co)([:/]|$))", RegexOption.IGNORE_CASE)
-    private val SENTENCE_HINT = " .,!?;:，。！？；："
-
-    override fun judge(text: CharSequence): Boolean {
-        val s = text.toString().trim()
-        if (s.isEmpty()) return false
-        if (!EN_LETTER.containsMatchIn(s)) return false
-        // 其它语言字符 → 不是英文
-        if (CJK.containsMatchIn(s) || KANA.containsMatchIn(s) || HANGUL.containsMatchIn(s)) return false
-        // 明显代码特征（URL）
-        if (URL_LIKE.containsMatchIn(s)) return false
-        // 句子/短语特征：含空格 或 句子标点（排除单 token 标识符/常量）
-        val hasSpace = s.any { it.isWhitespace() }
-        val hasPunct = s.any { it in SENTENCE_HINT }
-        return hasSpace || hasPunct
-    }
+    override fun judge(text: CharSequence): Boolean = isLatinAlphabetSentence(text)
 
     override fun localeNameCandidates(): List<String> = listOf("en", "en-US", "en_US", "enUS", "us")
     override val langTagPrefix = "en"
@@ -136,8 +150,8 @@ object EnglishExtractor : LanguageExtractor {
 /**
  * 法语：拉丁字母 + 法语专属重音符（é è ê ë à â ä ç î ï ô ù û ü œ æ ÿ）。
  *
- * 与英文同为拉丁字母，无法用整段字符区间与英文完全区分；因此用法语专属重音符做确定性判定
- * （含重音符 → 法语），纯 ASCII 法语（如 "bonjour"）与英文重叠属已知取舍，与英文方案一致。
+ * 属于拉丁字母语系：除专属重音符外，还共享英文 26 字母的句子判定，
+ * 因此纯 ASCII 法语（如 "Bonjour tout le monde"）也能被识别提取。
  * 重音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文（与 CJK 一致）。
  */
 object FrenchExtractor : LanguageExtractor {
@@ -146,7 +160,8 @@ object FrenchExtractor : LanguageExtractor {
     private val RE = Regex(
         """[éèêëàâäçîïôùûüÿœæ]"""
     )
-    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun judge(text: CharSequence): Boolean =
+        RE.containsMatchIn(text) || isLatinAlphabetSentence(text)
     override fun localeNameCandidates(): List<String> =
         listOf("fr", "fr-FR", "fr_FR", "frFR", "fr-CA", "fr_CH", "frfr", "frCH", "fr-BE", "fr-CH")
     override val langTagPrefix = "fr"
@@ -168,15 +183,16 @@ object RussianExtractor : LanguageExtractor {
 /**
  * 德语：拉丁字母 + 德语专属变音（ä ö ü 与 ß）。
  *
- * 与英/法同为拉丁字母，无法用整段字符区间与英文完全区分；因此用德语专属变音符做确定性判定
- * （含变音符 → 德语），纯 ASCII 德语（如 "Hallo"）与英文重叠属已知取舍，与英文/法语方案一致。
+ * 属于拉丁字母语系：除专属变音外，还共享英文 26 字母的句子判定，
+ * 因此纯 ASCII 德语（如 "Hallo Welt"）也能被识别提取。
  * 变音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
  */
 object GermanExtractor : LanguageExtractor {
     override val id = "de"
     override val displayName = "德语"
     private val RE = Regex("""[äöüßÄÖÜ]""")
-    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun judge(text: CharSequence): Boolean =
+        RE.containsMatchIn(text) || isLatinAlphabetSentence(text)
     override fun localeNameCandidates(): List<String> =
         listOf("de", "de-DE", "de_DE", "deDE", "de-AT", "de_AT", "de-CH", "de_CH")
     override val langTagPrefix = "de"
@@ -186,15 +202,16 @@ object GermanExtractor : LanguageExtractor {
 /**
  * 西班牙语：拉丁字母 + 西语专属字符（ñ、带重音的元音、倒问句/叹句）。
  *
- * 与英/法/德同为拉丁字母，无法用整段字符区间与英文完全区分；因此用西语专属字符做确定性判定
- * （含 ñ / 重音元音等 → 西语），纯 ASCII 西语（如 "hola"）与英文重叠属已知取舍，与英文/法语/德语方案一致。
+ * 属于拉丁字母语系：除西语专属字符外，还共享英文 26 字母的句子判定，
+ * 因此纯 ASCII 西语（如 "Hola mundo"）也能被识别提取。
  * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
  */
 object SpanishExtractor : LanguageExtractor {
     override val id = "es"
     override val displayName = "西班牙语"
     private val RE = Regex("""[ñáéíóúüÑÁÉÍÓÚÜ¿¡]""")
-    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun judge(text: CharSequence): Boolean =
+        RE.containsMatchIn(text) || isLatinAlphabetSentence(text)
     override fun localeNameCandidates(): List<String> =
         listOf("es", "es-ES", "es_ES", "esES", "es-MX", "es_MX", "es-AR", "es-CL", "es-CO")
     override val langTagPrefix = "es"
@@ -204,8 +221,8 @@ object SpanishExtractor : LanguageExtractor {
 /**
  * 意大利语：拉丁字母 + 意语专属重音元音（à è é ì ò ù）。
  *
- * 与英/法/西同为拉丁字母，无法用整段字符区间与英文完全区分；因此用意语专属重音符做确定性判定
- * （含重音元音 → 意语），纯 ASCII 意语（如 "ciao"）与英文重叠属已知取舍，与英文/法语等方案一致。
+ * 属于拉丁字母语系：除意语专属重音外，还共享英文 26 字母的句子判定，
+ * 因此纯 ASCII 意语（如 "Ciao mondo"）也能被识别提取。
  * 注意 à/è/é/ù 与法语重叠（如 "città" 也会被法语判中），属确定性方案的固有取舍。
  * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
  */
@@ -213,7 +230,8 @@ object ItalianExtractor : LanguageExtractor {
     override val id = "it"
     override val displayName = "意大利语"
     private val RE = Regex("""[àèéìòù]""")
-    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun judge(text: CharSequence): Boolean =
+        RE.containsMatchIn(text) || isLatinAlphabetSentence(text)
     override fun localeNameCandidates(): List<String> =
         listOf("it", "it-IT", "it_IT", "itIT", "it-CH", "it_CH")
     override val langTagPrefix = "it"
@@ -223,8 +241,8 @@ object ItalianExtractor : LanguageExtractor {
 /**
  * 葡萄牙语：拉丁字母 + 葡语专属字符（ã õ 波浪元音，及 à á â ç é ê í ó ô ú ü）。
  *
- * 与英/法/西同为拉丁字母，无法用整段字符区间与英文完全区分；因此用葡语专属字符做确定性判定
- * （含 ã/õ 等 → 葡语），纯 ASCII 葡语（如 "olá" 无重音形式）与英文重叠属已知取舍，与英文/法语等方案一致。
+ * 属于拉丁字母语系：除葡语专属字符外，还共享英文 26 字母的句子判定，
+ * 因此纯 ASCII 葡语（如 "Ola mundo"）也能被识别提取。
  * ã/õ 为葡语（及加利西亚语）特有，可稳定把葡语与西/法/意区分开。
  * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
  */
@@ -232,7 +250,8 @@ object PortugueseExtractor : LanguageExtractor {
     override val id = "pt"
     override val displayName = "葡萄牙语"
     private val RE = Regex("""[àáâãçéêíóôõúü]""")
-    override fun judge(text: CharSequence): Boolean = RE.containsMatchIn(text)
+    override fun judge(text: CharSequence): Boolean =
+        RE.containsMatchIn(text) || isLatinAlphabetSentence(text)
     override fun localeNameCandidates(): List<String> =
         listOf("pt", "pt-BR", "pt_PT", "pt-PT", "ptBR", "ptPT", "pt-MO", "pt-AO")
     override val langTagPrefix = "pt"

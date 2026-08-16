@@ -360,8 +360,11 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue(FrenchExtractor.judge("présentation"))
         assertTrue(FrenchExtractor.judge("Bonjour, comment ça va ?"))
         assertTrue(FrenchExtractor.judge("français"))
-        assertFalse(FrenchExtractor.judge("bonjour"))      // 纯 ASCII 法语，无重音符 → 与英文重叠，不判法语
-        assertFalse(FrenchExtractor.judge("hello world"))  // 英文
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 句子也命中
+        assertTrue(FrenchExtractor.judge("Bonjour tout le monde"))
+        assertTrue(FrenchExtractor.judge("hello world"))
+        // 单 token（无空格/标点）仍排除，避免误判代码标识符
+        assertFalse(FrenchExtractor.judge("bonjour"))
         assertFalse(FrenchExtractor.judge("你好"))          // 中文
         assertFalse(FrenchExtractor.judge("Привет"))       // 俄文
     }
@@ -425,10 +428,13 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue(GermanExtractor.judge("Schönen Tag noch"))
         assertTrue(GermanExtractor.judge("Straße"))
         assertTrue(GermanExtractor.judge("für"))
-        assertFalse(GermanExtractor.judge("Hallo"))      // 纯 ASCII 德语，无变音符 → 与英文重叠，不判德语
-        assertFalse(GermanExtractor.judge("hello world"))// 英文
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 句子也命中
+        assertTrue(GermanExtractor.judge("Hallo Welt"))
+        assertTrue(GermanExtractor.judge("hello world"))
+        // 单 token（无空格/标点）仍排除，避免误判代码标识符
+        assertFalse(GermanExtractor.judge("Hallo"))
         assertFalse(GermanExtractor.judge("你好"))        // 中文
-        assertFalse(GermanExtractor.judge("café"))       // 法语
+        assertFalse(GermanExtractor.judge("café"))       // 单 token 法语重音符，德语专属字符不含 é → 不命中
     }
 
     fun testGermanJudgmentFollowsSettings() {
@@ -458,10 +464,13 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue(SpanishExtractor.judge("¡Hola mundo!"))
         assertTrue(SpanishExtractor.judge("¿Cómo estás?"))
         assertTrue(SpanishExtractor.judge("años"))
-        assertFalse(SpanishExtractor.judge("hola"))      // 纯 ASCII 西语，无专属字符 → 与英文重叠，不判西语
-        assertFalse(SpanishExtractor.judge("hello world"))// 英文
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 句子也命中
+        assertTrue(SpanishExtractor.judge("Hola mundo"))
+        assertTrue(SpanishExtractor.judge("hello world"))
+        // 单 token（无空格/标点）仍排除，避免误判代码标识符
+        assertFalse(SpanishExtractor.judge("hola"))
         assertFalse(SpanishExtractor.judge("你好"))        // 中文
-        assertFalse(SpanishExtractor.judge("Straße"))    // 德语（ß 为德语独有，无西语字符）
+        assertFalse(SpanishExtractor.judge("Straße"))    // 单 token 德语变音符，西语专属字符不含 ß → 不命中
     }
 
     fun testSpanishJudgmentFollowsSettings() {
@@ -491,9 +500,12 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue(ItalianExtractor.judge("perché"))
         assertTrue(ItalianExtractor.judge("più"))
         assertTrue(ItalianExtractor.judge("è bello"))
-        assertFalse(ItalianExtractor.judge("ciao"))             // 纯 ASCII 意语，无重音 → 与英文重叠，不判意语
-        assertFalse(ItalianExtractor.judge("hello world"))      // 英文
-        assertFalse(ItalianExtractor.judge("français"))         // 法语（ç 为法语独有，意语无此字符）
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 句子也命中
+        assertTrue(ItalianExtractor.judge("Ciao mondo"))
+        assertTrue(ItalianExtractor.judge("hello world"))
+        // 单 token（无空格/标点）仍排除，避免误判代码标识符
+        assertFalse(ItalianExtractor.judge("ciao"))
+        assertFalse(ItalianExtractor.judge("français"))         // 单 token 法语字符，意语专属字符不含 ç → 不命中
         assertFalse(ItalianExtractor.judge("你好"))              // 中文
     }
 
@@ -524,10 +536,13 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         assertTrue(PortugueseExtractor.judge("pão"))
         assertTrue(PortugueseExtractor.judge("não"))
         assertTrue(PortugueseExtractor.judge("informação"))
-        assertFalse(PortugueseExtractor.judge("ola"))           // 纯 ASCII 葡语，无专属字符 → 与英文重叠，不判葡语
-        assertFalse(PortugueseExtractor.judge("hello world"))   // 英文
-        assertFalse(PortugueseExtractor.judge("cœur"))          // 法语（œ 为法语独有，葡语无此字符）
-        assertFalse(PortugueseExtractor.judge("mañana"))        // 西语（ñ 为西语独有，葡语无此字符）
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 句子也命中
+        assertTrue(PortugueseExtractor.judge("Ola mundo"))
+        assertTrue(PortugueseExtractor.judge("hello world"))
+        // 单 token（无空格/标点）仍排除，避免误判代码标识符
+        assertFalse(PortugueseExtractor.judge("ola"))           // 纯 ASCII 单 token → 排除
+        assertFalse(PortugueseExtractor.judge("cœur"))          // œ 无空格/标点 → 单 token，排除
+        assertFalse(PortugueseExtractor.judge("mañana"))        // ñ 无空格/标点 → 单 token，排除
     }
 
     fun testPortugueseJudgmentFollowsSettings() {

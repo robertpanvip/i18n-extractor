@@ -47,7 +47,8 @@ class LanguageExtractorCoreFunctionTest {
     @Test
     fun frenchJudgeDetectsAccents() {
         assertTrue(LanguageRegistry.byId("fr")!!.judge("Bonjour à tous"))
-        assertFalse(LanguageRegistry.byId("fr")!!.judge("hello"))
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 也命中
+        assertTrue(LanguageRegistry.byId("fr")!!.judge("Hello world"))
     }
 
     @Test
@@ -59,25 +60,29 @@ class LanguageExtractorCoreFunctionTest {
     @Test
     fun germanJudgeDetectsUmlauts() {
         assertTrue(LanguageRegistry.byId("de")!!.judge("Grüße"))
-        assertFalse(LanguageRegistry.byId("de")!!.judge("hello"))
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 也命中
+        assertTrue(LanguageRegistry.byId("de")!!.judge("Hello world"))
     }
 
     @Test
     fun spanishJudgeDetectsSpecialChars() {
         assertTrue(LanguageRegistry.byId("es")!!.judge("¿Cómo estás?"))
-        assertFalse(LanguageRegistry.byId("es")!!.judge("hello"))
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 也命中
+        assertTrue(LanguageRegistry.byId("es")!!.judge("Hello world"))
     }
 
     @Test
     fun italianJudgeDetectsAccentedVowels() {
         assertTrue(LanguageRegistry.byId("it")!!.judge("Città"))
-        assertFalse(LanguageRegistry.byId("it")!!.judge("hello"))
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 也命中
+        assertTrue(LanguageRegistry.byId("it")!!.judge("Hello world"))
     }
 
     @Test
     fun portugueseJudgeDetectsTildeVowels() {
         assertTrue(LanguageRegistry.byId("pt")!!.judge("Ação"))
-        assertFalse(LanguageRegistry.byId("pt")!!.judge("hello"))
+        // 拉丁字母语系共享英文 26 字母句子判定：纯 ASCII 也命中
+        assertTrue(LanguageRegistry.byId("pt")!!.judge("Hello world"))
     }
 
     @Test
