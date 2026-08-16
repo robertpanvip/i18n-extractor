@@ -54,8 +54,8 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return descriptors.toTypedArray()
     }
 
-    /** 打开文件时不默认折叠，用户可手动点击行号左侧图标折叠。 */
-    override fun isCollapsedByDefault(node: ASTNode): Boolean = false
+    /** 打开文件时 $t() 调用默认全部折叠，便于直接看到翻译文案。 */
+    override fun isCollapsedByDefault(node: ASTNode): Boolean = true
 
     /** 兜底占位文本：descriptor 已在构造时携带占位文本，此方法通常不会被调用。 */
     override fun getPlaceholderText(node: ASTNode): String? {
