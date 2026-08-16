@@ -19,6 +19,7 @@ set -euo pipefail
 MISE_INSTALLS="${MISE_INSTALLS:-$HOME/.local/share/mise/installs}"
 JDK21_CANDIDATES=(
   "$MISE_INSTALLS/java/temurin-21"
+  "$MISE_INSTALLS/java/21.0.2"
   "/usr/lib/jvm/java-21-openjdk-amd64"
   "/opt/java/jdk-21"
 )

@@ -144,4 +144,31 @@ class I18nPsiToolsCoreFunctionTest {
             "标题", "{}", isVue = true, isReact = false, skeletonKeyOverride = "skeleton.key"
         ))
     }
+
+    @Test
+    fun reactUsesPlainTNotDollarT() {
+        assertEquals("t('标题')", I18nPsiTools.buildTExprForRawText("标题", "{}", isVue = false, isReact = true))
+    }
+
+    @Test
+    fun reactUsesPlainTWithParams() {
+        assertEquals(
+            "t('标题', { N0: 'x' })",
+            I18nPsiTools.buildTExprForRawText("标题", "{ N0: 'x' }", isVue = false, isReact = true)
+        )
+    }
+
+    @Test
+    fun reactUsesPlainTWithSkeletonKey() {
+        assertEquals("t('skeleton.key')", I18nPsiTools.buildTExprForRawText(
+            "标题", "{}", isVue = false, isReact = true, skeletonKeyOverride = "skeleton.key"
+        ))
+    }
+
+    @Test
+    fun reactUsesBacktickForMultiline() {
+        val out = I18nPsiTools.buildTExprForRawText("第一行\n第二行", "{}", isVue = false, isReact = true)
+        assertTrue("React 多行应使用反引号模板", out.startsWith("t(`"))
+        assertTrue(out.endsWith("`)"))
+    }
 }
