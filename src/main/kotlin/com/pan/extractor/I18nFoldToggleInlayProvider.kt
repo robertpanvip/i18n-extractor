@@ -1,0 +1,114 @@
+package com.pan.extractor
+
+import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.event.EditorFactoryEvent
+import com.intellij.openapi.editor.event.EditorFactoryListener
+import com.intellij.openapi.editor.event.EditorMouseEvent
+import com.intellij.openapi.editor.event.EditorMouseListener
+import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.PsiFile
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.ui.JBColor
+import java.awt.Graphics
+import java.awt.Rectangle
+import java.awt.event.MouseEvent
+
+/**
+ * 在 t()/`$t()` 调用前添加可点击的 ↩ inlay 提示，用于快速折叠/展开切换。
+ * 注册为 [EditorFactoryListener]，在编辑器打开时自动添加。
+ */
+class I18nFoldToggleInlayProvider : EditorFactoryListener {
+
+    override fun editorCreated(event: EditorFactoryEvent) {
+        val editor = event.editor
+        val project = editor.project ?: return
+
+        ApplicationManager.getApplication().invokeLater {
+            if (editor.isDisposed) return@invokeLater
+            val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return@invokeLater
+            if (!isI18nFile(file.name)) return@invokeLater
+
+            val messages = LocaleMessages.loadCached(project, file)
+            if (messages.isEmpty()) return@invokeLater
+
+            addFoldToggleInlays(editor, file, messages)
+
+            // 点击 inlay 时切换折叠状态
+            editor.addEditorMouseListener(object : EditorMouseListener {
+                override fun mouseClicked(e: EditorMouseEvent) {
+                    if (e.mouseEvent.button != MouseEvent.BUTTON1) return
+                    val clickedInlay = editor.inlayModel.getInlineElementsInRange(
+                        editor.logicalPositionToOffset(editor.xyToLogicalPosition(e.mouseEvent.point)),
+                        editor.logicalPositionToOffset(editor.xyToLogicalPosition(e.mouseEvent.point))
+                    ).firstOrNull { it.renderer is I18nFoldToggleRenderer }
+                    if (clickedInlay != null) {
+                        val offset = clickedInlay.offset
+                        val foldRegion = editor.foldingModel.getCollapsedRegionAtOffset(offset)
+                        if (foldRegion != null) {
+                            foldRegion.isExpanded = true
+                        } else {
+                            // 尝试折叠：找最近的 fold region
+                            val allFold = editor.foldingModel.allFoldRegions
+                                .firstOrNull { it.startOffset <= offset && offset <= it.endOffset + 1 }
+                            allFold?.isExpanded = false
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    private fun isI18nFile(fileName: String): Boolean {
+        val lower = fileName.lowercase()
+        return lower.endsWith(".ts") || lower.endsWith(".tsx") ||
+            lower.endsWith(".js") || lower.endsWith(".jsx") ||
+            lower.endsWith(".vue")
+    }
+
+    private fun addFoldToggleInlays(editor: Editor, file: PsiFile, messages: Map<String, String>) {
+        val inlayModel = editor.inlayModel
+
+        PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
+            val method = call.methodExpression?.text ?: return@forEach
+            val last = method.substringAfterLast('.')
+            if (last != "t" && last != "\$t" && last != "tc" && last != "\$tc") return@forEach
+
+            val firstArg = call.arguments.firstOrNull() ?: return@forEach
+            val key = extractStringValue(firstArg.text) ?: return@forEach
+            if (key !in messages) return@forEach
+
+            // 在 t() 调用末尾添加可点击的 ↩ inlay
+            val offset = call.textRange.endOffset
+            inlayModel.addInlineElement(offset, true, I18nFoldToggleRenderer(editor))
+        }
+    }
+
+    private fun extractStringValue(text: String): String? {
+        if (text.length < 2) return null
+        val quote = text[0]
+        if (quote != '\'' && quote != '"') return null
+        return text.substring(1, text.length - 1).takeIf { it.isNotBlank() }
+    }
+}
+
+/** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。 */
+class I18nFoldToggleRenderer(private val editor: Editor) : com.intellij.openapi.editor.EditorCustomElementRenderer {
+
+    override fun calcWidthInPixels(inlay: Inlay<*>): Int = 14
+
+    override fun paint(
+        inlay: Inlay<*>,
+        g: Graphics,
+        targetRegion: Rectangle,
+        textAttributes: com.intellij.openapi.editor.markup.TextAttributes,
+    ) {
+        g.color = JBColor.GRAY
+        g.font = g.font.deriveFont(10f)
+        val fm = g.getFontMetrics(g.font)
+        g.drawString("\u21A9", targetRegion.x, targetRegion.y + fm.ascent)
+    }
+}
