@@ -10,7 +10,7 @@ import org.junit.Assert.assertTrue
  * JS/TS 通用 i18n 提取测试
  *
  * 覆盖：普通字符串、模板字面量、字符串拼接、JSX、已有 $t() 跳过、
- * 工具函数（hasChinese / extractPureStringContent / buildTFunctionExpr）等通用场景。
+ * 工具函数（containsTargetLanguage / extractPureStringContent / buildTFunctionExpr）等通用场景。
  * Vue 专属测试见 VueI18nProcessorTest。
  */
 class I18nProcessorTest : BasePlatformTestCase() {
@@ -194,7 +194,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val extractedStr = processor.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         val existingStr = processor.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         if (processor.extractedStrings.isNotEmpty()) {
-            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.effects.size}")
+            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.pendingChanges.size}")
         }
     }
 
@@ -243,6 +243,27 @@ class I18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * 【Bug 验证 A2】$t(foo('中文')) 中 '中文' 是普通函数 foo 的参数，
+     * 不是 $t 的直接字符串参数，应当被提取，而不是被误判为 DIREC_ARG 跳过。
+     */
+    fun testNestedCallInsideTDollarShouldStillExtract() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = ${'$'}t(foo('内部中文'))
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "'内部中文' 是 foo() 的参数而非 ${'$'}t 的直接参数，应被提取，但 got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("内部中文")
+        )
+    }
+
+    /**
      * 测试函数调用中普通字符串参数应提取（非 $t 函数）
      */
     fun testFunctionCallStringArgShouldExtract() {
@@ -259,6 +280,30 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         assertTrue(processor.extractedStrings.containsValue("提示信息"))
         assertTrue(processor.extractedStrings.containsValue("警告"))
+    }
+
+    /**
+     * 【Bug 验证 A10】同名 `t` 函数被误判为翻译函数。
+     * 用户自定义了一个与 i18n 无关的普通函数 `t`（例如测试/工具函数），
+     * 其参数里的中文不应被当成「已翻译」而跳过提取。
+     * 当前实现按名字 `t`/`$t`/`tc` 判定，会误判。
+     */
+    fun testSameNamedTFunctionShouldNotBeTreatedAsTranslation() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            export function t(x: string) { return x.toUpperCase() }
+            const value = t('自定义函数的中文')
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertTrue(
+            "同名普通函数 t 的参数中文应被提取，但 got: ${processor.extractedStrings}",
+            processor.extractedStrings.containsValue("自定义函数的中文")
+        )
     }
 
     // ============================================================
@@ -436,6 +481,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(
             "extractedStrings should contain '你好世界', got: ${processor.extractedStrings}",
             processor.extractedStrings.containsValue("你好世界")
+        )
+        // 【Bug 验证 A1】拼接不应把操作数再单独提取，整条拼接应只产生 1 个 key
+        assertEquals(
+            "拼接 '你好' + '世界' 应只提取合并后的 1 条，不应分别提取操作数，got: ${processor.extractedStrings}",
+            1,
+            processor.extractedStrings.size
         )
     }
 
@@ -616,18 +667,18 @@ class I18nProcessorTest : BasePlatformTestCase() {
     // ============================================================
 
     /**
-     * 测试 hasChinese 中文判断
+     * 测试 containsTargetLanguage 目标语言判断
      */
-    fun testHasChinese() {
+    fun testContainsTargetLanguage() {
         val file = myFixture.configureByText("test.ts", "")
         val processor = I18nProcessor(project, file)
 
-        assertTrue(processor.hasChinese("你好"))
-        assertFalse(processor.hasChinese("hello"))
-        assertTrue(processor.hasChinese("hello你好"))
-        assertFalse(processor.hasChinese(""))
-        assertFalse(processor.hasChinese("123"))
-        assertTrue(processor.hasChinese("一"))
+        assertTrue(processor.containsTargetLanguage("你好"))
+        assertFalse(processor.containsTargetLanguage("hello"))
+        assertTrue(processor.containsTargetLanguage("hello你好"))
+        assertFalse(processor.containsTargetLanguage(""))
+        assertFalse(processor.containsTargetLanguage("123"))
+        assertTrue(processor.containsTargetLanguage("一"))
     }
 
     /**
@@ -734,7 +785,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        processor.execute()
+        processor.runWithUndo()
 
         val resultText = file.text
 
@@ -833,7 +884,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("已拒绝"))
         assertTrue(processor.extractedStrings.containsValue("已撤回"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "替换后应包含 \$t('待审批') / \$t('已通过') / \$t('已拒绝') / \$t('已撤回')，got:\n$result",
@@ -872,7 +923,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("开始时间"))
         assertTrue(processor.extractedStrings.containsValue("结束时间"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             "替换后字符串元组值不应仍硬编码双引号开始时间/结束时间，got:\n$result",
@@ -911,7 +962,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertFalse(processor.extractedStrings.containsValue("待支付"))
         assertFalse(processor.extractedStrings.containsValue("已完成"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "enum 定义保留",
@@ -962,7 +1013,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
             processor.extractedStrings.containsValue("这个人很懒，什么都没留下")
         )
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "替换后 defaultUser.bio 应为 \$t('这个人很懒...')，got:\n$result",
@@ -997,7 +1048,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("提示标题"))
         assertTrue(processor.extractedStrings.containsValue("你好呀"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "svc.title + sayHello body 两处中文都应被 \$t(...) 替换，got:\n$result",
@@ -1033,7 +1084,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("好消息"))
         assertTrue(processor.extractedStrings.containsValue("坏消息"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         // NOTE：$t("提交成功") 本身就是字符串字面量包含提交成功 → 所以不能直接 assertFalse(result.contains("\"提交成功\""))
         //       而是「如果提交成功字面量出现，必须紧邻包在 $t( 调用里）」。
@@ -1099,7 +1150,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
             processor.extractedStrings.values.any { it.contains("用户") && it.contains("第") && it.contains("步") }
         )
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             "toast 原始硬编码 `${'`'}欢迎回来，${'$'}{userName}，您的验证码是 ${'$'}{code}${'`'}` 不应残留",
@@ -1136,7 +1187,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("请检查网络设置"))
         assertTrue(processor.extractedStrings.containsValue("请求发生错误"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "namespace / class 定义应保留，got:\n$result",
@@ -1176,7 +1227,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue("placeholder 默认值 请输入关键字 应提取", processor.extractedStrings.containsValue("请输入关键字"))
         assertTrue("okText 默认值 立即搜索 应提取", processor.extractedStrings.containsValue("立即搜索"))
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertFalse(
             "placeholder 默认值硬编码不应残留",
@@ -1226,7 +1277,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue(processor.extractedStrings.containsValue("联系我们"))
         assertEquals(5, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         assertTrue(
             "PAGE_TITLES 末尾 as const 应保留，got:\n$result",
@@ -1261,7 +1312,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         assertTrue("应提取 '请输入6位邮政编码'", processor.extractedStrings.containsValue("请输入6位邮政编码"))
         assertEquals("共 4 条中文夹数字提取", 4, processor.extractedStrings.size)
 
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         // 不能残留裸字符串
         listOf("限制50字符", "限制200字符", "最多输入1000字", "请输入6位邮政编码").forEach { s ->
@@ -1293,7 +1344,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue("应提取 '取消置顶'", processor.extractedStrings.containsValue("取消置顶"))
         assertTrue("应提取 '置顶'", processor.extractedStrings.containsValue("置顶"))
-        processor.execute()
+        processor.runWithUndo()
         val result = file.text
         // 修正后：$t('取消置顶') 和 $t('置顶') 的单条调用只在外层出现一次
         //         即整个表达式应该是 $t(isPinned ? $t('取消置顶') : $t('置顶')) ？——
@@ -1315,5 +1366,56 @@ class I18nProcessorTest : BasePlatformTestCase() {
         // 用户期望：内部不要再出现第二个 $t(
         val totalT = Regex("""\$\s*t\s*\(""").findAll(result).count()
         assertEquals("用户期望：外层已有 ${'$'}t( 表达式 )，内部不要再包第二层 ${'$'}t", 1, totalT)
+    }
+
+    // ============================================================
+    // 幂等性：已提取过的文件再次提取，JSON 应保持一致
+    // ============================================================
+
+    /**
+     * 模拟「提取 → 应用 → 再次提取」的完整往返，验证两次得到的 JSON key→value 完全一致。
+     *
+     * 原理：第一次提取后文件里出现 $t('你好')，再次提取时 collectExistingTKeys() 会把这段
+     * 已翻译调用收进 existingStrings，collectFromPsi() 也会因 DIRECT_ARG 跳过它，所以
+     * 第二次不再产生新的 extractedStrings，最终 JSON（existing ∪ extracted）保持不变。
+     */
+    fun testReExtractProducesSameJson() {
+        // —— 第一次提取 ——
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            const msg = "你好"
+            const other = '你好'
+            """.trimIndent()
+        )
+        val p1 = I18nProcessor(project, file)
+        p1.collect()
+        val json1 = mutableMapOf<String, String>()
+        json1.putAll(p1.existingStrings)
+        json1.putAll(p1.extractedStrings)
+
+        // 应用改动（写入 PSI），得到已提取后的文件
+        p1.runWithUndo()
+        val transformedText = file.text
+        assertTrue("第一次提取后应出现 \$t(...)", transformedText.contains("\$t("))
+
+        // —— 第二次提取（对已提取后的文件） ——
+        val file2 = myFixture.configureByText("test2.ts", transformedText)
+        val p2 = I18nProcessor(project, file2)
+        p2.collect()
+        val json2 = mutableMapOf<String, String>()
+        json2.putAll(p2.existingStrings)
+        json2.putAll(p2.extractedStrings)
+
+        assertEquals(
+            "再次提取不应产生新的 extractedStrings（已翻译调用被跳过）",
+            emptyMap<String, String>(),
+            p2.extractedStrings
+        )
+        assertEquals(
+            "两次提取得到的 JSON 应完全一致，但 json1=$json1 json2=$json2",
+            json1,
+            json2
+        )
     }
 }

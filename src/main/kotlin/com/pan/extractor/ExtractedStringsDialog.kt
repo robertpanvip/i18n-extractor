@@ -41,8 +41,8 @@ class ExtractedStringsDialog(
     var mergePlan: MergePlan = MergePlan(emptyList(), emptyList())
         private set
 
-    /** OK 后对外暴露：用户选择的输出方式 */
-    var outputMode: Util.OutputMode = Util.OutputMode.COPY_TO_CLIPBOARD
+    /** OK 后对外暴露：用户选择的输出方式（只使用 CLIPBOARD / FILE 两值） */
+    var outputMode: OutputDestination = OutputDestination.CLIPBOARD
         private set
     /** OK 后对外暴露：用户选择的中文入口文件（若选择了覆盖） */
     var selectedEntryFile: VirtualFile? = null
@@ -111,16 +111,37 @@ class ExtractedStringsDialog(
         tabs.addTab("翻译 JSON 预览", editor.component)
         tabs.addTab("合并建议（公共前后缀 + 汉字+数字抽取）", buildMergeTab())
 
-        // 外层：tabs 在 NORTH/CENTER，配置面板在 SOUTH
+        // 外层：tabs 在 NORTH/CENTER，配置面板在 SOUTH（仅当输出去向为「每次询问」时展示）
         val root = JPanel(BorderLayout(0, 10))
         root.preferredSize = Dimension(1000, 760)
         root.add(tabs, BorderLayout.CENTER)
-        root.add(buildOutputConfigPanel(), BorderLayout.SOUTH)
-
-        // 初始化配置控件（根据用户上次保存的值 + 自动探测入口文件）
-        initConfigControls()
+        initOutputByDestination(root)
 
         return root
+    }
+
+    /**
+     * 根据全局输出去向决定是否展示输出面板：
+     *  - [OutputDestination.ASK]：展示输出面板（默认，向后兼容，面板里记住上次选择）。
+     *  - [OutputDestination.CLIPBOARD]：明确剪贴板 → 不展示面板，直接采用剪贴板输出。
+     *  - [OutputDestination.FILE]：明确写文件 → 不展示面板，自动探测入口文件后写回。
+     */
+    private fun initOutputByDestination(root: JPanel) {
+        when (I18nSettings.getInstance().outputDestination()) {
+            OutputDestination.ASK -> {
+                root.add(buildOutputConfigPanel(), BorderLayout.SOUTH)
+                initConfigControls()
+            }
+            OutputDestination.CLIPBOARD -> {
+                outputMode = OutputDestination.CLIPBOARD
+            }
+            OutputDestination.FILE -> {
+                outputMode = OutputDestination.FILE
+                selectedEntryFile = try {
+                    Util.findChineseLocaleEntryFile(project, contextPsiFile)
+                } catch (_: Throwable) { null }
+            }
+        }
     }
 
     /** 构造输出方式配置面板（底部）。 */
@@ -180,9 +201,9 @@ class ExtractedStringsDialog(
     /** 初始化：读取用户偏好 + 自动探测中文入口文件。 */
     private fun initConfigControls() {
         // 1) 输出方式
-        val savedMode = Util.getOutputMode(project)
-        radioClipboard.isSelected = savedMode == Util.OutputMode.COPY_TO_CLIPBOARD
-        radioOverwrite.isSelected = savedMode == Util.OutputMode.OVERWRITE_ENTRY_FILE
+        val savedMode = Util.getDialogOutputMode(project)
+        radioClipboard.isSelected = savedMode == OutputDestination.CLIPBOARD
+        radioOverwrite.isSelected = savedMode == OutputDestination.FILE
 
         // 2) 入口文件：先读持久化路径，其次自动探测
         val storedPath = Util.getStoredEntryPath(project)
@@ -247,41 +268,61 @@ class ExtractedStringsDialog(
     }
 
     override fun doOKAction() {
-        // ── ① 校验：若选覆盖模式，入口文件路径必须有效 ──
-        val wantOverwrite = radioOverwrite.isSelected
-        val entryFile: VirtualFile? = if (wantOverwrite) {
-            val pathText = entryPathField.text?.trim().orEmpty()
-            if (pathText.isEmpty()) {
+        val destination = I18nSettings.getInstance().outputDestination()
+
+        // ── ① 确定输出模式 + 入口文件 ──
+        val wantOverwrite: Boolean
+        val entryFile: VirtualFile?
+        if (destination == OutputDestination.ASK) {
+            // 弹窗展示了输出面板：读取用户在面板里的选择
+            wantOverwrite = radioOverwrite.isSelected
+            entryFile = if (wantOverwrite) {
+                val pathText = entryPathField.text?.trim().orEmpty()
+                if (pathText.isEmpty()) {
+                    JOptionPane.showMessageDialog(
+                        this.contentPanel,
+                        "请选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等），或切换为「拷贝到剪贴板」模式。",
+                        "入口文件未指定",
+                        JOptionPane.WARNING_MESSAGE
+                    )
+                    return
+                }
+                val f = LocalFileSystem.getInstance().findFileByPath(pathText)
+                if (f == null || !f.isValid || f.isDirectory) {
+                    JOptionPane.showMessageDialog(
+                        this.contentPanel,
+                        "入口文件不存在或无效：$pathText\n请重新选择，或切换为「拷贝到剪贴板」模式。",
+                        "入口文件无效",
+                        JOptionPane.WARNING_MESSAGE
+                    )
+                    return
+                }
+                val ext = f.extension?.lowercase()
+                if (ext !in setOf("ts", "tsx", "js", "jsx", "json")) {
+                    JOptionPane.showMessageDialog(
+                        this.contentPanel,
+                        "入口文件后缀 ${f.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json。",
+                        "入口文件类型不支持",
+                        JOptionPane.WARNING_MESSAGE
+                    )
+                    return
+                }
+                f
+            } else null
+        } else {
+            // 设置里已明确输出去向：不展示面板，直接按设置执行
+            wantOverwrite = destination == OutputDestination.FILE
+            entryFile = if (wantOverwrite) selectedEntryFile else null
+            if (wantOverwrite && entryFile == null) {
                 JOptionPane.showMessageDialog(
                     this.contentPanel,
-                    "请选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等），或切换为「拷贝到剪贴板」模式。",
-                    "入口文件未指定",
+                    "设置为「写入文件」但未自动定位到入口多语言文件。\n请先到 Settings → I18n Extractor 切回「每次询问」手动选择，或确认项目里存在 <locale>.ts/.json 入口文件。",
+                    "未找到入口文件",
                     JOptionPane.WARNING_MESSAGE
                 )
                 return
             }
-            val f = LocalFileSystem.getInstance().findFileByPath(pathText)
-            if (f == null || !f.isValid || f.isDirectory) {
-                JOptionPane.showMessageDialog(
-                    this.contentPanel,
-                    "入口文件不存在或无效：$pathText\n请重新选择，或切换为「拷贝到剪贴板」模式。",
-                    "入口文件无效",
-                    JOptionPane.WARNING_MESSAGE
-                )
-                return
-            }
-            val ext = f.extension?.lowercase()
-            if (ext !in setOf("ts", "tsx", "js", "jsx", "json")) {
-                JOptionPane.showMessageDialog(
-                    this.contentPanel,
-                    "入口文件后缀 ${f.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json。",
-                    "入口文件类型不支持",
-                    JOptionPane.WARNING_MESSAGE
-                )
-                return
-            }
-            f
-        } else null
+        }
 
         // ── ② 写回勾选项 + 合并计划 ──
         val pickedAffix = mutableListOf<AffixGroupCandidate>()
@@ -303,8 +344,8 @@ class ExtractedStringsDialog(
         mergePlan = MergePlan(pickedAffix, pickedDigit)
 
         // ── ③ 持久化用户偏好 & 暴露结果 ──
-        val mode = if (wantOverwrite) Util.OutputMode.OVERWRITE_ENTRY_FILE else Util.OutputMode.COPY_TO_CLIPBOARD
-        Util.setOutputMode(project, mode)
+        val mode = if (wantOverwrite) OutputDestination.FILE else OutputDestination.CLIPBOARD
+        Util.setDialogOutputMode(project, mode)
         outputMode = mode
         selectedEntryFile = entryFile
         if (entryFile != null) {

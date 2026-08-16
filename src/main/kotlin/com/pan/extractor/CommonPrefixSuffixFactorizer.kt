@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.VirtualFile
 
 // ─────────────────────────────────────────────────────────────
@@ -82,7 +83,15 @@ object CommonPrefixSuffixFactorizer {
 
     private val HAN_RE = Regex("""[\u4e00-\u9fff]""")
     private val DIGIT_TOKEN_RE = Regex("""\d+(?:\.\d+)?""")
-    private const val MIN_AFFIX_CHAR = 2
+
+    /** 合并建议阈值（公共前后缀合计至少达到该字符数才生成建议），来自全局设置，默认 2。 */
+    private fun minAffixChar(): Int {
+        // 纯单元测试（无 IntelliJ Application）下读不到设置，回退默认 2
+        val app = ApplicationManager.getApplication()
+        return if (app != null && !app.isDisposed) {
+            try { I18nSettings.getInstance().mergeAffixThreshold() } catch (_: Throwable) { 2 }
+        } else 2
+    }
 
     fun factorize(allSites: List<SiteRef>): Pair<List<AffixGroupCandidate>, List<DigitGroupCandidate>> {
         val affix = buildAffixGroups(allSites)
@@ -157,10 +166,10 @@ object CommonPrefixSuffixFactorizer {
                 for (other in list) {
                     if (other in consumed) continue
                     val (p, s, d) = longestCommonAffix(anchor.originalMessage, other.originalMessage) ?: continue
-                    if (p.codePointCount(0, p.length) < MIN_AFFIX_CHAR && s.codePointCount(0, s.length) < MIN_AFFIX_CHAR) continue
+                    if (p.codePointCount(0, p.length) < minAffixChar() && s.codePointCount(0, s.length) < minAffixChar()) continue
                     // 前后缀至少一边≥2字（组合也算）——用户阈值：≥2字 + 全自动
                     val totalAffix = p.codePointCount(0, p.length) + s.codePointCount(0, s.length)
-                    if (totalAffix < MIN_AFFIX_CHAR) continue
+                    if (totalAffix < minAffixChar()) continue
                     candidates.add(other to Triple(p, s, d))
                 }
                 if (candidates.isEmpty()) continue
@@ -178,7 +187,7 @@ object CommonPrefixSuffixFactorizer {
                 // 如果交集前后缀太短（合并过程中缩小），放弃这个分组
                 val pLen = maxPrefix.codePointCount(0, maxPrefix.length)
                 val sLen = maxSuffix.codePointCount(0, maxSuffix.length)
-                if (pLen + sLen < MIN_AFFIX_CHAR) continue
+                if (pLen + sLen < minAffixChar()) continue
 
                 val variants = mutableMapOf<String, MutableList<SiteRef>>()
                 variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor); consumed.add(anchor)
