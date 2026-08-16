@@ -232,13 +232,19 @@ object MergeApplier {
             val (ph, _) = placeholderMap[k] ?: error("placeholder missing for $k")
             acc.replace("{$k}", ph)
         }
+        // React 项目 key 中 {N0} → {0}，Vue 保留 {N0}
+        val rewrittenSkeletonKey = paramPairs.fold(skeletonKey.trim()) { acc, (k, _) ->
+            val (_, objKey) = placeholderMap[k] ?: error("object key missing for $k")
+            // React: objKey = "0" → 替换 {N0} 为 {0}；Vue: objKey = "N0" → 保持不变
+            acc.replace("{$k}", "{${objKey.trim('"')}}")
+        }
         val paramsObjStr = buildParamsObjectString(site.isVue, paramPairs.map { (k, vExpr) ->
             val (_, keyInObject) = placeholderMap[k] ?: error("object key missing for $k")
             keyInObject to vExpr
         })
         val callExprText = proc.buildTExprForRawText(
             rewrittenSkeleton.trim(), paramsObjStr, site.isVue, site.isReact,
-            skeletonKeyOverride = skeletonKey.trim()
+            skeletonKeyOverride = rewrittenSkeletonKey.trim()
         )
 
         val replacement = when {
@@ -268,6 +274,6 @@ object MergeApplier {
             try { rootPsi.replace(replacement) } catch (_: Throwable) { }
         }
 
-        finalExtracted[skeletonKey] = rewrittenSkeleton.trim()
+        finalExtracted[rewrittenSkeletonKey] = rewrittenSkeleton.trim()
     }
 }
