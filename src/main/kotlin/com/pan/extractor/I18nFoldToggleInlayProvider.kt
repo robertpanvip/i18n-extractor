@@ -98,7 +98,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
 /** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。 */
 class I18nFoldToggleRenderer(private val editor: Editor) : com.intellij.openapi.editor.EditorCustomElementRenderer {
 
-    override fun calcWidthInPixels(inlay: Inlay<*>): Int = 14
+    override fun calcWidthInPixels(inlay: Inlay<*>): Int = 20
 
     override fun paint(
         inlay: Inlay<*>,
@@ -107,8 +107,10 @@ class I18nFoldToggleRenderer(private val editor: Editor) : com.intellij.openapi.
         textAttributes: com.intellij.openapi.editor.markup.TextAttributes,
     ) {
         g.color = JBColor.GRAY
-        g.font = g.font.deriveFont(10f)
+        g.font = g.font.deriveFont(12f)
         val fm = g.getFontMetrics(g.font)
-        g.drawString("\u21A9", targetRegion.x, targetRegion.y + fm.ascent)
+        val charWidth = fm.charWidth('\u21A9')
+        val x = targetRegion.x + (targetRegion.width - charWidth) / 2
+        g.drawString("\u21A9", x, targetRegion.y + fm.ascent)
     }
 }
