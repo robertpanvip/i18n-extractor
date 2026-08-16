@@ -27,6 +27,11 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
 
     private val logger = Logger.getInstance(I18nFoldingBuilder::class.java)
 
+    init {
+        // 类加载时输出，用于确认 FoldingBuilder 是否被 IDE 实例化
+        logger.warn("I18nFoldingBuilder 类已加载（实例化时触发）")
+    }
+
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
         // quick=true 表示 IntelliJ 在快速输入/滚动时请求，期望尽快返回；
@@ -38,7 +43,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val contextFile = InjectedLanguageManager.getInstance(project).getTopLevelFile(containingFile) ?: containingFile
         val messages = LocaleMessages.loadCached(project, contextFile)
         if (messages.isEmpty()) {
-            logger.info("I18nFoldingBuilder: 未找到翻译文件，跳过折叠。文件=${contextFile.name} displayLang=${I18nSettings.getInstance().foldDisplayLanguage()}")
+            logger.warn("I18nFoldingBuilder: 未找到翻译文件，跳过折叠。文件=${contextFile.name} displayLang=${I18nSettings.getInstance().foldDisplayLanguage()}")
             return FoldingDescriptor.EMPTY_ARRAY
         }
 
