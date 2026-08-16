@@ -7,6 +7,7 @@ import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
@@ -18,11 +19,23 @@ import com.intellij.psi.util.PsiTreeUtil
  * 把 `$t('key')` / `t('key')`（含 Vue 的 `{{ $t('key') }}` 脚本表达式、React 的 `t('key')`）
  * 折叠为指定语言（[I18nSettings.foldDisplayLanguage]）的翻译文案。
  *
- * - 折叠占位文本 = 翻译值，因此编辑器内 Ctrl+F 可直接搜到翻译文案。
- * - 带插值参数的调用（如 `$t('key', { n: 1 })`）同样折叠，仅展示 key 对应文案。
+ * - 折叠占位文本 = 翻译值，编辑器内 Ctrl+F 可直接搜到翻译文案。
+ * - 带插值参数的调用会将 {N0}/{0} 等占位符替换为实际参数值，同时支持 Vue（{N0}）和 React（{0}）格式。
  * - 仅在指定语言资源中查得到 key 时才折叠，避免误折叠。
  */
 class I18nFoldingBuilder : FoldingBuilderEx() {
+
+    companion object {
+        /** 折叠占位文本末尾的折叠切换提示符，提醒用户此处可展开。 */
+        const val TOGGLE_HINT = " \u21A9"
+    }
+
+    private val logger = Logger.getInstance(I18nFoldingBuilder::class.java)
+
+    init {
+        // 类加载时输出，用于确认 FoldingBuilder 是否被 IDE 实例化
+        logger.warn("I18nFoldingBuilder 类已加载（实例化时触发）")
+    }
 
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
@@ -34,7 +47,10 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         // 翻译入口需基于其所属的顶层源文件定位，故映射回宿主文件。
         val contextFile = InjectedLanguageManager.getInstance(project).getTopLevelFile(containingFile) ?: containingFile
         val messages = LocaleMessages.loadCached(project, contextFile)
-        if (messages.isEmpty()) return FoldingDescriptor.EMPTY_ARRAY
+        if (messages.isEmpty()) {
+            logger.warn("I18nFoldingBuilder: 未找到翻译文件，跳过折叠。文件=${contextFile.name} displayLang=${I18nSettings.getInstance().foldDisplayLanguage()}")
+            return FoldingDescriptor.EMPTY_ARRAY
+        }
 
         val descriptors = mutableListOf<FoldingDescriptor>()
         PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).forEach { call ->
@@ -53,7 +69,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val project = call.project ?: return null
         val messages = LocaleMessages.loadCached(project, call.containingFile)
         val key = extractKey(call) ?: return null
-        return messages[key]
+        val rawValue = messages[key] ?: return null
+        val params = extractInterpolationParams(call)
+        return interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
     }
 
     /** 为单个调用创建折叠描述符（若 key 在翻译资源中存在）。 */
@@ -63,7 +81,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         descriptors: MutableList<FoldingDescriptor>,
     ) {
         val key = extractKey(call) ?: return
-        val value = messages[key] ?: return
+        val rawValue = messages[key] ?: return
+        val params = extractInterpolationParams(call)
+        val value = interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
         val range = call.textRange
         if (!range.isEmpty()) {
             descriptors.add(
@@ -95,5 +115,37 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val calleeText = method?.text ?: return false
         val last = calleeText.substringAfterLast('.')
         return last == "t" || last == "\$t" || last == "tc" || last == "\$tc"
+    }
+
+    /** 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。 */
+    private fun extractInterpolationParams(call: JSCallExpression): Map<String, String> {
+        val secondArg = call.arguments.getOrNull(1) ?: return emptyMap()
+        val text = secondArg.text
+        if (text.isBlank()) return emptyMap()
+        val result = mutableMapOf<String, String>()
+        // 匹配 "key": 'value' / "key": "value" / "key": 数字
+        val re = Regex("""["']?(\w+)["']?\s*:\s*("[^"]*"|'[^']*'|-?\d+)""")
+        re.findAll(text).forEach { match ->
+            val key = match.groupValues[1]
+            val rawValue = match.groupValues[2]
+            val value = if (rawValue.startsWith("\"") || rawValue.startsWith("'"))
+                rawValue.substring(1, rawValue.length - 1)
+            else rawValue
+            result[key] = value
+        }
+        return result
+    }
+
+    /** 将翻译值中的占位符替换为实际参数值。同时支持 {N0}（Vue）和 {0}（React）两种格式。 */
+    private fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
+        if (params.isEmpty()) return value
+        var result = value
+        val re = Regex("""\{N?(\d+)\}""")
+        re.findAll(result).forEach { match ->
+            val index = match.groupValues[1]
+            val replacement = params[index] ?: return@forEach
+            result = result.replace(match.value, replacement)
+        }
+        return result
     }
 }
