@@ -19,6 +19,9 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
 
     private lateinit var originalFoldLang: String
 
+    /** 带折叠切换提示符的期望值，避免每个断言手动拼接。 */
+    private fun hint(value: String) = value + I18nFoldingBuilder.TOGGLE_HINT
+
     override fun setUp() {
         super.setUp()
         originalFoldLang = I18nSettings.getInstance().foldDisplayLanguage()
@@ -63,7 +66,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
     fun testFoldShowsTranslationValueForDirectTCall() {
         val descriptors = fold("""const a = ${'$'}t('你好世界');""")
         assertEquals("应折叠 1 处", 1, descriptors.size)
-        assertEquals("占位文本应为翻译值", "你好世界", descriptors.first().placeholderText)
+        assertEquals("占位文本应为翻译值", hint("你好世界"), descriptors.first().placeholderText)
     }
 
     fun testFoldTAndChainedCall() {
@@ -75,14 +78,14 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         )
         assertEquals("应折叠 2 处", 2, descriptors.size)
         val placeholders = descriptors.map { it.placeholderText }.toSet()
-        assertTrue("应含「你好世界」", placeholders.contains("你好世界"))
-        assertTrue("应含链式 t 的「你好」", placeholders.contains("你好"))
+        assertTrue("应含「你好世界」", placeholders.contains(hint("你好世界")))
+        assertTrue("应含链式 t 的「你好」", placeholders.contains(hint("你好")))
     }
 
     fun testFoldNestedDottedKey() {
         val descriptors = fold("""const a = ${'$'}t('nested.greeting');""")
         assertEquals("应折叠 1 处", 1, descriptors.size)
-        assertEquals("嵌套点号 key 应命中", "嵌套问候", descriptors.first().placeholderText)
+        assertEquals("嵌套点号 key 应命中", hint("嵌套问候"), descriptors.first().placeholderText)
     }
 
     fun testUnknownKeyNotFolded() {
@@ -121,8 +124,8 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
         assertEquals("TSX 文件应折叠 2 处 t() 调用", 2, descriptors.size)
         val placeholders = descriptors.map { it.placeholderText }.toSet()
-        assertTrue("应含「你好世界」", placeholders.contains("你好世界"))
-        assertTrue("应含「你好」", placeholders.contains("你好"))
+        assertTrue("应含「你好世界」", placeholders.contains(hint("你好世界")))
+        assertTrue("应含「你好」", placeholders.contains(hint("你好")))
     }
 
     /** 用户报告的问题复现：key 含 {N0} 占位符时应将 {N0} 替换为实际参数值。 */
@@ -153,8 +156,8 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("含 {N0} 占位符的 key 应折叠 2 处", 2, descriptors.size)
             val placeholders = descriptors.map { it.placeholderText }.toSet()
-            assertTrue("{\"0\": 2} 应替换为 Hello2", placeholders.contains("Hello2"))
-            assertTrue("{\"0\": ''} 应替换为 Hello", placeholders.contains("Hello"))
+            assertTrue("{\"0\": 2} 应替换为 Hello2", placeholders.contains(hint("Hello2")))
+            assertTrue("{\"0\": ''} 应替换为 Hello", placeholders.contains(hint("Hello")))
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }
@@ -185,7 +188,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
             val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
-            assertEquals("React {0} 应替换为 World", "Hello, World!", descriptors.first().placeholderText)
+            assertEquals("React {0} 应替换为 World", hint("Hello, World!"), descriptors.first().placeholderText)
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }
@@ -209,6 +212,6 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
         val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
         assertTrue("Vue 模板插值应折叠", descriptors.isNotEmpty())
-        assertEquals("占位文本应为翻译值", "你好世界", descriptors.first().placeholderText)
+        assertEquals("占位文本应为翻译值", hint("你好世界"), descriptors.first().placeholderText)
     }
 }

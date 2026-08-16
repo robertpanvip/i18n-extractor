@@ -25,6 +25,11 @@ import com.intellij.psi.util.PsiTreeUtil
  */
 class I18nFoldingBuilder : FoldingBuilderEx() {
 
+    companion object {
+        /** 折叠占位文本末尾的折叠切换提示符，提醒用户此处可展开。 */
+        const val TOGGLE_HINT = " \u21A9"
+    }
+
     private val logger = Logger.getInstance(I18nFoldingBuilder::class.java)
 
     init {
@@ -66,7 +71,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val key = extractKey(call) ?: return null
         val rawValue = messages[key] ?: return null
         val params = extractInterpolationParams(call)
-        return interpolatePlaceholders(rawValue, params)
+        return interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
     }
 
     /** 为单个调用创建折叠描述符（若 key 在翻译资源中存在）。 */
@@ -78,7 +83,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val key = extractKey(call) ?: return
         val rawValue = messages[key] ?: return
         val params = extractInterpolationParams(call)
-        val value = interpolatePlaceholders(rawValue, params)
+        val value = interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
         val range = call.textRange
         if (!range.isEmpty()) {
             descriptors.add(
