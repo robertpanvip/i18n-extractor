@@ -222,14 +222,14 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
             val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
-            assertEquals("Vue 双花括号应反转义后替换参数", hint("HelloWorld"), descriptors.first().placeholderText)
+            assertEquals("Vue 双花括号应反转义为单花括号，不替换参数", hint("Hello{0}"), descriptors.first().placeholderText)
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }
     }
 
-    /** React 项目：翻译值中 {{0}} 无特殊含义，不做反转义，也不做插值替换。 */
-    fun testFoldReactDoubleBraceNotInterpolated() {
+    /** React 项目：翻译值中 {{0}} 是占位符格式，应整体替换为参数值。 */
+    fun testFoldReactDoubleBraceIsPlaceholder() {
         myFixture.addFileToProject(
             "src/locales/en.ts",
             """
@@ -253,7 +253,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
             val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
-            assertEquals("React 双花括号无特殊含义，保留原样不替换", hint("Hello{{0}}"), descriptors.first().placeholderText)
+            assertEquals("React {{0}} 应整体替换为参数值", hint("HelloWorld"), descriptors.first().placeholderText)
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }

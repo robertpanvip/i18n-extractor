@@ -140,17 +140,24 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     private fun interpolatePlaceholders(value: String, params: Map<String, String>, isVue: Boolean): String {
         if (params.isEmpty()) return value
         var result = value
-        // Vue 项目中 {{ }} 是花括号转义，先反转义为 { }，再对单层花括号做插值替换
-        // 例如：Hello{{0}} → Hello{0} → Hello1
         if (isVue) {
-            result = result.replace("{{", "{").replace("}}", "}")
-        }
-        // 使用负向前瞻/后顾排除双花括号（React 项目无反转义，{{0}} 中的 {0} 不应替换）
-        val re = if (isVue) Regex("""\{N?(\d+)\}""") else Regex("""(?<!\{)\{N?(\d+)\}(?!\})""")
-        re.findAll(result).forEach { match ->
-            val index = match.groupValues[1]
-            val replacement = params[index] ?: return@forEach
-            result = result.replace(match.value, replacement)
+            // Vue: {{ }} 是花括号转义，先用占位符保护，只对单层 {N0}/{0} 做插值替换，最后还原
+            result = result.replace("{{", "\u0000").replace("}}", "\u0001")
+            val re = Regex("""\{N?(\d+)\}""")
+            re.findAll(result).forEach { match ->
+                val index = match.groupValues[1]
+                val replacement = params[index] ?: return@forEach
+                result = result.replace(match.value, replacement)
+            }
+            result = result.replace("\u0000", "{").replace("\u0001", "}")
+        } else {
+            // React: {{0}} 是占位符格式，需整体替换；先匹配 {{0}}，再匹配 {0}
+            val re = Regex("""\{\{N?(\d+)\}\}|\{N?(\d+)\}""")
+            re.findAll(result).forEach { match ->
+                val index = match.groupValues[1].ifEmpty { match.groupValues[2] }
+                val replacement = params[index] ?: return@forEach
+                result = result.replace(match.value, replacement)
+            }
         }
         return result
     }
