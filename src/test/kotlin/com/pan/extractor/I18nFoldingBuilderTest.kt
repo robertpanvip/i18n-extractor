@@ -27,7 +27,7 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         originalFoldLang = I18nSettings.getInstance().foldDisplayLanguage()
         I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         // 项目根标记（findProjectRoot 依赖 package.json 定位根）
-        myFixture.addFileToProject("package.json", """{"name":"root"}""")
+        myFixture.addFileToProject("package.json", """{"name":"root","dependencies":{"react":"^18"}}""")
         // 中文 locale 入口（含嵌套 key 与普通 key）
         myFixture.addFileToProject(
             "src/locales/zh.ts",
@@ -189,6 +189,71 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
             assertEquals("React {0} 应替换为 World", hint("Hello, World!"), descriptors.first().placeholderText)
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
+    /** Vue 项目：翻译值中 {{0}} 是花括号转义，应反转义为 {0} 且不做插值替换。 */
+    fun testFoldVueDoubleBraceNotInterpolated() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                'hello': 'Hello{{0}}',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/App.vue",
+                """
+                <template>
+                  <div>{{ ${'$'}t('hello', { "0": "World" }) }}</div>
+                </template>
+                """.trimIndent()
+            )
+            val inj = InjectedLanguageManager.getInstance(project)
+            val host = PsiTreeUtil.collectElementsOfType(
+                file, PsiLanguageInjectionHost::class.java
+            ).firstOrNull { it.text.contains("${'$'}t") }!!
+            val injected = inj.getInjectedPsiFiles(host)!!.first().first
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+            assertEquals("应折叠 1 处", 1, descriptors.size)
+            assertEquals("Vue 双花括号应反转义为单花括号，不替换参数", hint("Hello{0}"), descriptors.first().placeholderText)
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
+    /** React 项目：翻译值中 {{0}} 是占位符格式，应整体替换为参数值。 */
+    fun testFoldReactDoubleBraceIsPlaceholder() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                'hello': 'Hello{{0}}',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/App.tsx",
+                """
+                import {useTranslation} from 'react-i18next';
+                export default function App() {
+                    const {t} = useTranslation();
+                    return <div>{ t('hello', { "0": "World" }) }</div>;
+                }
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+            assertEquals("应折叠 1 处", 1, descriptors.size)
+            assertEquals("React {{0}} 应整体替换为参数值", hint("HelloWorld"), descriptors.first().placeholderText)
         } finally {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }

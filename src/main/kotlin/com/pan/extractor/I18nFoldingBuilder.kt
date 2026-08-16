@@ -71,7 +71,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val key = extractKey(call) ?: return null
         val rawValue = messages[key] ?: return null
         val params = extractInterpolationParams(call)
-        return interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
+        return interpolatePlaceholders(rawValue, params, ProjectStructure.isVue(call)) + TOGGLE_HINT
     }
 
     /** 为单个调用创建折叠描述符（若 key 在翻译资源中存在）。 */
@@ -83,7 +83,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val key = extractKey(call) ?: return
         val rawValue = messages[key] ?: return
         val params = extractInterpolationParams(call)
-        val value = interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
+        val value = interpolatePlaceholders(rawValue, params, ProjectStructure.isVue(call)) + TOGGLE_HINT
         val range = call.textRange
         if (!range.isEmpty()) {
             descriptors.add(
@@ -137,14 +137,27 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     }
 
     /** 将翻译值中的占位符替换为实际参数值。同时支持 {N0}（Vue）和 {0}（React）两种格式。 */
-    private fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
+    private fun interpolatePlaceholders(value: String, params: Map<String, String>, isVue: Boolean): String {
         if (params.isEmpty()) return value
         var result = value
-        val re = Regex("""\{N?(\d+)\}""")
-        re.findAll(result).forEach { match ->
-            val index = match.groupValues[1]
-            val replacement = params[index] ?: return@forEach
-            result = result.replace(match.value, replacement)
+        if (isVue) {
+            // Vue: {{ }} 是花括号转义，先用占位符保护，只对单层 {N0}/{0} 做插值替换，最后还原
+            result = result.replace("{{", "\u0000").replace("}}", "\u0001")
+            val re = Regex("""\{N?(\d+)\}""")
+            re.findAll(result).forEach { match ->
+                val index = match.groupValues[1]
+                val replacement = params[index] ?: return@forEach
+                result = result.replace(match.value, replacement)
+            }
+            result = result.replace("\u0000", "{").replace("\u0001", "}")
+        } else {
+            // React: {{0}} 是占位符格式，需整体替换；先匹配 {{0}}，再匹配 {0}
+            val re = Regex("""\{\{N?(\d+)\}\}|\{N?(\d+)\}""")
+            re.findAll(result).forEach { match ->
+                val index = match.groupValues[1].ifEmpty { match.groupValues[2] }
+                val replacement = params[index] ?: return@forEach
+                result = result.replace(match.value, replacement)
+            }
         }
         return result
     }
