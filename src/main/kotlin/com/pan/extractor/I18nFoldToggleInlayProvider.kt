@@ -49,9 +49,10 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
                         val offset = clickedInlay.offset
                         val fm = editor.foldingModel
                         fm.runBatchFoldingOperation {
-                            val fold = fm.allFoldRegions.firstOrNull {
-                                it.startOffset <= offset && offset <= it.endOffset
-                            }
+                            // 取覆盖 offset 的最小折叠区域，避免误匹配到外层函数折叠
+                            val fold = fm.allFoldRegions
+                                .filter { it.startOffset <= offset && offset <= it.endOffset }
+                                .minByOrNull { it.endOffset - it.startOffset }
                             if (fold != null) {
                                 fold.isExpanded = !fold.isExpanded
                             }
