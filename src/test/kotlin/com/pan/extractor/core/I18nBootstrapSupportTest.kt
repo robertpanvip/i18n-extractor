@@ -174,4 +174,14 @@ class I18nBootstrapSupportTest {
         val original = "not json at all"
         assertEquals(original, I18nBootstrapSupport.addDepsToPackageJson(original, listOf("i18next")))
     }
+
+    // ── buildLocaleEntryFileContent ───────────────────────────
+
+    @Test
+    fun localeEntryFileContentIsRewritableExportDefault() {
+        val content = I18nBootstrapSupport.buildLocaleEntryFileContent()
+        // 必须能被 TsFileEditor 的 export default 对象字面量解析器识别（写回需用）
+        assertTrue("入口文件须含 export default { ，实际: $content", content.contains("export default {"))
+        assertTrue("入口文件须含闭合大括号", content.contains("}"))
+    }
 }

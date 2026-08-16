@@ -53,6 +53,9 @@ class ExtractedStringsDialog(
     var bootstrapPerformed: Boolean = false
         private set
 
+    /** bootstrap 自动创建的中文语言包入口文件（若创建了则写回时默认使用它，避免「请选择入口文件」） */
+    private var bootstrapEntryFile: VirtualFile? = null
+
     // UI 控件
     private lateinit var radioClipboard: JRadioButton
     private lateinit var radioOverwrite: JRadioButton
@@ -309,14 +312,26 @@ class ExtractedStringsDialog(
         )
         if (choice != JOptionPane.OK_OPTION) return false
 
-        // 用户确认：执行 bootstrap（写 package.json + 建初始化文件）
+        // 用户确认：执行 bootstrap（写 package.json + 建中文入口文件 + 建初始化文件）
+        var createdEntry: com.intellij.openapi.vfs.VirtualFile? = null
         try {
             WriteCommandAction.runWriteCommandAction(project) {
-                I18nBootstrap.maybeApply(project, psiFile, missing)
+                createdEntry = I18nBootstrap.maybeApply(project, psiFile, missing)
             }
-            bootstrapPerformed = true
         } catch (_: Throwable) {
             bootstrapPerformed = false
+            return true
+        }
+        bootstrapPerformed = true
+        val entry = createdEntry
+        bootstrapEntryFile = entry
+        // bootstrap 自动创建了中文语言包入口文件 → 直接作为本次写回目标，
+        // 避免随后「请选择中文语言包入口文件」报错（全新项目本就没有该文件）
+        if (entry != null) {
+            selectedEntryFile = entry
+            if (::entryPathField.isInitialized) {
+                entryPathField.text = entry.path
+            }
         }
         return true
     }
@@ -337,7 +352,12 @@ class ExtractedStringsDialog(
             // 弹窗展示了输出面板：读取用户在面板里的选择
             wantOverwrite = radioOverwrite.isSelected
             entryFile = if (wantOverwrite) {
-                val pathText = entryPathField.text?.trim().orEmpty()
+                var pathText = entryPathField.text?.trim().orEmpty()
+                // bootstrap 刚自动创建了入口文件 → 用户未手填时用它兜底
+                if (pathText.isEmpty() && bootstrapEntryFile != null) {
+                    pathText = bootstrapEntryFile!!.path
+                    entryPathField.text = pathText
+                }
                 if (pathText.isEmpty()) {
                     JOptionPane.showMessageDialog(
                         this.contentPanel,
