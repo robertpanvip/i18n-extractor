@@ -38,19 +38,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
 
         val descriptors = mutableListOf<FoldingDescriptor>()
         PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).forEach { call ->
-            val key = extractKey(call) ?: return@forEach
-            val value = messages[key] ?: return@forEach
-            val range = call.textRange
-            if (!range.isEmpty()) {
-                descriptors.add(
-                    FoldingDescriptor(
-                        call.node,
-                        TextRange(range.startOffset, range.endOffset),
-                        null,
-                        value
-                    )
-                )
-            }
+            addFoldingDescriptor(call, messages, descriptors)
         }
         return descriptors.toTypedArray()
     }
@@ -66,6 +54,27 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val messages = LocaleMessages.loadCached(project, call.containingFile)
         val key = extractKey(call) ?: return null
         return messages[key]
+    }
+
+    /** 为单个调用创建折叠描述符（若 key 在翻译资源中存在）。 */
+    private fun addFoldingDescriptor(
+        call: JSCallExpression,
+        messages: Map<String, String>,
+        descriptors: MutableList<FoldingDescriptor>,
+    ) {
+        val key = extractKey(call) ?: return
+        val value = messages[key] ?: return
+        val range = call.textRange
+        if (!range.isEmpty()) {
+            descriptors.add(
+                FoldingDescriptor(
+                    call.node,
+                    TextRange(range.startOffset, range.endOffset),
+                    null,
+                    value
+                )
+            )
+        }
     }
 
     /** 从 `$t('key')` / `t('key')` / `xxx.t('key')` 调用中提取 key；非翻译调用返回 null。 */

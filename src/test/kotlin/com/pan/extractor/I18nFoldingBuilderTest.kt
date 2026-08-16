@@ -105,6 +105,26 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         assertTrue("折叠范围应含 key，实际: $text", text.contains("你好世界"))
     }
 
+    fun testFoldTsxDirectCall() {
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            import {useTranslation} from 'react-i18next';
+            export default function App() {
+                const {t} = useTranslation();
+                let a = t('你好世界');
+                return <div>{ t('hello') }</div>;
+            }
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("TSX 文件应折叠 2 处 t() 调用", 2, descriptors.size)
+        val placeholders = descriptors.map { it.placeholderText }.toSet()
+        assertTrue("应含「你好世界」", placeholders.contains("你好世界"))
+        assertTrue("应含「你好」", placeholders.contains("你好"))
+    }
+
     fun testFoldVueTemplateInterpolation() {
         val file = configureFile(
             "src/App.vue",
