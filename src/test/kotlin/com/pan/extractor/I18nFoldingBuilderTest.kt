@@ -105,6 +105,60 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         assertTrue("折叠范围应含 key，实际: $text", text.contains("你好世界"))
     }
 
+    fun testFoldTsxDirectCall() {
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            import {useTranslation} from 'react-i18next';
+            export default function App() {
+                const {t} = useTranslation();
+                let a = t('你好世界');
+                return <div>{ t('hello') }</div>;
+            }
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("TSX 文件应折叠 2 处 t() 调用", 2, descriptors.size)
+        val placeholders = descriptors.map { it.placeholderText }.toSet()
+        assertTrue("应含「你好世界」", placeholders.contains("你好世界"))
+        assertTrue("应含「你好」", placeholders.contains("你好"))
+    }
+
+    /** 用户报告的问题复现：key 含 {N0} 占位符时能否正确折叠。 */
+    fun testFoldTsxWithPlaceholderInKey() {
+        // 额外添加含 {N0} 占位符的翻译条目
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                '你好Hello{N0}': 'Hello{N0}',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/App.tsx",
+                """
+                import {useTranslation} from 'react-i18next';
+                export default function App() {
+                    const {t} = useTranslation();
+                    let a = t('你好Hello{N0}', {"0": 2});
+                    return <div>{ t('你好Hello{N0}', { "0": '' }) }</div>;
+                }
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+            assertEquals("含 {N0} 占位符的 key 应折叠 2 处", 2, descriptors.size)
+            val placeholders = descriptors.map { it.placeholderText }.toSet()
+            assertTrue("应含「Hello{N0}」", placeholders.contains("Hello{N0}"))
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
     fun testFoldVueTemplateInterpolation() {
         val file = configureFile(
             "src/App.vue",
