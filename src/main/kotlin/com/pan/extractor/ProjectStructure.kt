@@ -29,6 +29,7 @@ import kotlin.io.path.relativeToOrNull
 object ProjectStructure {
     /** 高频复用正则：避免每次在循环里重复编译（性能）。 */
     private val REACT_KEY_RE = Regex(""""react"\s*:\s*"""")
+    private val PREACT_KEY_RE = Regex(""""preact"\s*:\s*"""")
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
     private val SOLID_KEY_RE = Regex(""""solid-js"\s*:\s*"""")
 
@@ -108,7 +109,7 @@ object ProjectStructure {
                 return try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
                     PackageDeps(
-                        hasReact = content.contains(REACT_KEY_RE),
+                        hasReact = content.contains(REACT_KEY_RE) || content.contains(PREACT_KEY_RE),
                         hasVue = content.contains(VUE_KEY_RE),
                         hasSolid = content.contains(SOLID_KEY_RE),
                         parsed = true,
@@ -123,10 +124,10 @@ object ProjectStructure {
     }
 
     /**
-     * 判断当前元素是否处于 React 上下文。
+     * 判断当前元素是否处于 React 上下文（含 Preact）。
      * 仅依据 package.json 依赖判断：
      * 1. .vue 文件直接排除（Vue）
-     * 2. 依赖 react 且不依赖 vue → React
+     * 2. 依赖 react 或 preact，且不依赖 vue/solid-js → React
      *    (若同时依赖两者=混合项目，优先级判定到 Vue，因为用户更常用 Vue)
      * 3. 找不到 package.json → 旧逻辑 fallback：hasReactDependency=原来的实现
      * 注意：Vue 项目中也可能有 .tsx 文件，因此不再通过文件后缀直接判断
