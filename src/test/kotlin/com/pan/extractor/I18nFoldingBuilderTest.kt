@@ -328,6 +328,81 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
      * （在宿主文件顶层 PSI 里 collectElementsOfType 找 JSCallExpression，不含注入片段），
      * 对比 React .tsx 与 Vue .vue 谁能被该 inlay 逻辑扫到。
      */
+    /** 诊断：Vue 属性绑定 :placeholder="$t('x')" 里的 $t 调用在宿主树与注入片段中分别能否被扫到。 */
+    fun testDiagnosticVueAttributeBindingCallCoverage() {
+        // setUp 已添加 src/locales/zh.ts（含 key 你好世界），直接复用
+        val file = configureFile(
+            "src/Attr.vue",
+            """
+            <template>
+              <a-input :placeholder="${'$'}t('你好世界')" />
+            </template>
+            """.trimIndent()
+        )
+        // 1) 宿主顶层 PSI 扫描 JSCallExpression
+        val hostCalls = PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java)
+            .filter { it.text.contains("你好") }
+        System.out.println("==== DIAG VueAttr file.language = ${file.language} / id=${file.language?.id}")
+        hostCalls.forEach { c ->
+            System.out.println("==== DIAG VueAttr \$t lang(id) = ${c.language.id}, psiFile=${c.containingFile.name}, nodeElementType=${c.node.elementType}")
+        }
+        System.out.println("==== DIAG VueAttr host-top-level \$t calls = ${hostCalls.map { it.text }}")
+
+        // 1b) 直接在宿主文件 root 上跑 buildFoldRegions，看是否产出折叠描述符
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val hostDescriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        System.out.println("==== DIAG VueAttr host-tree fold descriptors = ${hostDescriptors.map { d -> "range=${d.range} text=['" + doc.getText(d.range) + "']" }}")
+
+        // 2) 注入片段
+        val inj = InjectedLanguageManager.getInstance(project)
+        val host = PsiTreeUtil.collectElementsOfType(file, PsiLanguageInjectionHost::class.java)
+            .firstOrNull { it.text.contains("你好") }
+        System.out.println("==== DIAG VueAttr host(attributeValue?) = ${host?.javaClass?.simpleName} :: ${host?.text}")
+        val injected = host?.let { inj.getInjectedPsiFiles(it)?.firstOrNull()?.first }
+        val injectedCalls = injected?.let {
+            PsiTreeUtil.collectElementsOfType(it, JSCallExpression::class.java).filter { c -> c.text.contains("你好") }
+        }
+        System.out.println("==== DIAG VueAttr injected \$t calls = ${injectedCalls?.map { c -> c.text }}")
+
+        // 3) 以注入片段为 root 尝试折叠
+        if (injected != null) {
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+            System.out.println("==== DIAG VueAttr fold descriptors(size) = ${descriptors.size}, ranges=${descriptors.map { it.range }}")
+        }
+        assertTrue("诊断无断言，仅打印", true)
+    }
+
+    /**
+     * 用户报告：Vue 属性绑定 :placeholder="$t('x')" 点击 ↩ 会折叠"整个标签"而非仅 $t 调用中文文案。
+     * 根因：.vue 根语言（Vue）未注册折叠，导致 $t 调用没有折叠区域。
+     * 修复后应折叠出"仅覆盖 $t('你好世界') 调用"的区域，而非整段 `<a-input ...>`。
+     */
+    fun testFoldVueAttributeBindingProducesCallRegion() {
+        val file = configureFile(
+            "src/Attr.vue",
+            """
+            <template>
+              <a-input :placeholder="${'$'}t('你好世界')" />
+            </template>
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        // 在 .vue 根语言宿主树上直接构建折叠区域（等同编辑器对 Vue 根语言的折叠调用）
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+
+        // 折叠区域必须命中属性绑定里的 $t 调用
+        val callDescriptors = descriptors.filter {
+            doc.getText(it.range).trim().startsWith("\$t(")
+        }
+        assertTrue("应存在覆盖 \$t 调用的折叠区域", callDescriptors.isNotEmpty())
+
+        // 折叠文本应恰好是调用本身，绝不包含整个标签
+        val rangeText = doc.getText(callDescriptors.first().range).trim()
+        assertTrue("折叠范围应仅是 \$t 调用，实际: $rangeText", rangeText.startsWith("\$t('你好世界')"))
+        assertTrue("折叠范围不应包含整个标签", !rangeText.contains("<a-input"))
+    }
+
     fun testDiagnosticInlayTopLevelCoverageVueVsReact() {
         // React .tsx
         val tsx = configureFile(
