@@ -150,6 +150,8 @@ object Util {
 
     fun isVue(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isVue(element)
 
+    fun isSolid(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSolid(element)
+
     fun findReactComponentFunctions(file: PsiFile): List<com.intellij.psi.PsiElement> =
         ProjectStructure.findReactComponentFunctions(file)
 

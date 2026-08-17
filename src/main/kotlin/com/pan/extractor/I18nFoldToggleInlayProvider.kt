@@ -72,14 +72,12 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
 
     private fun addFoldToggleInlays(editor: Editor, file: PsiFile, messages: Map<String, String>) {
         val inlayModel = editor.inlayModel
+        val fw = I18nFrameworkRegistry.detect(file)
 
         PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
-            val method = call.methodExpression?.text ?: return@forEach
-            val last = method.substringAfterLast('.')
-            if (last != "t" && last != "\$t" && last != "tc" && last != "\$tc") return@forEach
+            if (!fw.isTranslationCall(call)) return@forEach
 
-            val firstArg = call.arguments.firstOrNull() ?: return@forEach
-            val key = extractStringValue(firstArg.text) ?: return@forEach
+            val key = fw.extractKey(call) ?: return@forEach
             if (key !in messages) return@forEach
 
             // 在 t() 调用末尾添加可点击的 ↩ inlay
@@ -88,15 +86,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
         }
     }
 
-    private fun extractStringValue(text: String): String? {
-        if (text.length < 2) return null
-        val quote = text[0]
-        if (quote != '\'' && quote != '"' && quote != '`') return null
-        val value = text.substring(1, text.length - 1)
-        // 模板字符串可能含 ${} 插值，这种情况下无法确定 key，忽略
-        if (value.contains("\${")) return null
-        return value.takeIf { it.isNotBlank() }
-    }
 }
 
 /** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。 */

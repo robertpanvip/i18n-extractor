@@ -30,6 +30,7 @@ object ProjectStructure {
     /** 高频复用正则：避免每次在循环里重复编译（性能）。 */
     private val REACT_KEY_RE = Regex(""""react"\s*:\s*"""")
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
+    private val SOLID_KEY_RE = Regex(""""solid-js"\s*:\s*"""")
 
     fun isJSX(element: PsiElement): Boolean {
         // 第二步：向上遍历父节点，检查 JS 语法上下文（核心逻辑）
@@ -85,29 +86,40 @@ object ProjectStructure {
         return false
     }
 
+    /** package.json 依赖检测结果，支持解构。 */
+    data class PackageDeps(
+        val hasReact: Boolean,
+        val hasVue: Boolean,
+        val hasSolid: Boolean,
+        val parsed: Boolean,
+    )
+
     /**
      * 读取当前文件所在项目根（向上找最近 package.json）的依赖键值，
-     * 返回 Triple = (hasReactDep: Boolean, hasVueDep: Boolean, hasAnyDepsParsed: Boolean)
+     * 返回 [PackageDeps] = (hasReact, hasVue, hasSolid, parsed)
      *
-     * hasAnyDepsParsed=false 表示根本没找到 package.json，调用方需要 fallback 到其他策略。
+     * parsed=false 表示根本没找到 package.json，调用方需要 fallback 到其他策略。
      */
-    private fun readPackageJsonDependencies(psiFile: PsiFile): Triple<Boolean, Boolean, Boolean> {
-        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return Triple(false, false, false)
+    private fun readPackageJsonDependencies(psiFile: PsiFile): PackageDeps {
+        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return PackageDeps(false, false, false, false)
         while (dir != null) {
             val pkgFile = dir.findChild("package.json")
             if (pkgFile != null) {
                 return try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
-                    val hasReact = content.contains(REACT_KEY_RE)
-                    val hasVue = content.contains(VUE_KEY_RE)
-                    Triple(hasReact, hasVue, true)
+                    PackageDeps(
+                        hasReact = content.contains(REACT_KEY_RE),
+                        hasVue = content.contains(VUE_KEY_RE),
+                        hasSolid = content.contains(SOLID_KEY_RE),
+                        parsed = true,
+                    )
                 } catch (e: Exception) {
-                    Triple(false, false, false)
+                    PackageDeps(false, false, false, false)
                 }
             }
             dir = dir.parent
         }
-        return Triple(false, false, false)
+        return PackageDeps(false, false, false, false)
     }
 
     /**
@@ -127,12 +139,34 @@ object ProjectStructure {
             return false
         }
 
-        val (hasReact, hasVue, parsed) = readPackageJsonDependencies(containingFile)
+        val (hasReact, hasVue, hasSolid, parsed) = readPackageJsonDependencies(containingFile)
         return if (parsed) {
-            hasReact && !hasVue
+            hasReact && !hasVue && !hasSolid
         } else {
             // fallback：老逻辑（避免 IntelliJ 测试项目中没有 package.json 的场景）
-            hasReact && !hasVue // 没 parsed 两者默认 false，=false 正确
+            hasReact && !hasVue && !hasSolid // 没 parsed 两者默认 false，=false 正确
+        }
+    }
+
+    /**
+     * 判断当前元素是否处于 SolidJS 上下文（与 isReact 对称）。
+     * 仅依据 package.json 依赖判断：
+     * 1. .vue 文件直接排除（Vue）
+     * 2. 依赖 solid-js 且不依赖 vue → SolidJS
+     * 3. 找不到 package.json → false
+     */
+    fun isSolid(element: PsiElement): Boolean {
+        val containingFile = element.containingFile ?: return false
+
+        if (containingFile.name.endsWith(".vue", ignoreCase = true)) {
+            return false
+        }
+
+        val (hasReact, hasVue, hasSolid, parsed) = readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasSolid && !hasVue
+        } else {
+            false
         }
     }
 
@@ -151,7 +185,7 @@ object ProjectStructure {
             return true
         }
 
-        val (hasReact, hasVue, parsed) = readPackageJsonDependencies(containingFile)
+        val (hasReact, hasVue, hasSolid, parsed) = readPackageJsonDependencies(containingFile)
         return if (parsed) {
             hasVue
         } else {
@@ -446,9 +480,9 @@ object ProjectStructure {
         } catch (_: Exception) {
             return null
         }
-        val (hasReact, hasVue, _) = readPackageJsonDependencies(currentPsiFile)
+        val (hasReact, hasVue, hasSolid, _) = readPackageJsonDependencies(currentPsiFile)
         val hasInit = findI18nInitFileInRoot(root) != null
-        return I18nBootstrapSupport.detectMissing(text, hasInit, hasReact, hasVue)
+        return I18nBootstrapSupport.detectMissing(text, hasInit, hasReact, hasVue, hasSolid)
     }
 
     /**

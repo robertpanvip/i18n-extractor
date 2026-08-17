@@ -5,8 +5,6 @@ import com.intellij.lang.folding.FoldingBuilderEx
 import com.intellij.lang.folding.FoldingDescriptor
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
-import com.intellij.lang.javascript.psi.JSLiteralExpression
-import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.project.Project
@@ -98,24 +96,11 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     }
 
     /** 从 `$t('key')` / `t('key')` / `xxx.t('key')` 调用中提取 key；非翻译调用返回 null。 */
-    private fun extractKey(call: JSCallExpression): String? {
-        if (!isTranslationCall(call)) return null
-        val firstArg = call.arguments.firstOrNull() as? JSLiteralExpression ?: return null
-        return firstArg.stringValue?.takeIf { it.isNotBlank() }
-    }
+    private fun extractKey(call: JSCallExpression): String? =
+        I18nFrameworkRegistry.detect(call).extractKey(call)
 
-    private fun isTranslationCall(call: JSCallExpression): Boolean {
-        val method = call.methodExpression
-        if (method is JSReferenceExpression) {
-            val name = method.referenceName
-            if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
-            return false
-        }
-        // 链式调用：xxx.t('key') / xxx.$t('key')
-        val calleeText = method?.text ?: return false
-        val last = calleeText.substringAfterLast('.')
-        return last == "t" || last == "\$t" || last == "tc" || last == "\$tc"
-    }
+    private fun isTranslationCall(call: JSCallExpression): Boolean =
+        I18nFrameworkRegistry.detect(call).isTranslationCall(call)
 
     /**
      * 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。

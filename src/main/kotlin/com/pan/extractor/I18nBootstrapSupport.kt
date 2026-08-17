@@ -11,34 +11,39 @@ import com.google.gson.JsonParser
  *   1. 在 package.json 添加依赖（React → i18next + react-i18next；Vue → vue-i18n）
  *   2. 自动创建 i18n 初始化文件（React → src/i18n.ts；Vue → src/i18n.ts）
  *
+ * 框架差异（依赖列表 / 初始化文件模板）由 [I18nFramework] 策略提供，
+ * 本类只负责编排：检测 → 生成 → 写入。
+ *
  * 本类只包含纯函数（不依赖 IDE 平台），便于单元测试：
  *   - [detectMissing]：判定项目是否缺依赖且未初始化
- *   - [buildInitFileContent]：生成初始化文件内容
+ *   - [buildInitFileContent]：生成初始化文件内容（委托策略）
  *   - [addDepsToPackageJson]：更新 package.json 文本，追加依赖
  */
 object I18nBootstrapSupport {
 
-    enum class Framework { VUE, REACT }
-
     /** 检测结果：缺 bootstrap 时描述需要补什么。 */
     data class MissingBootstrap(
-        val framework: Framework,
+        val framework: I18nFramework,
         val depsToAdd: List<String>,
     ) {
         val dependencyLabel: String
             get() = depsToAdd.joinToString(" + ")
     }
 
-    private val REACT_DEP = Regex(""""(?:i18next|react-i18next)"\s*:""")
-    private val VUE_DEP = Regex(""""(?:vue-i18n)"\s*:""")
-
     /**
-     * 检测项目是否“缺 i18n 依赖且未初始化”。
+     * 检测项目是否"缺 i18n 依赖且未初始化"。
+     *
+     * 框架判定与依赖列表均来自 [I18nFramework] 策略（Vue 优先，Solid 次之，React 最后）：
+     *   - hasVueDep   → [VueI18nStrategy]（bootstrapDeps = vue-i18n）
+     *   - hasSolidDep → [SolidI18nStrategy]（bootstrapDeps = @solid-primitives/i18n）
+     *   - hasReactDep → [ReactI18nextStrategy]（bootstrapDeps = i18next + react-i18next）
+     *   - 都没有      → null（Generic 无需引导）
      *
      * @param packageJsonText 项目根 package.json 文本；null 表示没有 package.json
      * @param hasInitFile     项目里是否已存在 i18n 初始化文件（createI18n / initReactI18next / i18n.init）
      * @param hasReactDep     项目是否依赖 react（由调用方从 package.json 判定）
      * @param hasVueDep       项目是否依赖 vue
+     * @param hasSolidDep     项目是否依赖 solid-js
      *
      * @return 命中框架则返回缺的依赖；否则 null
      */
@@ -47,76 +52,36 @@ object I18nBootstrapSupport {
         hasInitFile: Boolean,
         hasReactDep: Boolean,
         hasVueDep: Boolean,
+        hasSolidDep: Boolean = false,
     ): MissingBootstrap? {
         if (hasInitFile) return null
-        return when {
-            hasReactDep -> {
-                if (packageJsonText != null && REACT_DEP.containsMatchIn(packageJsonText)) null
-                else MissingBootstrap(Framework.REACT, listOf("i18next", "react-i18next"))
-            }
-            hasVueDep -> {
-                if (packageJsonText != null && VUE_DEP.containsMatchIn(packageJsonText)) null
-                else MissingBootstrap(Framework.VUE, listOf("vue-i18n"))
-            }
-            else -> null
+        val strategy = when {
+            hasVueDep -> VueI18nStrategy
+            hasSolidDep -> SolidI18nStrategy
+            hasReactDep -> ReactI18nextStrategy
+            else -> return null
         }
+        val deps = strategy.bootstrapDeps
+        if (deps.isEmpty()) return null
+        // 依赖已安装则无需引导
+        if (packageJsonText != null && deps.any { dep ->
+                Regex(""""${Regex.escape(dep)}"\s*:""").containsMatchIn(packageJsonText)
+            }) return null
+        return MissingBootstrap(strategy, deps)
     }
 
     /**
-     * 生成 i18n 初始化文件内容。
+     * 生成 i18n 初始化文件内容（委托给 [I18nFramework.buildInitFile]）。
      *
-     * @param framework     VUE / REACT
+     * @param framework     框架策略
      * @param defaultLocale 默认语言（如 zh、zh-CN）
      * @param entryImport   用于填充 resources/messages 的中文入口文件名（不含扩展名），可为空
      */
     fun buildInitFileContent(
-        framework: Framework,
+        framework: I18nFramework,
         defaultLocale: String,
         entryImport: String? = null,
-    ): String = when (framework) {
-        Framework.REACT -> buildReactInit(defaultLocale, entryImport)
-        Framework.VUE -> buildVueInit(defaultLocale, entryImport)
-    }
-
-    private fun buildReactInit(defaultLocale: String, entryImport: String?): String {
-        val importLine = if (!entryImport.isNullOrBlank()) {
-            "import zh from './locales/$entryImport';\n"
-        } else ""
-        val resourcesBlock = if (!entryImport.isNullOrBlank()) {
-            "  resources: {\n    $defaultLocale: { translation: zh },\n  },\n"
-        } else ""
-        return """
-            import i18n from 'i18next';
-            import { initReactI18next } from 'react-i18next';
-            $importLine
-            i18n.use(initReactI18next).init({
-              lng: '$defaultLocale',
-              fallbackLng: '$defaultLocale',
-            $resourcesBlock});
-
-            export default i18n;
-        """.trimIndent() + "\n"
-    }
-
-    private fun buildVueInit(defaultLocale: String, entryImport: String?): String {
-        val importLine = if (!entryImport.isNullOrBlank()) {
-            "import zh from './locales/$entryImport';\n"
-        } else ""
-        val messagesBlock = if (!entryImport.isNullOrBlank()) {
-            "  messages: {\n    $defaultLocale: zh,\n  },\n"
-        } else ""
-        return """
-            import { createI18n } from 'vue-i18n';
-            $importLine
-            const i18n = createI18n({
-              legacy: false,
-              locale: '$defaultLocale',
-              fallbackLocale: '$defaultLocale',
-            $messagesBlock});
-
-            export default i18n;
-        """.trimIndent() + "\n"
-    }
+    ): String = framework.buildInitFile(defaultLocale, entryImport)
 
     /** 生成一个最简可写回的中文语言包入口文件内容（export default 对象字面量）。 */
     fun buildLocaleEntryFileContent(): String =

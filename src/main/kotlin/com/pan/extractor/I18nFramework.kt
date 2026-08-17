@@ -64,12 +64,25 @@ interface I18nFramework {
 
     /**
      * 从翻译调用中提取 key；非翻译调用或 key 不可确定时返回 null。
-     * 默认实现取第一个字符串字面量参数（与现有 [I18nFoldingBuilder.extractKey] 一致）。
+     *
+     * 默认实现取第一个字符串字面量参数，同时支持：
+     *  - 普通 string literal（`'x'` / `"x"`）→ `JSLiteralExpression.stringValue`
+     *  - 模板字符串（`` `x` ``，无 `${}` 插值）→ 文本级解析（与原 inlay provider 的
+     *    `extractStringValue` 一致，因为 `JSStringTemplateExpression` 不是 `JSLiteralExpression`）
      */
     fun extractKey(call: JSCallExpression): String? {
         if (!isTranslationCall(call)) return null
-        val firstArg = call.arguments.firstOrNull() as? JSLiteralExpression ?: return null
-        return firstArg.stringValue?.takeIf { it.isNotBlank() }
+        val firstArg = call.arguments.firstOrNull() ?: return null
+        // 优先用 PSI stringValue（普通字符串字面量）
+        (firstArg as? JSLiteralExpression)?.let { lit ->
+            return lit.stringValue?.takeIf { it.isNotBlank() }
+        }
+        // 回退：模板字符串（反引号），文本级解析，排除含 ${} 插值的情况
+        val text = firstArg.text
+        if (text.length < 2 || text[0] != '`') return null
+        val value = text.substring(1, text.length - 1)
+        if (value.contains("\${")) return null
+        return value.takeIf { it.isNotBlank() }
     }
 
     // ── 耦合点 4：注入函数（第 2 步接入） ──────────────────────────────
@@ -92,8 +105,8 @@ interface I18nFramework {
 /**
  * 框架策略注册表。按优先级匹配首个命中的策略，无命中回退到 [GenericStrategy]。
  *
- * 第 1 步的 [detect] 委托给现有 [Util.isVue] / [Util.isReact]，保证行为与历史完全一致；
- * 第 2 步可改为直接读取 package.json 依赖，移除对 [ProjectStructure] 布尔判定的依赖。
+ * [detect] 委托给现有 [Util.isVue] / [Util.isReact] / [Util.isSolid]，
+ * 保证 Vue / React 行为与历史完全一致，新增 Solid 识别。
  */
 object I18nFrameworkRegistry {
 
@@ -101,8 +114,8 @@ object I18nFrameworkRegistry {
 
     init {
         // 注册顺序即优先级顺序；detect 按此顺序首个 matches 命中即返回。
-        // 当前 detect 仍委托 Util.isVue/isReact（保持行为不变），此列表为第 2 步的 matches 预留。
         register(VueI18nStrategy)
+        register(SolidI18nStrategy)
         register(ReactI18nextStrategy)
         register(GenericStrategy)
     }
@@ -112,15 +125,16 @@ object I18nFrameworkRegistry {
     }
 
     /**
-     * 按 [element] 所在文件检测框架策略。
-     * 当前委托 [Util.isVue] / [Util.isReact]，与历史判定完全一致：
+     * 按 [element] 所在文件检测框架策略：
      *  - .vue 文件 / 依赖 vue → VueI18nStrategy
-     *  - 依赖 react 且不依赖 vue → ReactI18nextStrategy
+     *  - 依赖 solid-js 且不依赖 vue → SolidI18nStrategy
+     *  - 依赖 react 且不依赖 vue/solid-js → ReactI18nextStrategy
      *  - 无 package.json 时 isVue 兜底为 true → VueI18nStrategy（历史行为）
-     *  - 有 package.json 但无 react/vue 依赖 → GenericStrategy
+     *  - 有 package.json 但无 react/vue/solid-js 依赖 → GenericStrategy
      */
     fun detect(element: PsiElement): I18nFramework {
         if (Util.isVue(element)) return VueI18nStrategy
+        if (Util.isSolid(element)) return SolidI18nStrategy
         if (Util.isReact(element)) return ReactI18nextStrategy
         return GenericStrategy
     }
@@ -244,4 +258,45 @@ object GenericStrategy : I18nFramework {
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String =
         ReactI18nextStrategy.buildInitFile(defaultLocale, entryImport)
+}
+
+/**
+ * SolidJS 策略：面向 `@solid-primitives/i18n` / `@solid-hooks/i18n` 等 SolidJS i18n 库。
+ *
+ * SolidJS 的翻译调用形态 `t('key')` 与 React-i18next 一致，占位符用 `{{0}}`，
+ * 因此占位符 / 插值 / 折叠 / ↩ 图标行为完全复用 [ReactI18nextStrategy]。
+ * 差异仅在框架识别（依赖 `solid-js`）和引导文件（使用 `@solid-primitives/i18n`）。
+ */
+object SolidI18nStrategy : I18nFramework {
+    override val id = "solid-i18n"
+    override val tFunctionName = "t"
+    override val hookImport = "import { useI18n } from '@solid-primitives/i18n';"
+    override val bootstrapDeps = listOf("@solid-primitives/i18n")
+    override val paramKeyNeedsQuote = true
+
+    override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)
+    override fun paramKey(index: Int): String = ReactI18nextStrategy.paramKey(index)
+    override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
+        ReactI18nextStrategy.interpolatePlaceholders(value, params)
+
+    override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
+        val importLine = if (!entryImport.isNullOrBlank()) {
+            "import zh from './locales/$entryImport';\n"
+        } else ""
+        val dictLine = if (!entryImport.isNullOrBlank()) {
+            "const dict = { $defaultLocale: zh };\n"
+        } else ""
+        val providerLine = if (!entryImport.isNullOrBlank()) {
+            "  const [t, { locale }] = useI18n(dict, () => '$defaultLocale');\n"
+        } else {
+            "  const [t, { locale }] = useI18n({}, () => '$defaultLocale');\n"
+        }
+        return """
+            import { useI18n } from '@solid-primitives/i18n';
+            $importLine$dictLine
+            export function createAppI18n() {
+            $providerLine  return { t, locale };
+            }
+        """.trimIndent() + "\n"
+    }
 }

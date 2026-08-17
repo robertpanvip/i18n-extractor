@@ -1,6 +1,9 @@
 package com.pan.extractor.core
 
 import com.pan.extractor.I18nBootstrapSupport
+import com.pan.extractor.ReactI18nextStrategy
+import com.pan.extractor.SolidI18nStrategy
+import com.pan.extractor.VueI18nStrategy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -25,7 +28,7 @@ class I18nBootstrapSupportTest {
             hasVueDep = false,
         )
         assertNotNull("React 缺 i18next 应命中", missing)
-        assertEquals(I18nBootstrapSupport.Framework.REACT, missing!!.framework)
+        assertEquals(ReactI18nextStrategy, missing!!.framework)
         assertEquals(listOf("i18next", "react-i18next"), missing.depsToAdd)
     }
 
@@ -60,7 +63,7 @@ class I18nBootstrapSupportTest {
             hasVueDep = true,
         )
         assertNotNull("Vue 缺 vue-i18n 应命中", missing)
-        assertEquals(I18nBootstrapSupport.Framework.VUE, missing!!.framework)
+        assertEquals(VueI18nStrategy, missing!!.framework)
         assertEquals(listOf("vue-i18n"), missing.depsToAdd)
     }
 
@@ -83,13 +86,90 @@ class I18nBootstrapSupportTest {
             hasReactDep = false,
             hasVueDep = false,
         )
-        assertNull("非 React/Vue 不应命中", missing)
+        assertNull("非 React/Vue/Solid 不应命中", missing)
+    }
+
+    // ── SolidJS ───────────────────────────────────────────────
+
+    @Test
+    fun solidProjectMissingDepsFlagsBootstrap() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "solid-js": "^1.8" } }""",
+            hasInitFile = false,
+            hasReactDep = false,
+            hasVueDep = false,
+            hasSolidDep = true,
+        )
+        assertNotNull("Solid 缺 @solid-primitives/i18n 应命中", missing)
+        assertEquals(SolidI18nStrategy, missing!!.framework)
+        assertEquals(listOf("@solid-primitives/i18n"), missing.depsToAdd)
+    }
+
+    @Test
+    fun solidProjectWithI18nDepNoBootstrap() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "solid-js": "^1.8", "@solid-primitives/i18n": "^2.0" } }""",
+            hasInitFile = false,
+            hasReactDep = false,
+            hasVueDep = false,
+            hasSolidDep = true,
+        )
+        assertNull("已装 @solid-primitives/i18n 不应命中", missing)
+    }
+
+    @Test
+    fun solidProjectWithInitFileNoBootstrap() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "solid-js": "^1.8" } }""",
+            hasInitFile = true,
+            hasReactDep = false,
+            hasVueDep = false,
+            hasSolidDep = true,
+        )
+        assertNull("已初始化不应命中", missing)
+    }
+
+    @Test
+    fun solidVueMixedProjectPrefersVue() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "solid-js": "^1.8", "vue": "^3" } }""",
+            hasInitFile = false,
+            hasReactDep = false,
+            hasVueDep = true,
+            hasSolidDep = true,
+        )
+        assertNotNull("混合项目应命中", missing)
+        assertEquals("Vue 优先级高于 Solid", VueI18nStrategy, missing!!.framework)
+    }
+
+    @Test
+    fun solidReactMixedProjectPrefersSolid() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "solid-js": "^1.8", "react": "^18" } }""",
+            hasInitFile = false,
+            hasReactDep = true,
+            hasVueDep = false,
+            hasSolidDep = true,
+        )
+        assertNotNull("混合项目应命中", missing)
+        assertEquals("Solid 优先级高于 React", SolidI18nStrategy, missing!!.framework)
+    }
+
+    @Test
+    fun solidInitFileContainsUseI18n() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            SolidI18nStrategy, "zh", "zh-CN"
+        )
+        assertTrue(content.contains("import { useI18n } from '@solid-primitives/i18n';"))
+        assertTrue(content.contains("import zh from './locales/zh-CN';"))
+        assertTrue(content.contains("useI18n(dict, () => 'zh')"))
+        assertTrue(content.contains("export function createAppI18n"))
     }
 
     @Test
     fun missingDependencyLabelJoinsWithPlus() {
         val missing = I18nBootstrapSupport.MissingBootstrap(
-            I18nBootstrapSupport.Framework.REACT,
+            ReactI18nextStrategy,
             listOf("i18next", "react-i18next"),
         )
         assertEquals("i18next + react-i18next", missing.dependencyLabel)
@@ -100,7 +180,7 @@ class I18nBootstrapSupportTest {
     @Test
     fun reactInitFileContainsImportsAndInit() {
         val content = I18nBootstrapSupport.buildInitFileContent(
-            I18nBootstrapSupport.Framework.REACT, "zh", "zh-CN"
+            ReactI18nextStrategy, "zh", "zh-CN"
         )
         assertTrue(content.contains("import i18n from 'i18next';"))
         assertTrue(content.contains("import { initReactI18next } from 'react-i18next';"))
@@ -114,7 +194,7 @@ class I18nBootstrapSupportTest {
     @Test
     fun reactInitFileWithoutEntryOmitsResources() {
         val content = I18nBootstrapSupport.buildInitFileContent(
-            I18nBootstrapSupport.Framework.REACT, "zh", null
+            ReactI18nextStrategy, "zh", null
         )
         assertFalse(content.contains("import zh"))
         assertFalse(content.contains("resources:"))
@@ -124,7 +204,7 @@ class I18nBootstrapSupportTest {
     @Test
     fun vueInitFileContainsCreateI18n() {
         val content = I18nBootstrapSupport.buildInitFileContent(
-            I18nBootstrapSupport.Framework.VUE, "zh-CN", "zh-CN"
+            VueI18nStrategy, "zh-CN", "zh-CN"
         )
         assertTrue(content.contains("import { createI18n } from 'vue-i18n';"))
         assertTrue(content.contains("import zh from './locales/zh-CN';"))

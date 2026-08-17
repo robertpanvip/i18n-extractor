@@ -226,9 +226,10 @@ class ExtractedStringsDialog(
         // 行 2：项目缺 i18n 初始化时，展示“自动初始化 i18n”勾选框由用户选择
         val missing = bootstrapMissing
         if (missing != null) {
-            val frameworkLabel = when (missing.framework) {
-                I18nBootstrapSupport.Framework.REACT -> "React（i18next + react-i18next）"
-                I18nBootstrapSupport.Framework.VUE -> "Vue（vue-i18n）"
+            val frameworkLabel = when (missing.framework.id) {
+                ReactI18nextStrategy.id -> "React（i18next + react-i18next）"
+                VueI18nStrategy.id -> "Vue（vue-i18n）"
+                else -> missing.framework.id
             }
             val chk = JCheckBox(
                 "<html>项目未安装/初始化多语言依赖（$frameworkLabel）。勾选后自动：<br>" +
