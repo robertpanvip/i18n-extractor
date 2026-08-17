@@ -17,7 +17,6 @@ import com.intellij.lang.javascript.psi.JSProperty
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnum
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptEnumField
-import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -155,8 +154,8 @@ class I18nProcessor(
             if (hasI18nInstanceImported(psiFile)) return@run false
             // locale 初始化文件导出了 i18n 且路径可推断 → 走 locale，不回退
             val root = ProjectStructure.findProjectRoot(f) ?: return@run true
-            val initFile = EntryFileLocator.findReactI18nInstanceFileInRoot(root)
-            if (initFile != null && EntryFileLocator.resolveVueI18nImportPath(f, initFile) != null) return@run false
+            val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(root)
+            if (initFile != null && I18nInstanceLocator.resolveVueI18nImportPath(f, initFile) != null) return@run false
             true
         }
         return reactFallbackResult
@@ -202,8 +201,13 @@ class I18nProcessor(
         val id = nextSiteId()
         val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
         val f = (anchor.containingFile ?: (this.psiFile as? PsiFile))
-        val isVue = f != null && isVueFile(f) || Util.isVue(anchor)
-        val isReact = !isVue && Util.isReact(anchor)
+        // P7：站点形态由策略判定（O(1) 框架级常量），替代原 Util.isVue/isReact 二分。
+        // framework 在 collect() 入口已由 I18nFrameworkRegistry.detect 初始化（基于
+        // Util.isVue/isReact/isSolid，含 .vue 扩展名 + 依赖 + 无 package.json 兜底），
+        // 故策略命中即等价于原 Util.isVue/isReact 判定结果，1:1 还原 isVue/isReact。
+        val form = framework.getSiteForm(anchor)
+        val isVue = form == SiteForm.VUE_BINDING || form == SiteForm.VUE_MUSTACHE
+        val isReact = !isVue && (form == SiteForm.JSX_ATTRIBUTE || form == SiteForm.TEMPLATE_LITERAL)
         collectedSites += CollectedSite(
             id = id,
             originalMessage = message.trim(),
@@ -383,6 +387,10 @@ class I18nProcessor(
      * - React: i18n.t（i18next 全局实例）
      * - 默认: $t（useI18n / useTranslation 解构）
      * 注意：i18n.global.t 和 $t 可以在同一文件中共存，两者都识别为已翻译。
+     *
+     * P6：Vue mustache 专属遍历（注入 JS + 原始文本 backtick 提取）已委托给
+     * [I18nFramework.collectExistingTKeysFromTemplate]，由 [VueI18nStrategy] 重写。
+     * 通用 JSCallExpression 顶层遍历（detectTFunctionName + collectTKeyFromCall）保留在此处。
      */
     private fun collectExistingTKeys() {
         // 一次性收集所有 JSCallExpression，供 detectTFunctionName 和 collectTKeyFromCall 复用，
@@ -390,25 +398,23 @@ class I18nProcessor(
         val calls = PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java)
         calls.forEach { call -> detectTFunctionName(call) }
 
-        // 1. 模板 {{ }} 中的注入 JS
-        PsiTreeUtil.findChildrenOfType(psiFile, XmlText::class.java).forEach { xmlText ->
-            if (isMustache(xmlText.text)) {
-                val injected = InjectedLanguageManager.getInstance(project)
-                    .getInjectedPsiFiles(xmlText)
-                if (injected != null && injected.isNotEmpty()) {
-                    // 有 JS 注入：通过 PSI 遍历查找 $t() 调用
-                    injected.forEach { pair ->
-                        collectTKeysRecursive(pair.first)
-                    }
-                }
-                // 无论是否有 JS 注入，都从原始文本中补充提取 $t() 调用。
-                // backtick 模板字符串 $t(`确定`) 虽然有注入但注入的 PSI 可能不包含
-                // JSCallExpression，导致 $t() 调用被遗漏。
-                collectTKeysFromRawText(xmlText.text)
-            }
-        }
+        // 模板 {{ }} 中的注入 JS（Vue 专属，React/Solid/Generic 默认空实现）
+        // onCall：对注入 JS 中的每个 JSCallExpression 执行 collectTKeyFromCall + detectTFunctionName
+        //         （与原 collectTKeysRecursive 行为 1:1 等价）
+        // onRawText：对 mustache XmlText 原始文本执行 collectTKeysFromRawText
+        //         （覆盖 backtick 模板字符串 $t(`确定`) 场景）
+        framework.collectExistingTKeysFromTemplate(
+            root = psiFile,
+            onCall = { call ->
+                collectTKeyFromCall(call)
+                // 同步检测翻译函数名：mustache 注入的 i18n.global.t / i18n.t
+                // 不在主 PSI 树中，需在此补充检测
+                detectTFunctionName(call)
+            },
+            onRawText = { text -> collectTKeysFromRawText(text) },
+        )
 
-        // 2. script / JS / TS 中的 $t() 调用
+        // script / JS / TS 中的 $t() 调用
         calls.forEach { call -> collectTKeyFromCall(call) }
     }
 
@@ -424,20 +430,6 @@ class I18nProcessor(
             val key = generateKey(content.trim(), psiFile)
             existingStrings.putIfAbsent(key, content.trim())
         }
-    }
-
-    private fun collectTKeysRecursive(root: PsiElement) {
-        root.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                if (element is JSCallExpression) {
-                    collectTKeyFromCall(element)
-                    // 同步检测翻译函数名：mustache 注入的 i18n.global.t / i18n.t
-                    // 不在主 PSI 树中，需在此补充检测
-                    detectTFunctionName(element)
-                }
-                super.visitElement(element)
-            }
-        })
     }
 
     private fun collectTKeyFromCall(call: JSCallExpression) {
@@ -501,24 +493,6 @@ class I18nProcessor(
                     tFunctionName = "i18n.t"
                 }
             }
-        }
-    }
-
-    /**
-     * React i18n.t 语义 + locale 不可用（回退 getI18n 的 \$t 别名）时，
-     * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `$t('...')`，
-     * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const \$t = getI18n().t`）。
-     * 必须在 WriteCommandAction 内调用；老调用改写为 $t 与 collect 阶段锁死的 tFunctionName=$t 保持一致。
-     */
-    internal fun rewriteExistingI18nTCallsToDollarT(root: PsiElement) {
-        val calls = PsiTreeUtil.findChildrenOfType(root, JSCallExpression::class.java)
-        for (call in calls) {
-            val method = call.methodExpression
-            if (method !is JSReferenceExpression) continue
-            val text = method.text
-            if (text != "i18n.t" && text != "i18n.tc") continue
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(project, "\$t", null, false) ?: continue
-            method.replace(newExpr.psi)
         }
     }
 
@@ -693,7 +667,7 @@ class I18nProcessor(
      * 为 Vue 全局 i18n 实例构造 import 语句。
      *
      * 流程：
-     * 1. 通过 EntryFileLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
+     * 1. 通过 I18nInstanceLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
      * 2. 通过 resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
      * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
      * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
@@ -705,9 +679,9 @@ class I18nProcessor(
      * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
      *
      * 流程：
-     * 1. 通过 EntryFileLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
-     * 2. 通过 EntryFileLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
-     * 3. 通过 EntryFileLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
+     * 1. 通过 I18nInstanceLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
+     * 2. 通过 I18nInstanceLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 I18nInstanceLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
      *
      * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
      */

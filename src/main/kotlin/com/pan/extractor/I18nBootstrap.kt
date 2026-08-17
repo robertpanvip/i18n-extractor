@@ -91,7 +91,7 @@ object I18nBootstrap {
     private fun defaultLocaleOf(psiFile: PsiFile): String {
         val root = ProjectStructure.findProjectRoot(psiFile)
         if (root != null) {
-            val init = EntryFileLocator.findI18nInitFileInRoot(root)
+            val init = I18nInstanceLocator.findI18nInitFileInRoot(root)
             if (init != null) {
                 val text = try {
                     String(init.contentsToByteArray(), Charsets.UTF_8)

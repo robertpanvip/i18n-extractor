@@ -482,7 +482,7 @@ object ProjectStructure {
             return null
         }
         val (hasReact, hasVue, hasSolid, _) = readPackageJsonDependencies(currentPsiFile)
-        val hasInit = EntryFileLocator.findI18nInitFileInRoot(root) != null
+        val hasInit = I18nInstanceLocator.findI18nInitFileInRoot(root) != null
         return I18nBootstrapSupport.detectMissing(text, hasInit, hasReact, hasVue, hasSolid)
     }
 

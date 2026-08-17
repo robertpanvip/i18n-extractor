@@ -1,10 +1,14 @@
 package com.pan.extractor
 
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiRecursiveElementWalkingVisitor
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlText
 
 /**
  * i18n 框架策略接口：把原先散落在 [I18nFoldingBuilder] / [JsStringCollector] /
@@ -127,6 +131,57 @@ interface I18nFramework {
      */
     fun extractKeyFromElement(element: PsiElement): String? = null
 
+    // ── 耦合点 6：已有翻译 key 扫描（模板/注入 JS） ────────────────────
+
+    /**
+     * 扫描框架特有的模板/注入 JS 中的已有翻译 key（如 Vue mustache `{{ }}`）。
+     * 默认空实现：纯 JS/TS 文件无模板，[ReactI18nextStrategy] / [SolidI18nStrategy] /
+     * [GenericStrategy] 均走主 PSI 树的 JSCallExpression 顶层遍历（由 [I18nProcessor] 负责）。
+     *
+     * Vue 重写以扫描 mustache 注入 JS：
+     *  - [onCall] 对每个注入 JS 中的 [JSCallExpression] 调用一次（调用方据此
+     *    执行 collectTKeyFromCall + detectTFunctionName，与原 collectTKeysRecursive 一致）；
+     *  - [onRawText] 对每个 mustache XmlText 的原始文本调用一次（调用方据此
+     *    执行 collectTKeysFromRawText，覆盖 backtick 模板字符串场景）。
+     *
+     * 必须保持与原 [I18nProcessor.collectExistingTKeys] 中 Vue mustache 遍历完全等价的行为：
+     * 仅 Vue 策略重写，其他框架默认空实现。
+     *
+     * 参数类型为 [PsiElement]（而非 [PsiFile]）：[I18nProcessor.psiFile] 字段即为 PsiElement，
+     * 原实现直接对其做 PsiTreeUtil.findChildrenOfType，保持一致以避免额外解析。
+     */
+    fun collectExistingTKeysFromTemplate(
+        root: PsiElement,
+        onCall: (JSCallExpression) -> Unit,
+        onRawText: (String) -> Unit,
+    ) {
+        // 默认空实现：纯 JS/TS 文件无 mustache 模板
+    }
+
+    // ── 耦合点 7：站点形态判定（P7：收敛 recordChange 的 isVue/isReact 二分） ──
+
+    /**
+     * 判定 [element] 所在站点的「形态」（用于 [I18nProcessor.recordChange] 推导 isVue/isReact）。
+     *
+     * P7 收敛点：原 [I18nProcessor.recordChange] 用 `Util.isVue(anchor) || isVueFile(f)` /
+     * `Util.isReact(anchor)` 二分判定。由于 [I18nFrameworkRegistry.detect] 已基于
+     * `Util.isVue` / `Util.isReact` / `Util.isSolid` 选定策略，策略本身即代表框架归属，
+     * 此方法只需返回框架级常量（O(1)，无 PSI 遍历），即可 1:1 还原原 isVue/isReact 结果。
+     *
+     * 默认 [SiteForm.GENERIC]：[GenericStrategy] 与 [SolidI18nStrategy] 均走此路径
+     * （Solid 在原 Util.isReact 中因 `!hasSolid` 被排除 → isReact=false，故 Solid 返回
+     * [SiteForm.SOLID_BINDING] 但不映射到 isReact，保持与原行为一致）。
+     *
+     * 形态→isVue/isReact 映射（在 [I18nProcessor.recordChange] 内）：
+     *  - VUE_BINDING / VUE_MUSTACHE → isVue=true
+     *  - JSX_ATTRIBUTE / TEMPLATE_LITERAL → isReact=true（仅当 !isVue）
+     *  - SOLID_BINDING / GENERIC → isVue=false, isReact=false（与原 Solid/Generic 一致）
+     *
+     * 注意：VUE_MUSTACHE / TEMPLATE_LITERAL 当前未由策略产出（避免热路径 PSI 遍历），
+     * 保留枚举值供未来按元素形态细分时使用；当前 isVue/isReact 派生已覆盖这两种形态。
+     */
+    fun getSiteForm(element: PsiElement): SiteForm = SiteForm.GENERIC
+
     // ── 耦合点 5：引导（第 2 步接入） ──────────────────────────────────
 
     /** 缺 i18n 依赖时需要安装的包名列表。 */
@@ -223,6 +278,58 @@ object VueI18nStrategy : I18nFramework {
         return if (text == "i18n.global.t" || text == "i18n.global.tc") "i18n.global.t" else null
     }
 
+    /**
+     * P7：Vue 站点形态。返回 [SiteForm.VUE_BINDING]（O(1)，无 PSI 遍历）。
+     *
+     * 等价于原 `recordChange` 中 `isVue = isVueFile(f) || Util.isVue(anchor)`：
+     *  - [I18nFrameworkRegistry.detect] 已基于 `Util.isVue`（含 .vue 扩展名 + vue 依赖 +
+     *    无 package.json 时 `!isReact` 兜底）选定本策略，故策略命中即 isVue=true。
+     *  - recordChange 中 VUE_BINDING → isVue=true、isReact=false，1:1 还原原行为。
+     */
+    override fun getSiteForm(element: PsiElement): SiteForm = SiteForm.VUE_BINDING
+
+    /**
+     * 扫描 Vue 模板 mustache `{{ }}` 中的已有翻译 key。
+     *
+     * 行为从 [I18nProcessor.collectExistingTKeys] + [I18nProcessor.collectTKeysRecursive] 原样搬入：
+     *  1. 遍历文件中所有 [XmlText]，仅处理含 mustache 的节点；
+     *  2. 取其注入的 JS PSI，递归遍历查找 [JSCallExpression]，对每个调用回调 [onCall]
+     *     （由调用方执行 collectTKeyFromCall + detectTFunctionName）；
+     *  3. 无论是否有 JS 注入，都对 XmlText 原始文本回调 [onRawText]
+     *     （由调用方执行 collectTKeysFromRawText，覆盖 backtick 模板字符串场景）。
+     *
+     * 注意：project 取自 [root] 本身（PSI 元素所属项目，与 I18nProcessor.project 一致）。
+     */
+    override fun collectExistingTKeysFromTemplate(
+        root: PsiElement,
+        onCall: (JSCallExpression) -> Unit,
+        onRawText: (String) -> Unit,
+    ) {
+        // 1. 模板 {{ }} 中的注入 JS
+        PsiTreeUtil.findChildrenOfType(root, XmlText::class.java).forEach { xmlText ->
+            if (!I18nPsiTools.isMustache(xmlText.text)) return@forEach
+            val injected = InjectedLanguageManager.getInstance(root.project)
+                .getInjectedPsiFiles(xmlText)
+            if (injected != null && injected.isNotEmpty()) {
+                // 有 JS 注入：通过 PSI 遍历查找 $t() 调用
+                injected.forEach { pair ->
+                    pair.first.accept(object : PsiRecursiveElementWalkingVisitor() {
+                        override fun visitElement(element: PsiElement) {
+                            if (element is JSCallExpression) {
+                                onCall(element)
+                            }
+                            super.visitElement(element)
+                        }
+                    })
+                }
+            }
+            // 无论是否有 JS 注入，都从原始文本中补充提取 $t() 调用。
+            // backtick 模板字符串 $t(`确定`) 虽然有注入但注入的 PSI 可能不包含
+            // JSCallExpression，导致 $t() 调用被遗漏。
+            onRawText(xmlText.text)
+        }
+    }
+
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
         val importLine = if (!entryImport.isNullOrBlank()) {
             "import zh from './locales/$entryImport';\n"
@@ -276,6 +383,16 @@ object ReactI18nextStrategy : I18nFramework {
         val text = method.text
         return if (text == "i18n.t" || text == "i18n.tc") "i18n.t" else null
     }
+
+    /**
+     * P7：React 站点形态。返回 [SiteForm.JSX_ATTRIBUTE]（O(1)，无 PSI 遍历）。
+     *
+     * 等价于原 `recordChange` 中 `isReact = !isVue && Util.isReact(anchor)`：
+     *  - [I18nFrameworkRegistry.detect] 已基于 `Util.isReact`（`hasReact && !hasVue && !hasSolid`）
+     *    选定本策略，且 Vue 优先级更高（Vue 命中时不会到 React），故策略命中即 !isVue=true。
+     *  - recordChange 中 JSX_ATTRIBUTE → isVue=false、isReact=true，1:1 还原原行为。
+     */
+    override fun getSiteForm(element: PsiElement): SiteForm = SiteForm.JSX_ATTRIBUTE
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
         val importLine = if (!entryImport.isNullOrBlank()) {
@@ -359,4 +476,49 @@ object SolidI18nStrategy : I18nFramework {
             }
         """.trimIndent() + "\n"
     }
+
+    /**
+     * P7：Solid 站点形态。
+     *
+     * 原行为：[ProjectStructure.isReact] 对 Solid 项目返回 false（`!hasSolid` 排除），
+     * 故 [I18nProcessor.recordChange] 中 Solid 站点的 isReact=false。
+     * 此处返回 [SiteForm.SOLID_BINDING]（而非复用 React 的 JSX_ATTRIBUTE），
+     * 在 recordChange 的形态→isReact 映射中 SOLID_BINDING 不映射到 isReact，
+     * 从而 1:1 保留原 Solid 行为（与任务说明中「Solid 同 React」的建议相反——
+     * 那会改变 isReact 取值，破坏 MergeApplier 的占位符/包装分支）。
+     */
+    override fun getSiteForm(element: PsiElement): SiteForm = SiteForm.SOLID_BINDING
+}
+
+/**
+ * P7：站点形态枚举。用于 [I18nFramework.getSiteForm] → [I18nProcessor.recordChange]
+ * 推导 isVue/isReact，替代原 `Util.isVue(anchor) || isVueFile(f)` / `Util.isReact(anchor)` 二分。
+ *
+ * 当前各策略产出的形态（O(1) 框架级常量，无 PSI 遍历，保证热路径性能）：
+ *  - [VueI18nStrategy] → VUE_BINDING（isVue=true）
+ *  - [ReactI18nextStrategy] → JSX_ATTRIBUTE（isReact=true）
+ *  - [SolidI18nStrategy] → SOLID_BINDING（isVue=false, isReact=false，与原行为一致）
+ *  - [GenericStrategy] → GENERIC（isVue=false, isReact=false）
+ *
+ * VUE_MUSTACHE / TEMPLATE_LITERAL 当前未产出（避免热路径 PSI 遍历区分 mustache/模板字面量），
+ * 保留枚举值供未来按元素形态细分；recordChange 的映射已兼容这两种形态（均映射到对应框架）。
+ */
+enum class SiteForm {
+    /** JS 模板字面量 `...`（React/Generic，当前未产出，预留）。 */
+    TEMPLATE_LITERAL,
+
+    /** JSX 属性 prop="中文"（React，[ReactI18nextStrategy] 产出）。 */
+    JSX_ATTRIBUTE,
+
+    /** Vue 指令绑定 :prop="..." / 普通文本（[VueI18nStrategy] 产出）。 */
+    VUE_BINDING,
+
+    /** Vue mustache `{{ }}`（当前未产出，预留）。 */
+    VUE_MUSTACHE,
+
+    /** SolidJS 属性（[SolidI18nStrategy] 产出，不映射到 isReact）。 */
+    SOLID_BINDING,
+
+    /** 其他（[GenericStrategy] 默认）。 */
+    GENERIC,
 }

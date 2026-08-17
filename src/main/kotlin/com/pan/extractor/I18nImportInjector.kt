@@ -2,10 +2,13 @@ package com.pan.extractor
 
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.JSBlockStatement
+import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSEmbeddedContent
 import com.intellij.lang.javascript.psi.JSFunction
 import com.intellij.lang.javascript.psi.JSProperty
+import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVarStatement
+import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 
@@ -603,18 +606,18 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * 为 Vue 全局 i18n 实例构造 import 语句。
      *
      * 流程：
-     * 1. 通过 EntryFileLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
+     * 1. 通过 I18nInstanceLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
      * 2. 通过 resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
      * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
      * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
      */
     fun buildVueI18nInstanceImport(psiFile: PsiElement): String {
         val containingFile = psiFile.containingFile ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val i18nVFile = EntryFileLocator.findVueI18nInstanceFile(containingFile)
+        val i18nVFile = I18nInstanceLocator.findVueI18nInstanceFile(containingFile)
             ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val importPath = EntryFileLocator.resolveVueI18nImportPath(containingFile, i18nVFile)
+        val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, i18nVFile)
             ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val isDefault = EntryFileLocator.isVueI18nDefaultExport(i18nVFile)
+        val isDefault = I18nInstanceLocator.isVueI18nDefaultExport(i18nVFile)
         return if (isDefault) {
             "import i18n from '$importPath';\n"
         } else {
@@ -626,18 +629,18 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
      *
      * 流程：
-     * 1. 通过 EntryFileLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
-     * 2. 通过 EntryFileLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
-     * 3. 通过 EntryFileLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
+     * 1. 通过 I18nInstanceLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
+     * 2. 通过 I18nInstanceLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 I18nInstanceLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
      *
      * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
      */
     fun buildReactI18nInstanceImport(psiFile: PsiElement): String? {
         val containingFile = psiFile.containingFile ?: return null
         val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return null
-        val initFile = EntryFileLocator.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
-        val importPath = EntryFileLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
-        return if (EntryFileLocator.isVueI18nDefaultExport(initFile)) {
+        val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
+        val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
+        return if (I18nInstanceLocator.isVueI18nDefaultExport(initFile)) {
             "import i18n from '$importPath';\n"
         } else {
             "import { i18n } from '$importPath';\n"
@@ -682,6 +685,27 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     /** 找到第一个非空白符、非注释的子元素 */
     fun findFirstNonWhitespaceChild(element: PsiElement): PsiElement? =
         I18nPsiTools.findFirstNonWhitespaceChild(element)
+
+    /**
+     * React i18n.t 语义 + locale 不可用（回退 getI18n 的 \$t 别名）时，
+     * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `$t('...')`，
+     * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const \$t = getI18n().t`）。
+     * 必须在 WriteCommandAction 内调用；老调用改写为 $t 与 collect 阶段锁死的 tFunctionName=$t 保持一致。
+     *
+     * 从 I18nProcessor 搬入：纯 React 逻辑（把 i18n.t/i18n.tc 调用改写为 $t），
+     * project 通过 [processor] 引用获取。
+     */
+    internal fun rewriteExistingI18nTCallsToDollarT(root: PsiElement) {
+        val calls = PsiTreeUtil.findChildrenOfType(root, JSCallExpression::class.java)
+        for (call in calls) {
+            val method = call.methodExpression
+            if (method !is JSReferenceExpression) continue
+            val text = method.text
+            if (text != "i18n.t" && text != "i18n.tc") continue
+            val newExpr = JSChangeUtil.tryCreateExpressionFromText(processor.project, "\$t", null, false) ?: continue
+            method.replace(newExpr.psi)
+        }
+    }
 
     /** run() 注入决策的参数包，把 I18nProcessor 的 5 个布尔/字符串状态收敛成一个对象。 */
     data class InjectionDecision(
@@ -755,7 +779,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     private fun injectReact(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
         val d = decision
         if (d.reactI18nTFallbackToDollarT) {
-            processor.rewriteExistingI18nTCallsToDollarT(psiFile)
+            rewriteExistingI18nTCallsToDollarT(psiFile)
         }
         val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
             (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
