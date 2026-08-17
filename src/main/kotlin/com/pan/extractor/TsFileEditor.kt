@@ -466,15 +466,16 @@ object TsFileEditor {
         // 深拷贝一份 existing（mutable），避免修改入参
         val result = deepCloneMap(existingNested)
         for ((k, v) in newFlat) {
-            // 判断 key 是否是"点式嵌套"
-            if (k.contains('.')) {
-                if (tryWriteNested(result, k, v)) continue
-                // 写不进去（中间段冲突且不是对象）→ 退化直接写顶层 key
-                result[k] = v
-            } else {
-                // 顶层：若是已有的对象且 v 不是对象 → 直接覆盖为字符串（翻译 key 对应 value 都是字符串）
-                result[k] = v
-            }
+            // 判断 key 是否是"点式嵌套"。
+            // 只有"每个点分段都非空"才视为真正的嵌套路径（如 common.confirm）。
+            // 中英文案里常见的省略号（"加载中..."）会带点，但空分段说明它不是结构嵌套，
+            // 必须整体当作一个扁平 key 字面写回，否则会错生成 { '': { '': {...} } }。
+            val segments = k.split('.')
+            val isCleanDottedPath = k.contains('.') && segments.all { it.isNotBlank() }
+            if (isCleanDottedPath && tryWriteNested(result, k, v)) continue
+            // 写不进去（中间段冲突且不是对象）或不是干净的点式路径
+            // → 退化直接写顶层 key，覆盖已存在的同名 key（重复 key 以新值为准）
+            result[k] = v
         }
         return result
     }

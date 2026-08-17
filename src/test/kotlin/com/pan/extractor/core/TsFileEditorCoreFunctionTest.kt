@@ -135,6 +135,38 @@ class TsFileEditorCoreFunctionTest {
         assertEquals("新值", result["hello"])
     }
 
+    /**
+     * Bug 回归（问题 2/3）：中文文案带省略号（如 "加载中..."）作为 key 时，
+     * 其点号是文本而非嵌套分隔符。旧逻辑把它当成点式路径拆分，错生成
+     * { '加载中': { '': { '': { '': '加载中...' } } } }。
+     * 现应整体当作一个扁平 key 字面写回，且覆盖已有同名 key。
+     */
+    @Test
+    fun mergeEllipsisKeyStaysFlat() {
+        // 第一次写入：空文件 + "加载中..." → 应整体作为一个扁平 key
+        val once = TsFileEditor.mergeFlatIntoNested(
+            emptyMap(),
+            mapOf("加载中..." to "加载中...")
+        )
+        assertEquals("加载中...", once["加载中..."])
+        assertTrue("带省略号的 key 不应被拆成嵌套，实际: $once", once.keys.all { it == "加载中..." })
+
+        // 第二次写入：已有同名 key，新值应覆盖旧值，且不再嵌套
+        val twice = TsFileEditor.mergeFlatIntoNested(
+            mapOf("加载中..." to "旧值"),
+            mapOf("加载中..." to "加载中...")
+        )
+        assertEquals("加载中...", twice["加载中..."])
+        assertTrue("重复 key 应整体覆盖，实际: $twice", twice.keys.all { it == "加载中..." })
+
+        // 真正干净的点式路径（common.confirm）仍需保持嵌套行为
+        val nested = TsFileEditor.mergeFlatIntoNested(
+            emptyMap(),
+            mapOf("common.confirm" to "确定")
+        )
+        assertTrue("干净点式 key 仍应嵌套", (nested["common"] as Map<*, *>)["confirm"] == "确定")
+    }
+
     // ── regenerateObjectLiteralBody ────────────────────────────
 
     @Test

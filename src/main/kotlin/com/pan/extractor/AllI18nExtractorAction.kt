@@ -14,7 +14,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.progress.ProgressIndicator
@@ -310,41 +309,40 @@ class AllI18nExtractorAction : AnAction() {
                     indicator.fraction = 0.0
                     indicator.text2 = ""
 
-                    // ── ①~⑤ 所有写 PSI + map 清理合并都要拿在 EDT + 同一个 Command/WCA
-                    ApplicationManager.getApplication().invokeAndWait {
-                        CommandProcessor.getInstance().executeCommand(
-                            project,
-                            runnable@{
-                                WriteCommandAction.runWriteCommandAction(project) {
-                                    // ── ①~⑤ 应用合并计划 ──
-                                    //   MergeApplier.apply 内部完成：填 blockedSiteIds →
-                                    //   常规写入(跳过被合并句) → 骨架重写为带 {N0} 的 $t →
-                                    //   清理被合并承载的冗余 key。
-                                    indicator.text = "应用合并计划（公共前后缀/数字抽取）"
-                                    val finalExtracted = MergeApplier.apply(
-                                        processors = processors,
-                                        extracted = extracted,
-                                        mergePlan = mergePlan,
-                                        indicator = indicator,
-                                    )
-                                    extracted.clear()
-                                    extracted.putAll(finalExtracted)
-
-                                    // ── ⑥ 最终输出：覆盖入口文件 or 复制 JSON（在同一 WCA 中执行，保证撤销一致） ──
-                                    indicator.text = when (dialog.outputMode) {
-                                        OutputDestination.FILE -> "合并写回中文多语言入口文件"
-                                        else -> "复制翻译 JSON 到剪贴板"
-                                    }
-                                    indicator.fraction = 0.95
-                                    val finalMap = LinkedHashMap(extracted)
-                                    output = applyFinalOutput(project, dialog, finalMap)
-                                    indicator.fraction = 1.0
-                                }
-                            },
-                            "Vue i18n Extract (含公共前后缀/数字合并)",
-                            null
-                        )
+                    // 【问题 1】给 MergeApplier 注入 EDT 执行器：apply 内部逐文件 / 逐重写任务
+                    // 经它拿写锁，期间背景线程更新 indicator、EDT 有机会重绘进度条。
+                    val edtRunner: (() -> Unit) -> Unit = { r ->
+                        ApplicationManager.getApplication().invokeAndWait {
+                            WriteCommandAction.runWriteCommandAction(project, r)
+                        }
                     }
+
+                    // ── ①~⑤ 应用合并计划 ──
+                    //   填 blockedSiteIds → 逐文件常规写入 → 骨架重写 → 清理冗余 key
+                    val finalExtracted = MergeApplier.apply(
+                        processors = processors,
+                        extracted = extracted,
+                        mergePlan = mergePlan,
+                        indicator = indicator,
+                        edtRunner = edtRunner,
+                    )
+                    extracted.clear()
+                    extracted.putAll(finalExtracted)
+
+                    // ── ⑥ 最终输出：覆盖入口文件 or 复制 JSON（写入口文件同样需要写锁） ──
+                    indicator.text = when (dialog.outputMode) {
+                        OutputDestination.FILE -> "合并写回中文多语言入口文件"
+                        else -> "复制翻译 JSON 到剪贴板"
+                    }
+                    indicator.text2 = ""
+                    indicator.fraction = 0.95
+                    val finalMap = LinkedHashMap(extracted)
+                    ApplicationManager.getApplication().invokeAndWait {
+                        WriteCommandAction.runWriteCommandAction(project) {
+                            output = applyFinalOutput(project, dialog, finalMap)
+                        }
+                    }
+                    indicator.fraction = 1.0
                 }
 
                 override fun onSuccess() {
@@ -366,9 +364,11 @@ class AllI18nExtractorAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
-
-        WriteCommandAction.runWriteCommandAction(project, "项目中文国际提取", null, {
-            transform(e);
-        }, file)
+        // 注意：不要在这里把 transform() 整体包进 WriteCommandAction。
+        // 全项目 transform 会弹出模态对话框 + 跑后台写入任务，若外层抢占了 EDT 写锁，
+        // 后台进度条无法重绘，表现为"写入时没有进度反馈"（问题 1）。
+        // 所有真正需要写锁的工作（processor.run / merge apply / 写文件）都在各自
+        // Backgroundable 内部通过 invokeAndWait + WriteCommandAction 自行拿取。
+        transform(e);
     }
 }
