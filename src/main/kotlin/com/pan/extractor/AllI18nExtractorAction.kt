@@ -73,6 +73,7 @@ class AllI18nExtractorAction : AnAction() {
         project: Project,
         dialog: ExtractedStringsDialog,
         finalFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
     ): OutputResult {
         val prettyGson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
         val mode = dialog.outputMode
@@ -83,12 +84,12 @@ class AllI18nExtractorAction : AnAction() {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
-                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     "ts", "tsx", "js", "jsx" -> {
                         // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
-                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson)
+                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
                         if (spread != null) spread
-                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     }
                     else -> null
                 }
@@ -319,12 +320,14 @@ class AllI18nExtractorAction : AnAction() {
 
                     // ── ①~⑤ 应用合并计划 ──
                     //   填 blockedSiteIds → 逐文件常规写入 → 骨架重写 → 清理冗余 key
+                    val dropExistingKeys = LinkedHashSet<String>()
                     val finalExtracted = MergeApplier.apply(
                         processors = processors,
                         extracted = extracted,
                         mergePlan = mergePlan,
                         indicator = indicator,
                         edtRunner = edtRunner,
+                        dropExistingKeysOut = dropExistingKeys,
                     )
                     extracted.clear()
                     extracted.putAll(finalExtracted)
@@ -339,7 +342,7 @@ class AllI18nExtractorAction : AnAction() {
                     val finalMap = LinkedHashMap(extracted)
                     ApplicationManager.getApplication().invokeAndWait {
                         WriteCommandAction.runWriteCommandAction(project) {
-                            output = applyFinalOutput(project, dialog, finalMap)
+                            output = applyFinalOutput(project, dialog, finalMap, dropExistingKeys)
                         }
                     }
                     indicator.fraction = 1.0

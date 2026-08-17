@@ -461,7 +461,8 @@ object TsFileEditor {
      */
     fun mergeFlatIntoNested(
         existingNested: Map<String, Any?>,
-        newFlat: Map<String, String>
+        newFlat: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
     ): Map<String, Any?> {
         // 深拷贝一份 existing（mutable），避免修改入参
         val result = deepCloneMap(existingNested)
@@ -476,6 +477,11 @@ object TsFileEditor {
             // 写不进去（中间段冲突且不是对象）或不是干净的点式路径
             // → 退化直接写顶层 key，覆盖已存在的同名 key（重复 key 以新值为准）
             result[k] = v
+        }
+        // 因子化合并后，原始整句 key（如 "请输入搜索关键词"）已被骨架+差异段承载，
+        // 若入口文件里还留有这份旧 key（历史提取），应一并删除，避免与骨架 key 重复。
+        for (k in dropExistingKeys) {
+            result.remove(k)
         }
         return result
     }
@@ -540,7 +546,7 @@ object TsFileEditor {
      * - 旧非静态行（spread/方法/引用/表达式）→ 原样保留
      * - 新 key → 在 } 之前追加，按 key 字典序追加
      */
-    fun regenerateObjectLiteralBody(oldObjBody: String, mergedNested: Map<String, Any?>): String {
+    fun regenerateObjectLiteralBody(oldObjBody: String, mergedNested: Map<String, Any?>, dropKeys: Set<String> = emptySet()): String {
         // 方式：先扫描旧对象，识别每个顶层属性；单行静态值 → 行内重写；
         // 多行对象/数组块且 key 在合并结果中 → 整块重写（从而能合入"点式"新增的嵌套子 key）；
         // 非静态行（spread/方法/引用）→ 原样保留。最后追加全新顶层 key。
@@ -623,6 +629,8 @@ object TsFileEditor {
         while (i < lines.size) {
             val block = blockByStart[i]
             if (block != null) {
+                // 因子化承载后需删除的旧整句 key：整块直接跳过，不写入输出
+                if (block.key in dropKeys) { i = block.end + 1; continue }
                 val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2)
                 val rLines = rendered.split("\n")
                 val comment = block.trailingComment
@@ -639,13 +647,17 @@ object TsFileEditor {
             }
             // 单行重写
             val rw = singleRewrites.firstOrNull { it.lineIdx == i }
-            if (rw != null && rw.key in mergedKeys) {
-                val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1)
-                val prefix = lines[i].substring(0, rw.colonPosInLine + 1)  // "  key:"
-                val suffix = if (rw.trailingComma) "," else ""
-                out.add("$prefix $valueStr$suffix${rw.trailingComment}")
-                i++
-                continue
+            if (rw != null) {
+                // 因子化承载后需删除的旧整句 key：跳过该行（不写入输出）
+                if (rw.key in dropKeys) { i++; continue }
+                if (rw.key in mergedKeys) {
+                    val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1)
+                    val prefix = lines[i].substring(0, rw.colonPosInLine + 1)  // "  key:"
+                    val suffix = if (rw.trailingComma) "," else ""
+                    out.add("$prefix $valueStr$suffix${rw.trailingComment}")
+                    i++
+                    continue
+                }
             }
             out.add(lines[i])
             i++
@@ -914,7 +926,8 @@ object TsFileEditor {
     fun regenerateTsFileWithNewJson(
         project: Project,
         entryVf: VirtualFile,
-        newFlatJson: Map<String, String>
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
     ): String? {
         val psiFile = ApplicationManager.getApplication().runReadAction<PsiFile?> {
             PsiManager.getInstance(project).findFile(entryVf)
@@ -923,11 +936,11 @@ object TsFileEditor {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (_: Exception) { return null }
         val info = parseTsExportedObject(text) ?: return null
-        val merged = mergeFlatIntoNested(info.staticKV, newFlatJson)
+        val merged = mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
         // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
         // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
         val oldObjBody = text.substring(info.objectRange.first, info.objectRange.endExclusive)
-        val newObjBody = regenerateObjectLiteralBody(oldObjBody, merged)
+        val newObjBody = regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
         return text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
     }
 
@@ -936,7 +949,8 @@ object TsFileEditor {
     // ==========================================================================
     fun regenerateJsonFileWithNewJson(
         entryVf: VirtualFile,
-        newFlatJson: Map<String, String>
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
     ): String? {
         val content = try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
@@ -949,7 +963,7 @@ object TsFileEditor {
             return g.toJson(newFlatJson)
         }
         val existingMap = jsonElementToNestedMap(rootJson)
-        val merged = mergeFlatIntoNested(existingMap, newFlatJson)
+        val merged = mergeFlatIntoNested(existingMap, newFlatJson, dropExistingKeys)
         val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
         return gson.toJson(merged)
     }
@@ -1174,10 +1188,10 @@ object TsFileEditor {
     }
 
     /** 计算某个对象区间在给定文本中的新文本（基于合并后的扁平 key）。 */
-    private fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>): String {
-        val merged = mergeFlatIntoNested(existing, newFlat)
+    private fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>, dropExistingKeys: Set<String> = emptySet()): String {
+        val merged = mergeFlatIntoNested(existing, newFlat, dropExistingKeys)
         val oldObjBody = text.substring(objRange.first, objRange.endExclusive)
-        return regenerateObjectLiteralBody(oldObjBody, merged)
+        return regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
     }
 
     /** 对同一文本应用多处区间替换（按区间从后往前，避免偏移漂移）。 */
@@ -1197,7 +1211,8 @@ object TsFileEditor {
     fun regenerateTsFileWithSpreadRouting(
         project: Project,
         entryVf: VirtualFile,
-        newFlatJson: Map<String, String>
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet()
     ): List<Pair<VirtualFile, String>>? {
         val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
         val entryInfo = parseTsExportedObject(entryText) ?: return null
@@ -1223,12 +1238,12 @@ object TsFileEditor {
         if (writableResolved.isEmpty()) {
             val entryAll = newFlatJson.filterKeys { it in entryKeys || it !in covered }
             return listOf(entryVf to applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV)
+                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV, dropExistingKeys)
             )))
         }
 
         // 为每个真正新增的 key 决定去向：优先最深的可写容器 spread 目标，否则入口
-        data class WriteUnit(val target: ResolvedSpreadTarget, val relative: MutableMap<String, String>)
+        data class WriteUnit(val target: ResolvedSpreadTarget, val path: List<String>, val relative: MutableMap<String, String>)
         val targetWrites = linkedMapOf<String, WriteUnit>() // key = 目标文件 path
         val entryNew = mutableMapOf<String, String>()
 
@@ -1240,31 +1255,33 @@ object TsFileEditor {
                 .maxByOrNull { it.first.path.size }
             if (best == null) { entryNew[k] = v; continue }
             val rel = relativeKey(best.first.path, k) ?: run { entryNew[k] = v; continue }
-            targetWrites.getOrPut(best.second.file.path) { WriteUnit(best.second, linkedMapOf()) }
+            targetWrites.getOrPut(best.second.file.path) { WriteUnit(best.second, best.first.path, linkedMapOf()) }
                 .relative[rel] = v
         }
 
         // 组装入口写盘（含同文件 const 目标范围）
         val entryReplacements = mutableListOf<Pair<IntRange, String>>(entryInfo.objectRange to
-                newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV))
+                newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV, dropExistingKeys))
         val separateWrites = mutableListOf<Pair<VirtualFile, String>>()
         for ((_, unit) in targetWrites) {
             val target = unit.target
+            // 入口扁平 drop key → 该容器下的相对 key（best-effort；历史整句 key 通常在入口对象里）
+            val relativeDrop = dropExistingKeys.mapNotNull { relativeKey(unit.path, it) }.toSet()
             when (target.kind) {
                 "json" -> {
-                    val newTarget = regenerateJsonFileWithNewJson(target.file, unit.relative) ?: return null
+                    val newTarget = regenerateJsonFileWithNewJson(target.file, unit.relative, relativeDrop) ?: return null
                     separateWrites.add(target.file to newTarget)
                 }
                 "ts" -> {
                     val targetText = Util.readVirtualFileText(project, target.file) ?: return null
                     val newTarget = applyRangeReplacements(targetText, listOf(
-                        target.objRangeInText to newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys)
+                        target.objRangeInText to newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
                     ))
                     separateWrites.add(target.file to newTarget)
                 }
                 else -> { // const：与入口同文件，合并进同一文本替换
                     entryReplacements.add(
-                        target.objRangeInText to newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys)
+                        target.objRangeInText to newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
                     )
                 }
             }

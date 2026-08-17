@@ -208,17 +208,31 @@ object Util {
     fun mergeFlatIntoNested(existingNested: Map<String, Any?>, newFlat: Map<String, String>): Map<String, Any?> =
         TsFileEditor.mergeFlatIntoNested(existingNested, newFlat)
 
-    fun regenerateObjectLiteralBody(oldObjBody: String, mergedNested: Map<String, Any?>): String =
-        TsFileEditor.regenerateObjectLiteralBody(oldObjBody, mergedNested)
+    fun regenerateObjectLiteralBody(
+        oldObjBody: String,
+        mergedNested: Map<String, Any?>,
+        dropKeys: Set<String> = emptySet(),
+    ): String = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, mergedNested, dropKeys)
 
-    fun regenerateTsFileWithNewJson(project: Project, entryVf: VirtualFile, newFlatJson: Map<String, String>): String? =
-        TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, newFlatJson)
+    fun regenerateTsFileWithNewJson(
+        project: Project,
+        entryVf: VirtualFile,
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
+    ): String? = TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, newFlatJson, dropExistingKeys)
 
-    fun regenerateJsonFileWithNewJson(entryVf: VirtualFile, newFlatJson: Map<String, String>): String? =
-        TsFileEditor.regenerateJsonFileWithNewJson(entryVf, newFlatJson)
+    fun regenerateJsonFileWithNewJson(
+        entryVf: VirtualFile,
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
+    ): String? = TsFileEditor.regenerateJsonFileWithNewJson(entryVf, newFlatJson, dropExistingKeys)
 
-    fun regenerateTsFileWithSpreadRouting(project: Project, entryVf: VirtualFile, newFlatJson: Map<String, String>): List<Pair<VirtualFile, String>>? =
-        TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, newFlatJson)
+    fun regenerateTsFileWithSpreadRouting(
+        project: Project,
+        entryVf: VirtualFile,
+        newFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
+    ): List<Pair<VirtualFile, String>>? = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, newFlatJson, dropExistingKeys)
 
     fun writeVirtualFileText(entryVf: VirtualFile, newText: String) = TsFileEditor.writeVirtualFileText(entryVf, newText)
 
