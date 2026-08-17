@@ -70,7 +70,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val messages = LocaleMessages.loadCached(project, call.containingFile)
         val key = extractKey(call) ?: return null
         val rawValue = messages[key] ?: return null
-        val params = extractInterpolationParams(call)
+        val params = extractInterpolationParams(call, messages)
         return interpolatePlaceholders(rawValue, params, ProjectStructure.isVue(call)) + TOGGLE_HINT
     }
 
@@ -82,7 +82,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     ) {
         val key = extractKey(call) ?: return
         val rawValue = messages[key] ?: return
-        val params = extractInterpolationParams(call)
+        val params = extractInterpolationParams(call, messages)
         val value = interpolatePlaceholders(rawValue, params, ProjectStructure.isVue(call)) + TOGGLE_HINT
         val range = call.textRange
         if (!range.isEmpty()) {
@@ -117,21 +117,38 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return last == "t" || last == "\$t" || last == "tc" || last == "\$tc"
     }
 
-    /** 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。 */
-    private fun extractInterpolationParams(call: JSCallExpression): Map<String, String> {
+    /**
+     * 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。
+     *
+     * 支持两种参数值（因子化产物常见第二种）：
+     *  - 字面量：`N0: '搜索关键词'` / `"0": 2`
+     *  - 内层翻译调用：`N0: $t('搜索关键词')` —— 用该内层 key 的译文作为参数值，使
+     *    骨架折叠出「请输入搜索关键词」这类完整文案。
+     *
+     * 参数键统一去前缀 `N`（Vue 生成的 `{N0}` 占位匹配数字索引 `0`）。
+     */
+    private fun extractInterpolationParams(call: JSCallExpression, messages: Map<String, String>): Map<String, String> {
         val secondArg = call.arguments.getOrNull(1) ?: return emptyMap()
         val text = secondArg.text
         if (text.isBlank()) return emptyMap()
         val result = mutableMapOf<String, String>()
-        // 匹配 "key": 'value' / "key": "value" / "key": 数字
+        // 字面量： "key": 'value' / "key": "value" / "key": 数字
         val re = Regex("""["']?(\w+)["']?\s*:\s*("[^"]*"|'[^']*'|-?\d+)""")
         re.findAll(text).forEach { match ->
-            val key = match.groupValues[1]
+            val key = match.groupValues[1].removePrefix("N")
             val rawValue = match.groupValues[2]
             val value = if (rawValue.startsWith("\"") || rawValue.startsWith("'"))
                 rawValue.substring(1, rawValue.length - 1)
             else rawValue
             result[key] = value
+        }
+        // 内层翻译调用：N0: $t('innerKey') / N0: xxx.t('innerKey')
+        val tRe = Regex("""["']?(\w+)["']?\s*:\s*(?:[\w.]+\s*\.\s*\$?t|\$?t)\s*\(\s*['"]([^'"]+)['"]\s*\)""")
+        tRe.findAll(text).forEach { match ->
+            val key = match.groupValues[1].removePrefix("N")
+            val innerKey = match.groupValues[2]
+            // 用内层 key 的译文替换，使骨架折叠显示完整文案
+            result[key] = messages[innerKey] ?: innerKey
         }
         return result
     }
