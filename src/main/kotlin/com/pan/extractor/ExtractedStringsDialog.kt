@@ -151,7 +151,7 @@ class ExtractedStringsDialog(
             OutputDestination.FILE -> {
                 outputMode = OutputDestination.FILE
                 selectedEntryFile = try {
-                    Util.findChineseLocaleEntryFile(project, contextPsiFile)
+                    EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
                 } catch (_: Throwable) { null }
             }
         }
@@ -161,7 +161,7 @@ class ExtractedStringsDialog(
     private fun detectBootstrapState() {
         val psiFile = contextPsiFile ?: return
         bootstrapMissing = try {
-            Util.detectMissingI18nBootstrap(psiFile)
+            ProjectStructure.detectMissingI18nBootstrap(psiFile)
         } catch (_: Throwable) {
             null
         }
@@ -256,7 +256,7 @@ class ExtractedStringsDialog(
         var candidate: VirtualFile? = storedPath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
         if (candidate == null || !candidate.isValid) {
             candidate = try {
-                Util.findChineseLocaleEntryFile(project, contextPsiFile)
+                EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
             } catch (_: Throwable) { null }
         }
         if (candidate != null) {
@@ -297,7 +297,7 @@ class ExtractedStringsDialog(
 
         val initialFile = entryPathField.text?.takeIf { it.isNotBlank() }
             ?.let { LocalFileSystem.getInstance().findFileByPath(it) }
-            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
+            ?: EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
 
         val chosen = FileChooser.chooseFile(descriptor, project, initialFile)
         if (chosen != null) {
@@ -433,7 +433,7 @@ class ExtractedStringsDialog(
         outputMode = mode
         selectedEntryFile = entryFile
         if (entryFile != null) {
-            Util.persistEntryPathIfNeeded(project, entryFile)
+            TsFileEditor.persistEntryPathIfNeeded(project, entryFile)
         }
 
         super.doOKAction()

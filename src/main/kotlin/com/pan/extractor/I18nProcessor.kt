@@ -154,9 +154,9 @@ class I18nProcessor(
             // 已有 i18n 实例导入（locale / ./i18n / i18next / getI18n）→ 直接用，不需回退
             if (hasI18nInstanceImported(psiFile)) return@run false
             // locale 初始化文件导出了 i18n 且路径可推断 → 走 locale，不回退
-            val root = Util.findProjectRoot(f) ?: return@run true
-            val initFile = Util.findReactI18nInstanceFileInRoot(root)
-            if (initFile != null && Util.resolveVueI18nImportPath(f, initFile) != null) return@run false
+            val root = ProjectStructure.findProjectRoot(f) ?: return@run true
+            val initFile = EntryFileLocator.findReactI18nInstanceFileInRoot(root)
+            if (initFile != null && EntryFileLocator.resolveVueI18nImportPath(f, initFile) != null) return@run false
             true
         }
         return reactFallbackResult
@@ -341,7 +341,7 @@ class I18nProcessor(
         // Bug 2: 语言包/翻译资源文件（en-US.ts、i18n/zh-CN.js、messages.ja.ts、locales/xxx）
         // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
         val containingFile = psiFile.containingFile
-        if (containingFile != null && Util.isTranslationResourceFile(containingFile)) {
+        if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
             pendingChanges = mutableListOf()
             return pendingChanges
         }
@@ -349,53 +349,22 @@ class I18nProcessor(
         framework = I18nFrameworkRegistry.detect(psiFile.containingFile ?: psiFile)
         tFunctionName = framework.tFunctionName
 
-        // —— 旧：React 普通函数预判切换 tFunctionName=i18n.t，然后注入 import i18n from 'i18next'
-        // —— 新（用户要求：统一用 $t 减少复杂度）：React 普通函数预判也不切 tFunctionName，
-        //    保持默认 $t；改为打布尔标记 needInjectReactGlobalDollarT=true，由 ensureI18nInstanceImported
-        //    在文件顶部注入：
-        //        import { getI18n } from 'react-i18next';
-        //        const $t = getI18n().t;
-        //    翻译函数仍是 $t('key')，与 Vue/React hook 内部一致。
-        //
-        //    预判规则：React 项目 + （当前翻译函数仍是默认值）+ （既没有组件也没有自定义 hook）
         val f = containingFile ?: (psiFile as? PsiFile)
-        if (f != null && framework is ReactI18nextStrategy) {
-            // React 文件统一用短 t（useTranslation / getI18n 的 t），不再用全局 $t 别名。
-            // 老 $t / i18n.t 调用保留不管，新提取一律写 t('key')。
-            if (tFunctionName == "\$t") tFunctionName = "t"
-            val components = Util.findReactComponentFunctions(f)
-            val hooks = Util.findHookFunctions(f)
-            if (components.isEmpty() && hooks.isEmpty()) {
-                needInjectReactGlobalDollarT = true
+        // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
+        if (f != null && framework is ReactI18nextStrategy && tFunctionName == "\$t") {
+            tFunctionName = "t"
+        }
+        if (f != null && framework.detectGlobalDollarTNeeded(f)) {
+            // React: 统一短 t（useTranslation / getI18n 的 t），新提取写 t('key')；
+            //        打 needInjectReactGlobalDollarT=true，由 ensureI18nInstanceImported
+            //        在文件顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t`。
+            // Vue:   保持默认 $t；打 needInjectGlobalDollarT=true，由 ensureI18nInstanceImported
+            //        在文件顶部注入 `import { i18n } from '@/locales/xxx'` + `const $t = i18n.global.t`。
+            // Solid/Generic: detectGlobalDollarTNeeded 返回 false，不会进入此分支。
+            when (framework) {
+                is ReactI18nextStrategy, is SolidI18nStrategy -> needInjectReactGlobalDollarT = true
+                is VueI18nStrategy -> needInjectGlobalDollarT = true
             }
-        } else if (f != null && tFunctionName == "\$t" &&
-            !f.name.endsWith(".vue", ignoreCase = true) &&
-            framework is VueI18nStrategy) {   // ★ 用户新要求：Vue 项目判定必须看 package.json 依赖
-                // 「用户要求：全部都用 \$t 减少复杂度」
-                //
-                // 之前实现是切 tFunctionName = i18n.global.t，替换结果变成
-                //   const label = i18n.global.t('日期')   长串
-                // 现在保持默认 \$t，改为顶部注入全局别名：
-                //   import { i18n } from '@/locales/xxx'
-                //   const \$t = i18n.global.t
-                // 全局文件仍然用 \$t('xxx') 短写法，与 Vue SFC 内的写法保持一致。
-                //
-                // 触发条件：已知脚本后缀 + 「既没有 Vue 组件也没有自定义 hook」。
-                // 【★ 你刚才反馈的 Bug 修复】：Vue TSX (.tsx) 文件里经常有
-                // defineComponent({...}) 或 PascalCase 函数式组件，这些是 Vue 组件，
-                // **不能**按"纯工具"注入顶部 const $t = i18n.global.t——
-                //   有 Vue 组件 → 走 ensureVueComponentI18nDeclared() 的 useI18n hook。
-                //   纯工具（Vue TS/TSX 里没有组件和 Hook）→ 才能打 needInjectGlobalDollarT=true。
-                val ext = f.name.substringAfterLast('.', "")
-                val known = ext.equals("ts", ignoreCase = true) || ext.equals("tsx", ignoreCase = true) ||
-                    ext.equals("js", ignoreCase = true) || ext.equals("jsx", ignoreCase = true)
-                if (known) {
-                    val hooks = Util.findHookFunctions(f)
-                    val vueComponents = Util.findVueComponentFunctions(f)
-                    if (hooks.isEmpty() && vueComponents.isEmpty()) {
-                        needInjectGlobalDollarT = true
-                    }
-                }
         }
 
         collectExistingTKeys()
@@ -510,33 +479,26 @@ class I18nProcessor(
      * 老调用只作"兼容保留"，**新提取一律写短 $t('xxx')**。
      */
     private fun detectTFunctionName(call: JSCallExpression) {
-        // 预判为「纯工具别名模式」时锁死翻译函数：Vue 锁 $t，React 锁 t；老调用只兼容不影响新提取形式
+        // 纯工具别名模式：锁死短调用名（Vue $t / React t），老长调用只兼容不影响新提取
         if (needInjectGlobalDollarT || needInjectReactGlobalDollarT) {
             tFunctionName = if (needInjectReactGlobalDollarT) "t" else "\$t"
             return
         }
-        val method = call.methodExpression
-        if (method is JSReferenceExpression) {
-            val text = method.text
-            // Vue: i18n.global.t / i18n.global.tc
-            if (text == "i18n.global.t" || text == "i18n.global.tc") {
-                tFunctionName = "i18n.global.t"
-            }
-            // React: i18n.t / i18n.tc（i18next 全局实例）
-            else if (text == "i18n.t" || text == "i18n.tc") {
-                if (tFunctionName == "\$t") {
-                    if (framework is ReactI18nextStrategy) {
-                        // React 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
-                        tFunctionName = "t"
-                    } else if (reactFallsBackToGetI18n()) {
-                        // 非 React 场景且 i18n.t 语义 + locale 不可用 → 统一回退 getI18n 的 $t 别名：
-                        // 不切 i18n.t、保持 $t；老 i18n.t 调用由 run() 改写为 $t，
-                        // 顶部注入 `import { getI18n }` + `const $t = getI18n().t`。
-                        reactI18nTFallbackToDollarT = true
-                        tFunctionName = "\$t"
-                    } else {
-                        tFunctionName = "i18n.t"
-                    }
+        // 委托策略探测已有长调用名
+        val detected = framework.detectExistingTFunctionName(call) ?: return
+        when (detected) {
+            "i18n.global.t" -> tFunctionName = "i18n.global.t"  // 与原代码一致：无条件切换
+            "i18n.t" -> {
+                if (tFunctionName != "\$t") return  // 与原代码 if (tFunctionName == "\$t") 等价
+                if (framework is ReactI18nextStrategy) {
+                    // React 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
+                    tFunctionName = "t"
+                } else if (reactFallsBackToGetI18n()) {
+                    // 非 React 场景且 i18n.t 语义 + locale 不可用 → 回退 getI18n 的 $t 别名
+                    reactI18nTFallbackToDollarT = true
+                    tFunctionName = "\$t"
+                } else {
+                    tFunctionName = "i18n.t"
                 }
             }
         }
@@ -566,7 +528,7 @@ class I18nProcessor(
     fun run() {
         // Bug 2（双重保险）：翻译资源文件不做任何 import/hook 注入
         val containingFile = psiFile.containingFile
-        if (containingFile != null && Util.isTranslationResourceFile(containingFile)) return
+        if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
 
         this.pendingChanges.forEach { if (it.siteId !in blockedSiteIds) it.run() }
 
@@ -731,7 +693,7 @@ class I18nProcessor(
      * 为 Vue 全局 i18n 实例构造 import 语句。
      *
      * 流程：
-     * 1. 通过 Util.findVueI18nInstanceFile 查找 createI18n 调用的文件
+     * 1. 通过 EntryFileLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
      * 2. 通过 resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
      * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
      * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
@@ -743,9 +705,9 @@ class I18nProcessor(
      * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
      *
      * 流程：
-     * 1. 通过 Util.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
-     * 2. 通过 Util.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
-     * 3. 通过 Util.isVueI18nDefaultExport 判断命名 or 默认导入语法
+     * 1. 通过 EntryFileLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
+     * 2. 通过 EntryFileLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 EntryFileLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
      *
      * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
      */
@@ -808,7 +770,7 @@ class I18nProcessor(
             return
         }
 
-        val isJSX = Util.isJSX(first)
+        val isJSX = ProjectStructure.isJSX(first)
         val key = collectExtractedStrings(pureText, first) ?: return
 
         recordChange(
@@ -876,9 +838,9 @@ class I18nProcessor(
     // ───────────────────────────────────────────────
     private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<CollectedChange>) {
         val originalText = attrValue.value.trim();
-        //println("jsx${Util.isJSX(attrValue)}")
+        //println("jsx${ProjectStructure.isJSX(attrValue)}")
         //println("XmlAttributeValue-${originalText}-${attrValue.text}")
-        val isJSX = Util.isJSX(attrValue);
+        val isJSX = ProjectStructure.isJSX(attrValue);
         if (isJSX && isBlock(originalText)) {
             return
         }

@@ -114,8 +114,8 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         // 合法注入位置：
         //   1) React 函数组件/类组件的 render 函数体（findReactComponentFunctions）
         //   2) React 项目中 .ts/.tsx 文件里的自定义 hook（use 开头的顶级函数）
-        val componentFuncs = Util.findReactComponentFunctions(containingFile)
-        val hookFuncs = Util.findHookFunctions(containingFile)
+        val componentFuncs = ProjectStructure.findReactComponentFunctions(containingFile)
+        val hookFuncs = ProjectStructure.findHookFunctions(containingFile)
         val allTargets = (componentFuncs.asSequence() + hookFuncs.asSequence())
             .distinct()
             .toList()
@@ -179,7 +179,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
 
         // 0. 先找到所有 use 开头的 hook 函数，没有则直接返回
         //    （避免普通 TS 文件被注入 vue-i18n import）
-        val hookFuncs = Util.findHookFunctions(containingFile)
+        val hookFuncs = ProjectStructure.findHookFunctions(containingFile)
         if (hookFuncs.isEmpty()) return
 
         // 1. 确保 vue-i18n 导入存在
@@ -237,7 +237,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      */
     fun ensureVueComponentI18nInjected(psiFile: PsiElement) {
         val containingFile = psiFile.containingFile ?: return
-        val vueComponents = Util.findVueComponentFunctions(containingFile)
+        val vueComponents = ProjectStructure.findVueComponentFunctions(containingFile)
         if (vueComponents.isEmpty()) return
 
         // —— 阶段 1：先确认要注入 const 解构的"函数体列表"
@@ -603,18 +603,18 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * 为 Vue 全局 i18n 实例构造 import 语句。
      *
      * 流程：
-     * 1. 通过 Util.findVueI18nInstanceFile 查找 createI18n 调用的文件
+     * 1. 通过 EntryFileLocator.findVueI18nInstanceFile 查找 createI18n 调用的文件
      * 2. 通过 resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
      * 3. 通过 isVueI18nDefaultExport 判断命名 or 默认导入语法
      * 4. 任何一步失败都回退到 `import { i18n } from 'vue-i18n'`
      */
     fun buildVueI18nInstanceImport(psiFile: PsiElement): String {
         val containingFile = psiFile.containingFile ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val i18nVFile = Util.findVueI18nInstanceFile(containingFile)
+        val i18nVFile = EntryFileLocator.findVueI18nInstanceFile(containingFile)
             ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val importPath = Util.resolveVueI18nImportPath(containingFile, i18nVFile)
+        val importPath = EntryFileLocator.resolveVueI18nImportPath(containingFile, i18nVFile)
             ?: return I18nProcessor.FALLBACK_VUE_I18N_IMPORT
-        val isDefault = Util.isVueI18nDefaultExport(i18nVFile)
+        val isDefault = EntryFileLocator.isVueI18nDefaultExport(i18nVFile)
         return if (isDefault) {
             "import i18n from '$importPath';\n"
         } else {
@@ -626,18 +626,18 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * 为 React 全局 i18n 实例构造 import 语句（locale 优先，找不到时由调用方回退 getI18n）。
      *
      * 流程：
-     * 1. 通过 Util.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
-     * 2. 通过 Util.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
-     * 3. 通过 Util.isVueI18nDefaultExport 判断命名 or 默认导入语法
+     * 1. 通过 EntryFileLocator.findReactI18nInstanceFileInRoot 查找"导出了 i18n"的 React 初始化文件
+     * 2. 通过 EntryFileLocator.resolveVueI18nImportPath 推断别名/相对路径（自动去掉扩展名和 /index 后缀）
+     * 3. 通过 EntryFileLocator.isVueI18nDefaultExport 判断命名 or 默认导入语法
      *
      * 返回 null 代表没有可用的 locale i18n 实例（无初始化文件 / 未导出 i18n / 路径无法推断）。
      */
     fun buildReactI18nInstanceImport(psiFile: PsiElement): String? {
         val containingFile = psiFile.containingFile ?: return null
-        val projectRoot = Util.findProjectRoot(containingFile) ?: return null
-        val initFile = Util.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
-        val importPath = Util.resolveVueI18nImportPath(containingFile, initFile) ?: return null
-        return if (Util.isVueI18nDefaultExport(initFile)) {
+        val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return null
+        val initFile = EntryFileLocator.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
+        val importPath = EntryFileLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
+        return if (EntryFileLocator.isVueI18nDefaultExport(initFile)) {
             "import i18n from '$importPath';\n"
         } else {
             "import { i18n } from '$importPath';\n"
@@ -737,8 +737,8 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         if (d.hasExtractedStrings) {
             val f = psiFile.containingFile ?: (psiFile as? com.intellij.psi.PsiFile) ?: return
             val isSfc = f.name.endsWith(".vue", ignoreCase = true)
-            val components = if (isSfc) emptyList() else Util.findVueComponentFunctions(f)
-            val hooks = if (isSfc) emptyList() else Util.findHookFunctions(f)
+            val components = if (isSfc) emptyList() else ProjectStructure.findVueComponentFunctions(f)
+            val hooks = if (isSfc) emptyList() else ProjectStructure.findHookFunctions(f)
             when {
                 !isSfc && components.isNotEmpty() -> processor.ensureVueComponentI18nInjected(psiFile)
                 !isSfc && hooks.isNotEmpty() -> processor.ensureVueHookI18nImported(psiFile)

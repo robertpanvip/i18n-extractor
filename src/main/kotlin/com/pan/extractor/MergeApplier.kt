@@ -294,12 +294,12 @@ object MergeApplier {
 
         val replacement = when {
             rootPsi is com.intellij.psi.xml.XmlText -> proc.createStringExpressionNode(
-                if (site.isReact || Util.isJSX(rootPsi)) "{ $callExprText }" else "{{ $callExprText }}",
+                if (site.isReact || ProjectStructure.isJSX(rootPsi)) "{ $callExprText }" else "{{ $callExprText }}",
                 rootPsi
             )
             rootPsi is com.intellij.psi.xml.XmlAttributeValue -> {
                 val attr = rootPsi.parent as? com.intellij.psi.xml.XmlAttribute
-                val jsx = Util.isJSX(rootPsi)
+                val jsx = ProjectStructure.isJSX(rootPsi)
                 val vDir = proc.isVueDirective(attr?.name ?: "")
                 val prefix = if (jsx || vDir) "" else ":"
                 if (attr != null) {

@@ -13,7 +13,7 @@ import com.intellij.psi.PsiManager
  * 读取 $t() 折叠展示所用语言的翻译资源，解析为扁平 key→原始文案 映射。
  *
  * 折叠展示的占位文本来自指定语言（[I18nSettings.foldDisplayLanguage]）的 locale 文件：
- *  - 优先 [Util.findLocaleFileForLanguage]（只匹配该语言的独立文件）
+ *  - 优先 [EntryFileLocator.findLocaleFileForLanguage]（只匹配该语言的独立文件）
  *  - 找不到独立文件时回退到项目的默认目标语言入口文件
  *
  * 支持 .json / .ts / .tsx / .js / .jsx。嵌套对象按 `.` 拼成扁平 key（i18n 常见约定）。
@@ -82,8 +82,8 @@ object LocaleMessages {
             }
         }
         val extractor = LanguageRegistry.byId(displayLang)
-        val entry = extractor?.let { Util.findLocaleFileForLanguage(project, contextPsiFile, it) }
-            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
+        val entry = extractor?.let { EntryFileLocator.findLocaleFileForLanguage(project, contextPsiFile, it) }
+            ?: EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
         if (entry != null && entry.isValid && !entry.isDirectory) {
             synchronized(entryLock) { entryCache[locKey] = entry.path }
         }
@@ -94,8 +94,8 @@ object LocaleMessages {
     fun load(project: Project, contextPsiFile: PsiFile?): Map<String, String> {
         val settings = I18nSettings.getInstance()
         val extractor = LanguageRegistry.byId(settings.foldDisplayLanguage())
-        val entry = extractor?.let { Util.findLocaleFileForLanguage(project, contextPsiFile, it) }
-            ?: Util.findChineseLocaleEntryFile(project, contextPsiFile)
+        val entry = extractor?.let { EntryFileLocator.findLocaleFileForLanguage(project, contextPsiFile, it) }
+            ?: EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
             ?: return emptyMap()
         return parseEntry(project, entry)
     }
@@ -121,7 +121,7 @@ object LocaleMessages {
     }
 
     private fun parseTsFlat(text: String): Map<String, String> {
-        val info = Util.parseTsExportedObject(text) ?: return emptyMap()
+        val info = TsFileEditor.parseTsExportedObject(text) ?: return emptyMap()
         val out = LinkedHashMap<String, String>()
         flattenNested(info.staticKV, "", out)
         return out

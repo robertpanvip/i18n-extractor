@@ -4,6 +4,7 @@ import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 
 /**
  * i18n 框架策略接口：把原先散落在 [I18nFoldingBuilder] / [JsStringCollector] /
@@ -93,6 +94,39 @@ interface I18nFramework {
     /** hook import 语句（如 `import { useI18n } from 'vue-i18n'`），无 hook 注入时为 null。 */
     val hookImport: String?
 
+    /**
+     * 判定当前文件是否需要"全局 $t 别名"注入（纯工具文件场景，无组件无 Hook）。
+     * - Vue: 非 .vue SFC + 既无 Vue 组件也无自定义 Hook
+     * - React: 既无 React 组件也无自定义 Hook（用 useTranslation 不能在普通函数里调）
+     * - Solid/Generic: 默认 false
+     * 返回 true 时，collect() 会打 needInjectXxxGlobalDollarT=true 标记，run() 时顶部注入全局别名。
+     */
+    fun detectGlobalDollarTNeeded(file: PsiFile): Boolean = false
+
+    /**
+     * 探测文件中已有翻译调用使用的"长调用名"（如 Vue 的 i18n.global.t / React 的 i18n.t）。
+     * 返回 null 表示无长调用，tFunctionName 保持默认（$t / t）。
+     * 返回非 null 时，collect() 会把 tFunctionName 切到该长调用名（兼容历史代码）。
+     *
+     * 注意：纯工具文件模式（detectGlobalDollarTNeeded=true）下不调用此方法，
+     * 老长调用只作兼容保留，新提取一律写短 $t/t。
+     */
+    fun detectExistingTFunctionName(call: JSCallExpression): String? = null
+
+    /**
+     * 判断 [element] 是否为翻译元素（非函数调用形态，如 JSX `<Trans>` / Vue `<i18n-t>` 组件）。
+     * 默认 false：现有逻辑只识别 JSCallExpression 形态的翻译调用，
+     * 各策略若需支持非函数调用形态可重写。
+     */
+    fun isTranslationElement(element: PsiElement): Boolean = false
+
+    /**
+     * 从翻译元素中提取 key；非翻译元素或 key 不可确定时返回 null。
+     * 与 [extractKey] 对称，但作用于 [isTranslationElement] 命中的非函数调用元素。
+     * 默认 null：与 [isTranslationElement] 默认 false 配套，保持现有行为不变。
+     */
+    fun extractKeyFromElement(element: PsiElement): String? = null
+
     // ── 耦合点 5：引导（第 2 步接入） ──────────────────────────────────
 
     /** 缺 i18n 依赖时需要安装的包名列表。 */
@@ -173,6 +207,22 @@ object VueI18nStrategy : I18nFramework {
         return result
     }
 
+    override fun detectGlobalDollarTNeeded(file: PsiFile): Boolean {
+        if (file.name.endsWith(".vue", ignoreCase = true)) return false
+        val ext = file.name.substringAfterLast('.', "")
+        val known = ext.equals("ts", ignoreCase = true) || ext.equals("tsx", ignoreCase = true) ||
+            ext.equals("js", ignoreCase = true) || ext.equals("jsx", ignoreCase = true)
+        if (!known) return false
+        return ProjectStructure.findHookFunctions(file).isEmpty() &&
+            ProjectStructure.findVueComponentFunctions(file).isEmpty()
+    }
+
+    override fun detectExistingTFunctionName(call: JSCallExpression): String? {
+        val method = call.methodExpression as? JSReferenceExpression ?: return null
+        val text = method.text
+        return if (text == "i18n.global.t" || text == "i18n.global.tc") "i18n.global.t" else null
+    }
+
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
         val importLine = if (!entryImport.isNullOrBlank()) {
             "import zh from './locales/$entryImport';\n"
@@ -215,6 +265,16 @@ object ReactI18nextStrategy : I18nFramework {
             result = result.replace(match.value, replacement)
         }
         return result
+    }
+
+    override fun detectGlobalDollarTNeeded(file: PsiFile): Boolean =
+        ProjectStructure.findReactComponentFunctions(file).isEmpty() &&
+            ProjectStructure.findHookFunctions(file).isEmpty()
+
+    override fun detectExistingTFunctionName(call: JSCallExpression): String? {
+        val method = call.methodExpression as? JSReferenceExpression ?: return null
+        val text = method.text
+        return if (text == "i18n.t" || text == "i18n.tc") "i18n.t" else null
     }
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {

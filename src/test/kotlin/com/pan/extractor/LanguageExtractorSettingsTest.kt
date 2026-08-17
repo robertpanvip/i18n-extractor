@@ -317,7 +317,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/zh.ts", "export default { '首页': '首页' }")
         val context = myFixture.addFileToProject("src/App.tsx", "export default () => <div>hi</div>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("默认应命中中文入口", found)
         assertTrue("应命中 src/locales/zh.ts，实际：${found!!.path}", found.path.endsWith("locales/zh.ts"))
     }
@@ -327,7 +327,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/ja.ts", "export default { 'こんにちは': 'こんにちは' }")
         val context = myFixture.addFileToProject("src/App.tsx", "export default () => <div>hi</div>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用日文后应命中 ja 入口", found)
         assertTrue("应命中 src/locales/ja.ts，实际：${found!!.path}", found.path.endsWith("locales/ja.ts"))
     }
@@ -337,7 +337,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/ja.ts", "export default { 'こんにちは': 'こんにちは' }")
         val context = myFixture.addFileToProject("src/App.tsx", "export default () => <div>hi</div>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertTrue("默认不启用日文时不应命中 ja.ts，实际：${found?.path}", found == null || !found.path.endsWith("locales/ja.ts"))
     }
 
@@ -346,7 +346,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/ko.ts", "export default { '안녕하세요': '안녕하세요' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用韩文后应命中 ko 入口", found)
         assertTrue("应命中 src/locales/ko.ts，实际：${found!!.path}", found.path.endsWith("locales/ko.ts"))
     }
@@ -382,7 +382,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/fr.ts", "export default { 'présent': 'présent' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用法语后应命中 fr 入口", found)
         assertTrue("应命中 src/locales/fr.ts，实际：${found?.path}", found!!.path.endsWith("locales/fr.ts"))
     }
@@ -414,7 +414,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/ru.ts", "export default { 'Привет': 'Привет' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用俄语后应命中 ru 入口", found)
         assertTrue("应命中 src/locales/ru.ts，实际：${found?.path}", found!!.path.endsWith("locales/ru.ts"))
     }
@@ -450,7 +450,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/de.ts", "export default { 'Grüße': 'Grüße' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用德语后应命中 de 入口", found)
         assertTrue("应命中 src/locales/de.ts，实际：${found?.path}", found!!.path.endsWith("locales/de.ts"))
     }
@@ -486,7 +486,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/es.ts", "export default { 'años': 'años' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用西语后应命中 es 入口", found)
         assertTrue("应命中 src/locales/es.ts，实际：${found?.path}", found!!.path.endsWith("locales/es.ts"))
     }
@@ -522,7 +522,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/it.ts", "export default { 'città': 'città' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用意语后应命中 it 入口", found)
         assertTrue("应命中 src/locales/it.ts，实际：${found?.path}", found!!.path.endsWith("locales/it.ts"))
     }
@@ -558,7 +558,7 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         createEntry("package.json", "{}")
         createEntry("src/locales/pt.ts", "export default { 'maçã': 'maçã' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("启用葡语后应命中 pt 入口", found)
         assertTrue("应命中 src/locales/pt.ts，实际：${found?.path}", found!!.path.endsWith("locales/pt.ts"))
     }

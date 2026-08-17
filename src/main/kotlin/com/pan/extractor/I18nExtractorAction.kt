@@ -80,12 +80,12 @@ class I18nExtractorAction : AnAction() {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
-                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
+                    "json" -> TsFileEditor.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     "ts", "tsx", "js", "jsx" -> {
                         // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
-                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
+                        val spread = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
                         if (spread != null) spread
-                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
+                        else TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     }
                     else -> null
                 }
@@ -95,7 +95,7 @@ class I18nExtractorAction : AnAction() {
             if (writes != null) {
                 try {
                     for ((vf, newText) in writes) {
-                        Util.writeVirtualFileText(vf, newText)
+                        TsFileEditor.writeVirtualFileText(vf, newText)
                     }
                     return OutputResult(
                         copiedToClipboard = false,
@@ -168,13 +168,13 @@ class I18nExtractorAction : AnAction() {
      * 典型：en-US.ts、locales/zh-CN.js、messages.ja.ts、src/i18n/en.ts 等。
      */
     private fun isTranslationResource(vf: VirtualFile): Boolean =
-        Util.isTranslationResourceFile(vf)
+        EntryFileLocator.isTranslationResourceFile(vf)
 
     /**
      * Bug 2 重载：PsiFile 版本（single-file 流程使用）。
      */
     private fun isTranslationResource(psiFile: PsiFile): Boolean =
-        Util.isTranslationResourceFile(psiFile)
+        EntryFileLocator.isTranslationResourceFile(psiFile)
 
     override fun update(e: AnActionEvent) {
         val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)

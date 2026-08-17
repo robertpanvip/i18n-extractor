@@ -141,102 +141,12 @@ object Util {
     }
 
     // ==========================================================================
-    // 以下方法已迁移到 ProjectStructure（见同目录 ProjectStructure.kt）。
-    // Util 作为对外门面，保留原签名并委托给 ProjectStructure。行为不变。
+    // isVue/isReact/isSolid：高频调用（recordSite 等热路径），保留门面以避免改动太多
+    // 调用方。其他原转发方法已直接改用 ProjectStructure/EntryFileLocator/TsFileEditor。
     // ==========================================================================
-    fun isJSX(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isJSX(element)
-
     fun isReact(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isReact(element)
 
     fun isVue(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isVue(element)
 
     fun isSolid(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSolid(element)
-
-    fun findReactComponentFunctions(file: PsiFile): List<com.intellij.psi.PsiElement> =
-        ProjectStructure.findReactComponentFunctions(file)
-
-    fun findHookFunctions(file: PsiFile): List<com.intellij.psi.PsiElement> =
-        ProjectStructure.findHookFunctions(file)
-
-    fun findVueComponentFunctions(file: PsiFile): List<com.intellij.psi.PsiElement> =
-        ProjectStructure.findVueComponentFunctions(file)
-
-    fun findProjectRoot(currentPsiFile: PsiFile): VirtualFile? = ProjectStructure.findProjectRoot(currentPsiFile)
-
-    fun detectMissingI18nBootstrap(currentPsiFile: PsiFile): I18nBootstrapSupport.MissingBootstrap? =
-        ProjectStructure.detectMissingI18nBootstrap(currentPsiFile)
-
-    fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? = ProjectStructure.findVueI18nInstanceFile(currentPsiFile)
-
-    fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? = ProjectStructure.findVueI18nInstanceFileInRoot(projectRoot)
-
-    fun findI18nInitFileInRoot(projectRoot: VirtualFile): VirtualFile? = ProjectStructure.findI18nInitFileInRoot(projectRoot)
-
-    fun findReactI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? = ProjectStructure.findReactI18nInstanceFileInRoot(projectRoot)
-
-    fun resolveVueI18nImportPath(currentPsiFile: PsiFile, i18nVFile: VirtualFile): String? =
-        ProjectStructure.resolveVueI18nImportPath(currentPsiFile, i18nVFile)
-
-    fun isVueI18nDefaultExport(i18nVFile: VirtualFile): Boolean = ProjectStructure.isVueI18nDefaultExport(i18nVFile)
-
-    // ==========================================================================
-    // 以下方法已迁移到 EntryFileLocator（见同目录 EntryFileLocator.kt）。
-    // Util 作为对外门面，保留原签名并委托给 EntryFileLocator。行为不变。
-    // ==========================================================================
-    fun isTranslationResourceFile(fileName: String, filePath: String?): Boolean =
-        EntryFileLocator.isTranslationResourceFile(fileName, filePath)
-
-    fun isTranslationResourceFile(psiFile: PsiFile): Boolean = EntryFileLocator.isTranslationResourceFile(psiFile)
-
-    fun isTranslationResourceFile(vf: VirtualFile): Boolean = EntryFileLocator.isTranslationResourceFile(vf)
-
-    fun findChineseLocaleEntryFile(project: Project, contextPsiFile: PsiFile?): VirtualFile? =
-        EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
-
-    fun findLocaleFileForLanguage(project: Project, contextPsiFile: PsiFile?, extractor: LanguageExtractor): VirtualFile? =
-        EntryFileLocator.findLocaleFileForLanguage(project, contextPsiFile, extractor)
-
-    fun findChineseEntryViaI18nConfig(root: VirtualFile): VirtualFile? =
-        EntryFileLocator.findChineseEntryViaI18nConfig(root)
-
-    // ==========================================================================
-    // 以下方法已迁移到 TsFileEditor（见同目录 TsFileEditor.kt）。
-    // Util 作为对外门面，保留原签名并委托给 TsFileEditor。行为不变。
-    // ==========================================================================
-    fun parseTsExportedObject(text: String): TsFileEditor.TsExportedObjectInfo? = TsFileEditor.parseTsExportedObject(text)
-
-    fun parseObjectLiteralBody(raw: String): Map<String, Any?> = TsFileEditor.parseObjectLiteralBody(raw)
-
-    fun mergeFlatIntoNested(existingNested: Map<String, Any?>, newFlat: Map<String, String>): Map<String, Any?> =
-        TsFileEditor.mergeFlatIntoNested(existingNested, newFlat)
-
-    fun regenerateObjectLiteralBody(
-        oldObjBody: String,
-        mergedNested: Map<String, Any?>,
-        dropKeys: Set<String> = emptySet(),
-    ): String = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, mergedNested, dropKeys)
-
-    fun regenerateTsFileWithNewJson(
-        project: Project,
-        entryVf: VirtualFile,
-        newFlatJson: Map<String, String>,
-        dropExistingKeys: Set<String> = emptySet(),
-    ): String? = TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, newFlatJson, dropExistingKeys)
-
-    fun regenerateJsonFileWithNewJson(
-        entryVf: VirtualFile,
-        newFlatJson: Map<String, String>,
-        dropExistingKeys: Set<String> = emptySet(),
-    ): String? = TsFileEditor.regenerateJsonFileWithNewJson(entryVf, newFlatJson, dropExistingKeys)
-
-    fun regenerateTsFileWithSpreadRouting(
-        project: Project,
-        entryVf: VirtualFile,
-        newFlatJson: Map<String, String>,
-        dropExistingKeys: Set<String> = emptySet(),
-    ): List<Pair<VirtualFile, String>>? = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, newFlatJson, dropExistingKeys)
-
-    fun writeVirtualFileText(entryVf: VirtualFile, newText: String) = TsFileEditor.writeVirtualFileText(entryVf, newText)
-
-    fun persistEntryPathIfNeeded(project: Project, entryVf: VirtualFile) = TsFileEditor.persistEntryPathIfNeeded(project, entryVf)
 }

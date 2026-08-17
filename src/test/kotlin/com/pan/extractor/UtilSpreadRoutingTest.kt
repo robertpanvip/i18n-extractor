@@ -39,7 +39,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别 ...common 并路由到同文件 const", writes)
         assertEquals("同文件 const 只产生 1 次写盘", 1, writes!!.size)
         assertEquals("写盘目标应为入口文件", entry.path, writes[0].first.path)
@@ -82,7 +82,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别 ...common 并路由到本地 import 的 TS", writes)
         assertEquals("应产生入口 + common.ts 两次写盘", 2, writes!!.size)
         // 找到 common.ts 的写盘结果
@@ -115,7 +115,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别 ...common 并路由到本地 import 的 JSON", writes)
         assertEquals("应产生入口 + common.json 两次写盘", 2, writes!!.size)
         val jsonWrite = writes.firstOrNull { it.first.path.endsWith("common.json") }
@@ -149,7 +149,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
         )
         // 新 key 里 '标题' 已存在于 node_modules（被 spread 覆盖），'退出' 是真正新增
         val newFlat = linkedMapOf("首页" to "首页", "标题" to "标题", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别 node_modules 内容（只读），不返回 null", writes)
         assertEquals("node_modules 只读：只写盘入口一次", 1, writes!!.size)
         assertEquals("写盘目标应为入口文件", entry.path, writes[0].first.path)
@@ -174,7 +174,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNull("无法解析 spread 目标时应返回 null 回退旧逻辑", writes)
     }
 
@@ -203,7 +203,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "nav.退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别嵌套 spread 并路由到 common", writes)
         // common.ts 应主要路由 nav 下的新 key
         val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
@@ -238,7 +238,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("首页" to "首页", "退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别 import * as 命名空间导入并路由", writes)
         val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
         assertNotNull("应包含 common.ts 的写盘", commonWrite)
@@ -257,7 +257,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
-        val newText = Util.regenerateTsFileWithNewJson(project, entry, linkedMapOf("nav.退出" to "退出"))
+        val newText = TsFileEditor.regenerateTsFileWithNewJson(project, entry, linkedMapOf("nav.退出" to "退出"))
         assertNotNull("应能解析带 as const 的嵌套对象并重写", newText)
         val exportBlock = newText!!.substringAfter("export default")
         assertEquals("nav 容器不应重复出现，result:\n$exportBlock", 1, countOccurrences(exportBlock, "nav:"))
@@ -297,7 +297,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("nav.退出" to "退出", "menu.设置" to "设置")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应识别多个 spread 并分别路由", writes)
 
         // nav 下的新 key 应路由到 common.ts
@@ -340,7 +340,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("应解析到 const 声明（优先于 import）", writes)
         // 只写盘入口（const 与入口同文件），common.ts 不被写
         assertEquals("const 遮蔽：只写盘入口一次", 1, writes!!.size)
@@ -372,7 +372,7 @@ class UtilSpreadRoutingTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         val newFlat = linkedMapOf("退出" to "退出")
-        val writes = Util.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
+        val writes = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entry, newFlat)
         assertNotNull("目标自带嵌套 spread 不应崩溃", writes)
         val commonWrite = writes!!.firstOrNull { it.first.path.endsWith("common.ts") }
         assertNotNull("应写盘 common.ts", commonWrite)

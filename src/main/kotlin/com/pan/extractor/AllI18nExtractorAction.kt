@@ -84,12 +84,12 @@ class AllI18nExtractorAction : AnAction() {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
-                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
+                    "json" -> TsFileEditor.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     "ts", "tsx", "js", "jsx" -> {
                         // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
-                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
+                        val spread = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
                         if (spread != null) spread
-                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
+                        else TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     }
                     else -> null
                 }
@@ -99,7 +99,7 @@ class AllI18nExtractorAction : AnAction() {
             if (writes != null) {
                 try {
                     for ((vf, newText) in writes) {
-                        Util.writeVirtualFileText(vf, newText)
+                        TsFileEditor.writeVirtualFileText(vf, newText)
                     }
                     return OutputResult(
                         copiedToClipboard = false,
@@ -157,7 +157,7 @@ class AllI18nExtractorAction : AnAction() {
     e.presentation.isEnabledAndVisible =
         file?.let {
             // Bug 2: 翻译资源文件禁用菜单
-            if (Util.isTranslationResourceFile(it)) return@let false
+            if (EntryFileLocator.isTranslationResourceFile(it)) return@let false
             val name = it.name.lowercase()
             name.endsWith(".js") ||
                     name.endsWith(".jsx") ||
@@ -253,7 +253,7 @@ class AllI18nExtractorAction : AnAction() {
         val contextPsi: PsiFile? = e.getData(CommonDataKeys.PSI_FILE)
         val allFiles = resolveScanFiles(project)
         // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
-        val files = allFiles.filterNot { Util.isTranslationResourceFile(it) }
+        val files = allFiles.filterNot { EntryFileLocator.isTranslationResourceFile(it) }
         val extracted = mutableMapOf<String, String>()
 
         val processors: List<I18nProcessor> = files.mapNotNull { file ->

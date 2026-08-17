@@ -39,7 +39,7 @@ class UtilWriteBackTest {
             "退出" to "退出",
         )
 
-        val result = Util.regenerateObjectLiteralBody(oldBody, merged)
+        val result = TsFileEditor.regenerateObjectLiteralBody(oldBody, merged)
 
         // ① 顶层 key「用户」不应出现两次
         val topKeys = result.lineSequence()
@@ -70,7 +70,7 @@ class UtilWriteBackTest {
             '说明': /* 备注 */ '说明文本',
             '退出': '退出',
         """.trimIndent()
-        val parsed = Util.parseObjectLiteralBody(raw)
+        val parsed = TsFileEditor.parseObjectLiteralBody(raw)
         assertEquals("应解析出 '首页'，got $parsed", "首页", parsed["首页"])
         assertTrue("应解析出 '退出'，got $parsed", parsed.containsKey("退出"))
     }
@@ -88,7 +88,7 @@ class UtilWriteBackTest {
             }
         """.trimIndent()
 
-        val info = Util.parseTsExportedObject(ts)
+        val info = TsFileEditor.parseTsExportedObject(ts)
         assertNotNull("注释含 } 不应导致对象解析失败", info)
         assertEquals("应仍解析出 '退出'", "退出", info!!.staticKV["退出"])
     }
@@ -105,7 +105,7 @@ class UtilWriteBackTest {
             }
         """.trimIndent()
 
-        val info = Util.parseTsExportedObject(ts)
+        val info = TsFileEditor.parseTsExportedObject(ts)
         assertNotNull("应能找到导出对象", info)
         assertEquals("应解析出 '首页'", "首页", info!!.staticKV["首页"])
         assertEquals("应解析出 '退出'", "退出", info.staticKV["退出"])
@@ -115,7 +115,7 @@ class UtilWriteBackTest {
         merged.putAll(info.staticKV)
         merged["新增"] = "新增文本"
         val oldBody = ts.substring(info.objectRange)
-        val rewritten = Util.regenerateObjectLiteralBody(oldBody, merged)
+        val rewritten = TsFileEditor.regenerateObjectLiteralBody(oldBody, merged)
         assertTrue("重写后应包含新增 key", rewritten.contains("新增"))
     }
 }

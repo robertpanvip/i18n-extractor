@@ -6,7 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
 /**
- * 针对「真正写盘入口」Util.regenerateTsFileWithNewJson / Util.regenerateJsonFileWithNewJson
+ * 针对「真正写盘入口」TsFileEditor.regenerateTsFileWithNewJson / TsFileEditor.regenerateJsonFileWithNewJson
  * 做端到端测试（这两个函数是 AllI18nExtractorAction / I18nExtractorAction 在覆盖写回时实际调用的，
  * 而 UtilWriteBackTest 只测了底层的解析/重写函数）。
  */
@@ -39,7 +39,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
             "退出" to "退出",
             "用户.age" to "年龄",
         )
-        val newText = Util.regenerateTsFileWithNewJson(project, entry, newFlat)
+        val newText = TsFileEditor.regenerateTsFileWithNewJson(project, entry, newFlat)
         assertNotNull("应能解析 export default 对象并重写", newText)
         val result = newText!!
         // ① 不应出现双大括号（range 处理错误的症状）
@@ -66,7 +66,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
             }
             """.trimIndent()
         )
-        val newText = Util.regenerateTsFileWithNewJson(project, entry, linkedMapOf("首页" to "首页", "退出" to "退出"))
+        val newText = TsFileEditor.regenerateTsFileWithNewJson(project, entry, linkedMapOf("首页" to "首页", "退出" to "退出"))
         assertNotNull(newText)
         val result = newText!!
         assertTrue("注释应保留，result:\n$result", result.contains("首页说明"))
@@ -77,7 +77,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
     fun testTsWriteBackDoesNotDuplicateExistingKey() {
         val entry = createEntry("src/zh.ts", "export default { '首页': '首页' }")
         val newFlat = linkedMapOf("首页" to "首页")
-        val newText = Util.regenerateTsFileWithNewJson(project, entry, newFlat)
+        val newText = TsFileEditor.regenerateTsFileWithNewJson(project, entry, newFlat)
         assertNotNull(newText)
         val count = newText!!.substringAfter("{").substringBeforeLast("}").split("'首页'").size - 1
         assertTrue("已存在的 key '首页' 不应重复追加，实际出现 $count 次，result:\n$newText", count >= 1)
@@ -85,7 +85,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
 
     fun testTsWriteBackFallsBackWhenNoExportObject() {
         val entry = createEntry("src/zh.ts", "export const a = 1;")
-        val newText = Util.regenerateTsFileWithNewJson(project, entry, linkedMapOf("首页" to "首页"))
+        val newText = TsFileEditor.regenerateTsFileWithNewJson(project, entry, linkedMapOf("首页" to "首页"))
         // 没有 export default/export const 对象字面量 → 返回 null，由调用方回退到剪贴板
         assertTrue("无导出对象时应返回 null（回退剪贴板）", newText == null)
     }
@@ -108,7 +108,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
             "退出" to "退出",
             "用户.name" to "姓名",
         )
-        val newText = Util.regenerateJsonFileWithNewJson(entry, newFlat)
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, newFlat)
         assertNotNull(newText)
         val result = newText!!
         assertTrue("应保留 '首页'，result:\n$result", result.contains("首页"))
@@ -118,7 +118,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
 
     fun testJsonWriteBackFallbackWhenMalformed() {
         val entry = createEntry("src/zh.json", "not valid json{{{")
-        val newText = Util.regenerateJsonFileWithNewJson(entry, linkedMapOf("首页" to "首页"))
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("首页" to "首页"))
         assertNotNull("非法 JSON 应兜底返回格式化后的新 JSON", newText)
         assertTrue("兜底结果应包含新 key '首页'，result:\n$newText", newText!!.contains("首页"))
     }
@@ -150,7 +150,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         createEntry("src/config/messages/en-locales.ts", "export default { 'Title': 'Title' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
 
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("应通过 Vue 配置探测到中文入口", found)
         assertTrue(
             "应命中 zh-locales.ts，实际：${found!!.path}",
@@ -163,7 +163,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         myFixture.addFileToProject("package.json", "{}")
         createEntry("src/locales/zh.ts", "export default { '首页': '首页' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("预设目录应优先命中", found)
         assertTrue("应命中 src/locales/zh.ts，实际：${found!!.path}", found.path.endsWith("locales/zh.ts"))
     }
@@ -197,7 +197,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         createEntry("src/config/resources/en-us.ts", "export default { 'Title': 'Title' }")
         val context = myFixture.addFileToProject("src/App.tsx", "export default () => <div>hi</div>")
 
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("应通过 react-i18next 配置探测到中文入口", found)
         assertTrue(
             "应命中 zh-cn.ts，实际：${found!!.path}",
@@ -224,7 +224,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
 
         try {
             val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
-            val found = Util.findChineseLocaleEntryFile(project, context)
+            val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
             assertNotNull("应命中持久化路径", found)
             assertTrue(
                 "应优先返回持久化的 zh-CN.json，实际：${found!!.path}",
@@ -242,7 +242,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         createEntry("src/config/messages/zh.ts", "export default { '首页': '首页' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
 
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("无配置时应通过全项目 walk 找到中文入口", found)
         assertTrue(
             "应命中深层 zh.ts，实际：${found!!.path}",
@@ -270,7 +270,7 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         createEntry("src/messages/zh-CN.ts", "export default { '标题': '简体' }")
         val context = myFixture.addFileToProject("src/App.vue", "<template><div>hi</div></template>")
 
-        val found = Util.findChineseLocaleEntryFile(project, context)
+        val found = EntryFileLocator.findChineseLocaleEntryFile(project, context)
         assertNotNull("应通过配置探测到中文入口", found)
         assertTrue(
             "locale=zh-CN 时应优先命中 zh-CN.ts，实际：${found!!.path}",
