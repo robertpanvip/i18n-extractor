@@ -22,6 +22,13 @@ data class AffixGroupCandidate(
     val selected: Boolean = true,
     /** 骨架 key（Dialog 可编辑） */
     var skeletonKey: String,
+    /**
+     * 是否为"完全相同文本"的提示候选（id 前缀 AG_EXACT_DUP_）。
+     * 这类组骨架里没有 {N0} 占位，若被勾选并按骨架重写，会错误生成
+     * $t('全选', { N0: $t('全选') }) 这类自引用调用。应用阶段必须直接跳过：
+     * 重复文本本就走普通 $t('全选') 单句替换（key 相同），无需额外重写。
+     */
+    val isExactDuplicate: Boolean = false,
 ) {
     val siteCount get() = variants.sumOf { it.sites.size }
 }
@@ -135,7 +142,8 @@ object CommonPrefixSuffixFactorizer {
                 suffix = "",
                 variants = listOf(AffixVariant(diff = trimmed, sites = sites.toList())),
                 selected = false,
-                skeletonKey = trimmed
+                skeletonKey = trimmed,
+                isExactDuplicate = true,
             )
         }
     }
@@ -188,6 +196,19 @@ object CommonPrefixSuffixFactorizer {
                 val pLen = maxPrefix.codePointCount(0, maxPrefix.length)
                 val sLen = maxSuffix.codePointCount(0, maxSuffix.length)
                 if (pLen + sLen < minAffixChar()) continue
+
+                // 【防呆】共享前后缀必须覆盖整句的足够比例，否则合并无意义且会生成垃圾骨架。
+                // 例："当前职位仅能选择60人" 与某句只共享"当前"(2字/约18%)，
+                //     其余整段"职位仅能选择60人"变成差异 → 写成
+                //     $t('当前{N0}', { N0: $t('职位仅能选择60人') })，明显错误。
+                // 规则：对组内所有命中句，前后缀总长(码点数) 不得低于句长(码点数)的 1/3。
+                // 既有合法场景（测试1/测试2、AB测试1XY 等，共享段通常占 50%+）不受影响。
+                val maxAffixLen = pLen + sLen
+                val meaningful = (listOf(anchor) + candidates.map { it.first }).all {
+                    val mlen = it.originalMessage.codePointCount(0, it.originalMessage.length)
+                    mlen <= 0 || maxAffixLen * 3 >= mlen
+                }
+                if (!meaningful) continue
 
                 val variants = mutableMapOf<String, MutableList<SiteRef>>()
                 variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor); consumed.add(anchor)

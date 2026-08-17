@@ -304,4 +304,47 @@ class MergeApplierTest : BasePlatformTestCase() {
         } ?: ""
         assertTrue("\$t 调用应使用自定义 key，实际:\n$resultText", resultText.contains("custom.merged.label"))
     }
+
+    // ─────────────────────────────────────────────────────────
+    // 问题 4 回归：完全相同文本不要生成自引用 $t('全选', { N0: $t('全选') })
+    // ─────────────────────────────────────────────────────────
+
+    /**
+     * "全选" 出现两次时，factorize 产出的是 isExactDuplicate=true 的提示组。
+     * 即便误勾选，apply 也必须跳过骨架重写：两句应各自替换为普通 $t('全选')，
+     * 不能变成 $t('全选', { N0: $t('全选') })。
+     */
+    fun testExactDuplicateHintDoesNotProduceSelfRefNestedCall() {
+        val file = configureFile(
+            "src/Demo.vue",
+            "<template><div><span>全选</span><span>全选</span></div></template>"
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val (affix, _) = MergeApplier.factorizeSites(listOf(processor))
+        val hint = affix.firstOrNull { it.id.startsWith("AG_EXACT_DUP_") }
+            ?: throw IllegalStateException("未生成 exact-dup 提示组")
+        assertTrue("提示组应标记 isExactDuplicate", hint.isExactDuplicate)
+
+        // 模拟用户误勾选了提示组
+        val plan = ExtractedStringsDialog.MergePlan(listOf(hint), emptyList())
+        val extracted = LinkedHashMap(processor.extractedStrings)
+        val holder = arrayOfNulls<MutableMap<String, String>>(1)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
+        }
+        val resultRes = holder[0] ?: emptyMap()
+        // 最终资源里不应出现 "N0" 自引用占位 key
+        assertFalse("exact-dup 不应生成 N0 占位 key，keys=${resultRes.keys}", resultRes.containsKey("N0"))
+        assertTrue("原句 key '全选' 应保留，keys=${resultRes.keys}", resultRes.containsKey("全选"))
+
+        val resultText = myFixture.findFileInTempDir("src/Demo.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        // 普通单句替换会按项目习惯选择引号（本例 t 表达式用反引号 `全选`），
+        // 因此两种引号形式都算正确；核心是要"存在 $t(全选) 调用"且"无 N0 自引用"。
+        val hasPlainT = resultText.contains("\$t(`全选`)") || resultText.contains("\$t('全选')")
+        assertTrue("应替换为普通 \$t('全选')，实际:\n$resultText", hasPlainT)
+        assertFalse("不应出现自引用 N0: \$t(...)，实际:\n$resultText", resultText.contains("N0: \$t"))
+    }
 }

@@ -3,6 +3,7 @@ package com.pan.extractor
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 
 /**
  * 公共前后缀合并 + 汉字数字抽取（Tab2 候选）的共享逻辑。
@@ -52,9 +53,26 @@ object MergeApplier {
         extracted: MutableMap<String, String>,
         mergePlan: ExtractedStringsDialog.MergePlan,
         indicator: ProgressIndicator? = null,
+        /**
+         * 【问题 1：写入无进度】允许调用方向本函数注入"EDT 执行器"。
+         *
+         * 原因：apply 内部要写大量 PSI（逐文件 processor.run() + 逐站点骨架重写），
+         * 若一次性塞进同一个 WriteCommandAction 在 EDT 上跑，进度条在写完成前无法重绘，
+         * 表现为"点了确定后没有进度反馈"。
+         *
+         * 解法：由调用方传入 edtRunner，apply 每写一个文件 / 一个重写任务就调用它一次；
+         * 调用方用 `invokeAndWait { WriteCommandAction { ... } }` 实现，让背景线程在
+         * 两次写之间更新 indicator，并让 EDT 有机会重绘进度条。
+         *
+         * 值为 null 时（纯单元测试、或已处于 WCA 内）直接同步执行，行为与旧版一致。
+         */
+        edtRunner: ((() -> Unit) -> Unit)? = null,
     ): MutableMap<String, String> {
         // ① 填 blockedSiteIds：被合并承载的句子不再走普通 $t 单句替换
+        //    完全相同文本的提示组（isExactDuplicate）骨架里没有 {N0} 占位，勾选也不做骨架重写，
+        //    其站点本就由普通 $t('全选') 单句替换承载，因此既不阻塞也不重写，直接跳过以免自引用。
         for (g in mergePlan.selectedAffix) {
+            if (g.isExactDuplicate) continue
             for (v in g.variants) for (ref in v.sites)
                 processors[ref.processorIndex].blockedSiteIds.add(ref.siteId)
         }
@@ -65,7 +83,16 @@ object MergeApplier {
 
         // ② 逐文件常规写入：import 注入 + 未被阻塞句替换为 $t
         indicator?.text = "写入 \$t：import 注入 + 硬编码替换（跳过被合并句）"
-        for (processor in processors) processor.run()
+        val writeTotal = processors.size
+        processors.forEachIndexed { idx, processor ->
+            val pf = (processor.targetPsiFile as? PsiFile)
+            indicator?.text2 = pf?.name
+                ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
+            indicator?.fraction = 0.02 + (idx.toDouble() / writeTotal.coerceAtLeast(1)) * 0.58
+            indicator?.checkCanceled()
+            val r = { processor.run() }
+            if (edtRunner != null) edtRunner.invoke(r) else r()
+        }
 
         // ③ 预构建骨架重写任务
         indicator?.text = "生成骨架重写任务列表（公共前后缀/数字抽取）"
@@ -73,6 +100,7 @@ object MergeApplier {
         val rewriteTasks = mutableListOf<Pair<String, () -> Unit>>()
 
         for (g in mergePlan.selectedAffix) {
+            if (g.isExactDuplicate) continue
             for (v in g.variants) for (ref in v.sites) {
                 val proc = processors[ref.processorIndex]
                 val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
@@ -122,9 +150,16 @@ object MergeApplier {
             }
         }
 
-        // ④ 逐个执行骨架重写
+        // ④ 逐个执行骨架重写（每个重写任务经 edtRunner 走 EDT，写入间更新进度）
         indicator?.text = "应用骨架合并重写（生成带 {N0} 的 \$t 调用）"
-        for (task in rewriteTasks) task.second()
+        val taskTotal = rewriteTasks.size
+        rewriteTasks.forEachIndexed { idx, task ->
+            indicator?.fraction = 0.6 + (idx.toDouble() / taskTotal.coerceAtLeast(1)) * 0.32
+            indicator?.text2 = task.first
+            indicator?.checkCanceled()
+            val r = task.second
+            if (edtRunner != null) edtRunner.invoke(r) else r()
+        }
 
         // ⑤ 清理：删除被合并承载的原句 key，回填 extracted
         //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，
@@ -138,6 +173,7 @@ object MergeApplier {
             }
         }
         for (g in mergePlan.selectedAffix) {
+            if (g.isExactDuplicate) continue   // 提示组不产生骨架，站点不被合并承载
             for (v in g.variants) for (ref in v.sites) consumedByMerge.add(ref.siteId)
         }
         for (g in mergePlan.selectedDigit) {

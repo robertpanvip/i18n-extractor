@@ -224,4 +224,53 @@ class CommonPrefixSuffixFactorizerTest {
         val sameSkeleton = affix.filter { it.skeleton == "重复文案" }
         assertTrue("相同骨架候选应去重，实际数量=${sameSkeleton.size}", sameSkeleton.size <= 1)
     }
+
+    /**
+     * Bug 回归（问题 4）：完全相同文本的提示组必须标记 isExactDuplicate=true。
+     * 应用阶段依据该标记跳过骨架重写，从而避免生成
+     * $t('全选', { N0: $t('全选') }) 这类自引用调用。
+     */
+    @Test
+    fun testExactDuplicateHintIsMarkedAsExactDuplicate() {
+        val sites = siteRefs("全选", "全选")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val hint = affix.firstOrNull { it.id.startsWith("AG_EXACT_DUP_") }
+        assertTrue("相同文本应生成提示候选", hint != null)
+        assertTrue("提示候选应标记 isExactDuplicate=true", hint!!.isExactDuplicate)
+    }
+
+    /**
+     * Bug 回归（问题 5）：当两句只共享很短的公共片段、差异是整句大部分内容时，
+     * 不应生成无意义的合并组（否则会写成 $t('当前{N0}', {N0: $t('职位仅能选择60人')})）。
+     *
+     * "当前职位仅能选择60人" 与 "当前用户已离线" 只共享前缀 "当前"(2字/约18%)，
+     * 共享片段占整句比例过低 → 必须被防呆逻辑拒绝。
+     */
+    @Test
+    fun testMeaninglessAffixGroupRejected() {
+        val sites = siteRefs("当前职位仅能选择60人", "当前用户已离线")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        assertTrue(
+            "仅共享 2 字前缀、差异为整句主体时不应产生 affix 组，实际: $affix",
+            affix.none { it.skeleton.contains("当前{N0}") }
+        )
+    }
+
+    /**
+     * 对照：共享片段占比足够（/>1/3）时仍应正常生成合并组，防止防呆过度过滤。
+     * "测试职位仅能选择60人" / "测试职位仅能选择30人" 共享前缀 "测试职位仅能选择"(8字)
+     * 与后缀 "人"(1字)，差异是数字，应照常合并。
+     */
+    @Test
+    fun testMeaningfulAffixGroupStillGenerated() {
+        val sites = siteRefs("测试职务仅能选择60人", "测试职务仅能选择30人")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        assertTrue(
+            "共享片段占比足够时应照常生成 affix 组，实际: $affix",
+            // 贪心算法取「最大公共后缀」会把数字末位并入后缀，得到
+            // 测试职务仅能选择{N0}0人（diff=6/3）或 测试职务仅能选择{N0}人（diff=60/30）；
+            // 二者都是合法骨架，只要前缀+占位被保留即说明未过度过滤。
+            affix.any { it.skeleton.startsWith("测试职务仅能选择{N0}") }
+        )
+    }
 }

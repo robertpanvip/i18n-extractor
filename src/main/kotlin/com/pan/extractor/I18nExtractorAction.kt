@@ -8,7 +8,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.progress.ProgressIndicator
@@ -263,30 +262,30 @@ class I18nExtractorAction : AnAction() {
                         val mergePlan = dialog.mergePlan
                         val hasMerge =
                             mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
+                        // 【问题 1】EDT 执行器：每次 PSI 写都经它拿写锁，进度条才有机会重绘
+                        val edtRunner: (() -> Unit) -> Unit = { r ->
+                            ApplicationManager.getApplication().invokeAndWait {
+                                WriteCommandAction.runWriteCommandAction(project, r)
+                            }
+                        }
+                        val finalJson: Map<String, String> =
+                            if (hasMerge) {
+                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
+                                MergeApplier.apply(
+                                    processors = listOf(processor),
+                                    extracted = allStrings,
+                                    mergePlan = mergePlan,
+                                    indicator = indicator,
+                                    edtRunner = edtRunner,
+                                )
+                            } else {
+                                processor.run()
+                                allStrings
+                            }
                         ApplicationManager.getApplication().invokeAndWait {
-                            CommandProcessor.getInstance().executeCommand(
-                                project,
-                                {
-                                    WriteCommandAction.runWriteCommandAction(project) {
-                                        val finalJson: Map<String, String> =
-                                            if (hasMerge) {
-                                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                                                MergeApplier.apply(
-                                                    processors = listOf(processor),
-                                                    extracted = allStrings,
-                                                    mergePlan = mergePlan,
-                                                    indicator = indicator,
-                                                )
-                                            } else {
-                                                processor.run()
-                                                allStrings
-                                            }
-                                        output = applyFinalOutput(project, dialog, finalJson)
-                                    }
-                                },
-                                "I18n Extract Single",
-                                null
-                            )
+                            WriteCommandAction.runWriteCommandAction(project) {
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson))
+                            }
                         }
                         indicator.fraction = 1.0
                     }
@@ -389,41 +388,44 @@ class I18nExtractorAction : AnAction() {
                         indicator.isIndeterminate = false
                         indicator.text = "批量写入中：处理 $processors.size 个文件"
                         indicator.fraction = 0.0
-                        // —— 阶段 1：逐文件写入 + 应用合并计划（写锁必须拿在 EDT 上）
+                        // —— 阶段 1：逐文件写入 + 应用合并计划 ——
+                        // 【问题 1】EDT 执行器：每个文件 / 每个重写任务都经它拿写锁，
+                        // 背景线程在两次写之间更新 indicator，EDT 得以重绘进度条。
+                        val edtRunner: (() -> Unit) -> Unit = { r ->
+                            ApplicationManager.getApplication().invokeAndWait {
+                                WriteCommandAction.runWriteCommandAction(project, r)
+                            }
+                        }
                         val mergePlan = dialog.mergePlan
                         val hasMerge =
                             mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
+                        val finalJson: Map<String, String> =
+                            if (hasMerge) {
+                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
+                                MergeApplier.apply(
+                                    processors = processors,
+                                    extracted = extracted,
+                                    mergePlan = mergePlan,
+                                    indicator = indicator,
+                                    edtRunner = edtRunner,
+                                )
+                            } else {
+                                for ((idx, processor) in processors.withIndex()) {
+                                    indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
+                                    val pf = (processor.targetPsiFile as? PsiFile)
+                                    indicator.text2 = pf?.name
+                                        ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
+                                    if (indicator.isCanceled) break
+                                    edtRunner { processor.run() }
+                                }
+                                extracted
+                            }
+                        indicator.fraction = 0.9
+                        // —— 阶段 2：覆盖入口 / 复制 JSON（需要写锁） ——
                         ApplicationManager.getApplication().invokeAndWait {
-                            CommandProcessor.getInstance().executeCommand(
-                                project,
-                                {
-                                    WriteCommandAction.runWriteCommandAction(project) {
-                                        val finalJson: Map<String, String> =
-                                            if (hasMerge) {
-                                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                                                MergeApplier.apply(
-                                                    processors = processors,
-                                                    extracted = extracted,
-                                                    mergePlan = mergePlan,
-                                                    indicator = indicator,
-                                                )
-                                            } else {
-                                                for ((idx, processor) in processors.withIndex()) {
-                                                    indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
-                                                    val pf = (processor.targetPsiFile as? PsiFile)
-                                                    indicator.text2 = pf?.name
-                                                        ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
-                                                    if (indicator.isCanceled) break
-                                                    processor.run()
-                                                }
-                                                extracted
-                                            }
-                                        output = applyFinalOutput(project, dialog, finalJson)
-                                    }
-                                },
-                                "I18n Extract Batch",
-                                null
-                            )
+                            WriteCommandAction.runWriteCommandAction(project) {
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson))
+                            }
                         }
                         indicator.fraction = 1.0
                     }
