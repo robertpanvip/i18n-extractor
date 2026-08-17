@@ -682,4 +682,108 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     /** 找到第一个非空白符、非注释的子元素 */
     fun findFirstNonWhitespaceChild(element: PsiElement): PsiElement? =
         I18nPsiTools.findFirstNonWhitespaceChild(element)
+
+    /** run() 注入决策的参数包，把 I18nProcessor 的 5 个布尔/字符串状态收敛成一个对象。 */
+    data class InjectionDecision(
+        val needInjectGlobalDollarT: Boolean,
+        val needInjectReactGlobalDollarT: Boolean,
+        val reactI18nTFallbackToDollarT: Boolean,
+        val tFunctionName: String,
+        val hasExtractedStrings: Boolean,
+        val hasExistingStrings: Boolean,
+    )
+
+    /**
+     * P2 统一注入入口：按 [framework] 分发到 Vue/React 注入逻辑。
+     * 行为与原 I18nProcessor.run() 的注入分支 1:1 等价，只是按框架拆分。
+     * Solid 复用 React 注入（@solid-primitives/i18n 的 useI18n 与 react-i18next 的 useTranslation 注入形态一致）。
+     */
+    fun injectForFramework(
+        processor: I18nProcessor,
+        psiFile: PsiElement,
+        framework: I18nFramework,
+        decision: InjectionDecision,
+    ) {
+        when (framework) {
+            is VueI18nStrategy -> injectVue(processor, psiFile, decision)
+            is ReactI18nextStrategy, is SolidI18nStrategy -> injectReact(processor, psiFile, decision)
+            else -> { /* Generic 不注入 */ }
+        }
+    }
+
+    /** Vue 注入分支（从 I18nProcessor.run() 搬入，行为不变）。 */
+    private fun injectVue(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+        val d = decision
+        val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
+            (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
+        val vueModeNeedsImport = d.needInjectGlobalDollarT &&
+            (d.hasExtractedStrings || d.hasExistingStrings)
+        val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance || vueModeNeedsImport
+        if (needGlobalI18nImport) {
+            if (d.tFunctionName == "i18n.global.t" ||
+                (d.hasExtractedStrings && d.needInjectGlobalDollarT) ||
+                vueModeNeedsImport
+            ) {
+                ensureI18nInstanceImported(psiFile, isVue = true, injectGlobalDollarT = d.needInjectGlobalDollarT)
+            } else if (vueModeNeedsImport ||
+                (d.tFunctionName == "i18n.global.t" && d.hasExtractedStrings)
+            ) {
+                ensureI18nInstanceImported(
+                    psiFile, isVue = true,
+                    injectGlobalDollarT = d.needInjectGlobalDollarT || d.tFunctionName != "\$t"
+                )
+            }
+        }
+        if (d.hasExtractedStrings) {
+            val f = psiFile.containingFile ?: (psiFile as? com.intellij.psi.PsiFile) ?: return
+            val isSfc = f.name.endsWith(".vue", ignoreCase = true)
+            val components = if (isSfc) emptyList() else Util.findVueComponentFunctions(f)
+            val hooks = if (isSfc) emptyList() else Util.findHookFunctions(f)
+            when {
+                !isSfc && components.isNotEmpty() -> processor.ensureVueComponentI18nInjected(psiFile)
+                !isSfc && hooks.isNotEmpty() -> processor.ensureVueHookI18nImported(psiFile)
+                isSfc -> {
+                    if (d.tFunctionName != "i18n.global.t") {
+                        processor.ensureVueI18nImported(psiFile)
+                    }
+                }
+            }
+        }
+    }
+
+    /** React 注入分支（从 I18nProcessor.run() 搬入，行为不变；含 Solid 复用）。 */
+    private fun injectReact(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+        val d = decision
+        if (d.reactI18nTFallbackToDollarT) {
+            processor.rewriteExistingI18nTCallsToDollarT(psiFile)
+        }
+        val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
+            (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
+        val reactModeNeedsImport = d.needInjectReactGlobalDollarT &&
+            (d.hasExtractedStrings || d.hasExistingStrings)
+        val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance ||
+            reactModeNeedsImport || d.reactI18nTFallbackToDollarT
+        if (needGlobalI18nImport) {
+            if (d.tFunctionName == "i18n.t" ||
+                d.reactI18nTFallbackToDollarT ||
+                (d.hasExtractedStrings && d.needInjectReactGlobalDollarT) ||
+                reactModeNeedsImport
+            ) {
+                ensureI18nInstanceImported(
+                    psiFile, isVue = false, injectGlobalDollarT = false,
+                    injectReactGlobalDollarT = d.needInjectReactGlobalDollarT || d.reactI18nTFallbackToDollarT
+                )
+            } else if (reactModeNeedsImport) {
+                ensureI18nInstanceImported(
+                    psiFile, isVue = false, injectGlobalDollarT = false,
+                    injectReactGlobalDollarT = true
+                )
+            }
+        }
+        if (d.hasExtractedStrings) {
+            if (d.tFunctionName != "i18n.t" && !d.needInjectReactGlobalDollarT) {
+                processor.ensureReactI18nImported(psiFile)
+            }
+        }
+    }
 }
