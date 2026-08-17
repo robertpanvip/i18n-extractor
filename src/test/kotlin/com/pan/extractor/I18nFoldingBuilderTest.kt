@@ -1,6 +1,7 @@
 package com.pan.extractor
 
 import com.intellij.lang.injection.InjectedLanguageManager
+import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLanguageInjectionHost
@@ -320,5 +321,45 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
         assertTrue("Vue 模板插值应折叠", descriptors.isNotEmpty())
         assertEquals("占位文本应为翻译值", hint("你好世界"), descriptors.first().placeholderText)
+    }
+
+    /**
+     * 诊断：复刻 I18nFoldToggleInlayProvider.addFoldToggleInlays 的收集逻辑
+     * （在宿主文件顶层 PSI 里 collectElementsOfType 找 JSCallExpression，不含注入片段），
+     * 对比 React .tsx 与 Vue .vue 谁能被该 inlay 逻辑扫到。
+     */
+    fun testDiagnosticInlayTopLevelCoverageVueVsReact() {
+        // React .tsx
+        val tsx = configureFile(
+            "diag/App.tsx",
+            """
+            import {useTranslation} from 'react-i18next';
+            export default function App() {
+                const {t} = useTranslation();
+                return <div>{ t('你好世界') }</div>;
+            }
+            """.trimIndent()
+        )
+        val tsxCalls = PsiTreeUtil.collectElementsOfType(tsx, JSCallExpression::class.java).size
+        val tsxTranslationCalls = PsiTreeUtil.collectElementsOfType(tsx, JSCallExpression::class.java)
+            .count { it.methodExpression?.text?.substringAfterLast('.') in setOf("t", "\${'$'}t", "tc", "\${'$'}tc") }
+        System.out.println("==== DIAG tsx top-level JS calls = $tsxCalls, 其中 t()/\\${'$'}t() = $tsxTranslationCalls")
+
+        // Vue .vue（模板 {{ $t() }} 为注入语言）
+        val vue = configureFile(
+            "diag/App.vue",
+            """
+            <template>
+              <div>{{ ${'$'}t('你好世界') }}</div>
+            </template>
+            """.trimIndent()
+        )
+        val vueCalls = PsiTreeUtil.collectElementsOfType(vue, JSCallExpression::class.java).size
+        val vueTranslationCalls = PsiTreeUtil.collectElementsOfType(vue, JSCallExpression::class.java)
+            .count { it.methodExpression?.text?.substringAfterLast('.') in setOf("t", "\${'$'}t", "tc", "\${'$'}tc") }
+        System.out.println("==== DIAG vue top-level JS calls = $vueCalls, 其中 t()/\\${'$'}t() = $vueTranslationCalls")
+
+        assertTrue("tsx 顶层能扫到翻译调用", tsxTranslationCalls >= 1)
+        System.out.println("==== DIAG 结论: tsx=$tsxTranslationCalls / vue 顶层=$vueTranslationCalls")
     }
 }
