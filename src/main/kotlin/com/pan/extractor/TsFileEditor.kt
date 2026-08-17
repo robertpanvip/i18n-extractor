@@ -320,13 +320,16 @@ object TsFileEditor {
             (keyPart.startsWith("`") && keyPart.endsWith("`"))) {
             return unquoteString(keyPart)
         }
-        // Identifier（支持中文/Unicode 字母裸 key：zh.ts 常见 `中文: '中文'` 这种写法）
+        // Identifier（支持任意语言字母裸 key：中文/日文/法语/德语等，如 `中文: '中文'`、`日本語: '日本語'`）
         if (keyPart.matches(UNICODE_IDENTIFIER_RE)) return keyPart
         return null
     }
 
-    /** 允许 Unicode 字母开头（如中文）的裸 key 标识符。 */
-    private val UNICODE_IDENTIFIER_RE = Regex("""[\p{L}_$][\p{L}\p{N}_$]*""")
+    /**
+     * 允许任意 Unicode 字母开头的裸 key 标识符，续接可为字母/数字/组合变音符(_ 与 $ 均兼容)。
+     * 覆盖中日韩、法语 é/à、德语 ü、俄语、阿拉伯语等，并兼容"基础字母+组合变音"写法。
+     */
+    private val UNICODE_IDENTIFIER_RE = Regex("""[\p{L}_$][\p{L}\p{N}\p{M}_$]*""")
 
     private fun unquoteString(s: String): String {
         if (s.length < 2) return s
