@@ -30,6 +30,30 @@ class TsFileEditorCoreFunctionTest {
     }
 
     @Test
+    fun parseBareChineseKey() {
+        // Bug：zh.ts 常见 `中文: "中文"` 这种不带引号的裸中文 key，应能被解析
+        val map = TsFileEditor.parseObjectLiteralBody("{ 中文: \"中文\", 搜索关键词: '搜索关键词' }")
+        assertEquals("中文", map["中文"])
+        assertEquals("搜索关键词", map["搜索关键词"])
+    }
+
+    @Test
+    fun parseBareNonChineseKeys() {
+        // 任意语言字母裸 key（日语/法语/德语/组合变音）都应被解析，不限中文
+        val map = TsFileEditor.parseObjectLiteralBody(
+            "{ こんにちは: 'こんにちは', 日本語: '日本語', café: 'café', über: 'über', grüß: 'grüß' }"
+        )
+        assertEquals("こんにちは", map["こんにちは"])
+        assertEquals("日本語", map["日本語"])
+        assertEquals("café", map["café"])
+        assertEquals("über", map["über"])
+        assertEquals("grüß", map["grüß"])
+        // 兼容"基础字母+组合变音"（decomposed accent：cafe + U+0301）
+        val decomposed = TsFileEditor.parseObjectLiteralBody("{ cafe\u0301: 'x' }")
+        assertEquals("x", decomposed["cafe\u0301"])
+    }
+
+    @Test
     fun parseNestedObject() {
         val map = TsFileEditor.parseObjectLiteralBody("{ outer: { inner: 'deep' } }")
         val nested = map["outer"] as Map<*, *>

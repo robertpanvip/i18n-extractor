@@ -259,6 +259,48 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * 复现：因子化合并后产物为骨架 key + 嵌套差异调用，如
+     *   zh.ts: {'请输入{N0}': '请输入', '搜索关键词': '搜索关键词'}
+     *   Vue:   {{ ${'$'}t('请输入{N0}', { N0: ${'$'}t('搜索关键词') }) }}
+     * 期望折叠后能看到完整文案「请输入搜索关键词」。
+     */
+    fun testFoldVueSkeletonWithNestedDiff() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+              '请输入{N0}': '请输入{N0}',
+              '搜索关键词': '搜索关键词',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/App.vue",
+                """
+                <template>
+                  <div>{{ ${'$'}t('请输入{N0}', { N0: ${'$'}t('搜索关键词') }) }}</div>
+                </template>
+                """.trimIndent()
+            )
+            val inj = InjectedLanguageManager.getInstance(project)
+            val host = PsiTreeUtil.collectElementsOfType(
+                file, PsiLanguageInjectionHost::class.java
+            ).firstOrNull { it.text.contains("${'$'}t") }!!
+            val injected = inj.getInjectedPsiFiles(host)!!.first().first
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+            // 期望外层骨架折叠后看到「完整文案」请输入搜索关键词
+            val outer = descriptors.firstOrNull { it.placeholderText?.contains("请输入") == true }
+            System.out.println("==== REPRO fold placeholders = ${descriptors.map { it.placeholderText }}")
+            assertEquals("骨架调用应折叠且占位为完整文案", hint("请输入搜索关键词"), outer?.placeholderText)
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
     fun testFoldVueTemplateInterpolation() {
         val file = configureFile(
             "src/App.vue",
