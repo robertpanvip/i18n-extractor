@@ -69,6 +69,7 @@ class I18nExtractorAction : AnAction() {
         project: com.intellij.openapi.project.Project,
         dialog: ExtractedStringsDialog,
         finalFlatJson: Map<String, String>,
+        dropExistingKeys: Set<String> = emptySet(),
     ): OutputResult {
         val prettyGson = com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
         val mode = dialog.outputMode
@@ -79,12 +80,12 @@ class I18nExtractorAction : AnAction() {
             val ext = entryVf.extension?.lowercase()
             val writes: List<Pair<VirtualFile, String>>? = try {
                 when (ext) {
-                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                    "json" -> Util.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     "ts", "tsx", "js", "jsx" -> {
                         // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
-                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson)
+                        val spread = Util.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
                         if (spread != null) spread
-                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson)?.let { listOf(entryVf to it) }
+                        else Util.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
                     }
                     else -> null
                 }
@@ -268,23 +269,25 @@ class I18nExtractorAction : AnAction() {
                                 WriteCommandAction.runWriteCommandAction(project, r)
                             }
                         }
-                        val finalJson: Map<String, String> =
-                            if (hasMerge) {
-                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                                MergeApplier.apply(
-                                    processors = listOf(processor),
-                                    extracted = allStrings,
-                                    mergePlan = mergePlan,
-                                    indicator = indicator,
-                                    edtRunner = edtRunner,
-                                )
-                            } else {
-                                processor.run()
-                                allStrings
-                            }
+                        val finalJson: Map<String, String>
+                        val dropExistingKeys = LinkedHashSet<String>()
+                        if (hasMerge) {
+                            // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
+                            finalJson = MergeApplier.apply(
+                                processors = listOf(processor),
+                                extracted = allStrings,
+                                mergePlan = mergePlan,
+                                indicator = indicator,
+                                edtRunner = edtRunner,
+                                dropExistingKeysOut = dropExistingKeys,
+                            )
+                        } else {
+                            processor.run()
+                            finalJson = allStrings
+                        }
                         ApplicationManager.getApplication().invokeAndWait {
                             WriteCommandAction.runWriteCommandAction(project) {
-                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson))
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson), dropExistingKeys)
                             }
                         }
                         indicator.fraction = 1.0
@@ -399,15 +402,17 @@ class I18nExtractorAction : AnAction() {
                         val mergePlan = dialog.mergePlan
                         val hasMerge =
                             mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
-                        val finalJson: Map<String, String> =
+                        val finalJson: Map<String, String>
+                            val dropExistingKeys = LinkedHashSet<String>()
                             if (hasMerge) {
                                 // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                                MergeApplier.apply(
+                                finalJson = MergeApplier.apply(
                                     processors = processors,
                                     extracted = extracted,
                                     mergePlan = mergePlan,
                                     indicator = indicator,
                                     edtRunner = edtRunner,
+                                    dropExistingKeysOut = dropExistingKeys,
                                 )
                             } else {
                                 for ((idx, processor) in processors.withIndex()) {
@@ -418,13 +423,13 @@ class I18nExtractorAction : AnAction() {
                                     if (indicator.isCanceled) break
                                     edtRunner { processor.run() }
                                 }
-                                extracted
+                                finalJson = extracted
                             }
                         indicator.fraction = 0.9
                         // —— 阶段 2：覆盖入口 / 复制 JSON（需要写锁） ——
                         ApplicationManager.getApplication().invokeAndWait {
                             WriteCommandAction.runWriteCommandAction(project) {
-                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson))
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson), dropExistingKeys)
                             }
                         }
                         indicator.fraction = 1.0

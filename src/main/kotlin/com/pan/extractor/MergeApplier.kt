@@ -67,6 +67,14 @@ object MergeApplier {
          * 值为 null 时（纯单元测试、或已处于 WCA 内）直接同步执行，行为与旧版一致。
          */
         edtRunner: ((() -> Unit) -> Unit)? = null,
+        /**
+         * 被因子化合并"承载"的原句 key（整句，如 "请输入搜索关键词"）。
+         * 若入口翻译文件（zh.ts）的历史提取里已保留这些整句 key，写回时应一并删除，
+         * 否则会出现"整句 key + 骨架 {N0} key"的重复（Bug：生成的 zh.ts 与原来的 key 重复）。
+         * 与 finalExtracted 里的清理不同：这是面向入口文件已存在的旧 key 的清理。
+         * 为 null 时（纯单元测试）不收集。
+         */
+        dropExistingKeysOut: MutableSet<String>? = null,
     ): MutableMap<String, String> {
         // ① 填 blockedSiteIds：被合并承载的句子不再走普通 $t 单句替换
         //    完全相同文本的提示组（isExactDuplicate）骨架里没有 {N0} 占位，勾选也不做骨架重写，
@@ -181,6 +189,8 @@ object MergeApplier {
         }
         // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的
         val fullyConsumedMessages = messageToSiteIds.filterValues { ids -> ids.isNotEmpty() && ids.all { it in consumedByMerge } }.keys
+        // 供写回入口文件时清理历史整句 key（Bug：zh.ts 整句 key 与骨架 key 重复）
+        dropExistingKeysOut?.addAll(fullyConsumedMessages)
         val iter = finalExtracted.entries.iterator()
         while (iter.hasNext()) {
             val (k, v) = iter.next()
@@ -293,7 +303,10 @@ object MergeApplier {
                 val vDir = proc.isVueDirective(attr?.name ?: "")
                 val prefix = if (jsx || vDir) "" else ":"
                 if (attr != null) {
-                    attr.setValue(if (jsx) "{$callExprText}" else "\"$callExprText\"")
+                    // 非 JSX（Vue 普通/指令属性）：直接写入表达式文本即可，XmlAttributeValue
+                    // 本身会带外层引号。若这里再拼上字面双引号，会被底层转义成 &quot; 而生成
+                    // :placeholder="&quot;$t(...)&quot;"，见 Bug（Vue placeholder 属性因子化）。
+                    attr.setValue(if (jsx) "{$callExprText}" else callExprText)
                     attr.name = "$prefix${attr.name}"
                 }
                 return
