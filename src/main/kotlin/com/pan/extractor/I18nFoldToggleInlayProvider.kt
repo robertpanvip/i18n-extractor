@@ -91,8 +91,11 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
     private fun extractStringValue(text: String): String? {
         if (text.length < 2) return null
         val quote = text[0]
-        if (quote != '\'' && quote != '"') return null
-        return text.substring(1, text.length - 1).takeIf { it.isNotBlank() }
+        if (quote != '\'' && quote != '"' && quote != '`') return null
+        val value = text.substring(1, text.length - 1)
+        // 模板字符串可能含 ${} 插值，这种情况下无法确定 key，忽略
+        if (value.contains("\${")) return null
+        return value.takeIf { it.isNotBlank() }
     }
 }
 

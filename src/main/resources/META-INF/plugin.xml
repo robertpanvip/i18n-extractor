@@ -66,6 +66,11 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
         <lang.foldingBuilder
                 language="VueJS"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <!-- .vue 文件根语言 ID 为 "Vue"；属性绑定与模板表达式（如 :placeholder="$t('x')"）位于此语言，
+             需在此注册才能在真正折叠属性内调用而不是折叠整个标签。 -->
+        <lang.foldingBuilder
+                language="Vue"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
         <editorFactoryListener
                 implementation="com.pan.extractor.I18nFoldToggleInlayProvider"/>
     </extensions>
