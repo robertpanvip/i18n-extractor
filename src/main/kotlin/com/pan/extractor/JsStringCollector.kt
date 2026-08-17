@@ -59,13 +59,9 @@ class JsStringCollector(private val processor: I18nProcessor) {
         var index = 0
 
         // 步骤2：替换所有${任意内容}为占位符，并收集${}内的原始内容
-        // 三分枝占位符策略（以 containingFile + package.json 依赖双判定）：
-        //   Vue    → 资源 {N0} 单括号命名插值，参数对象 { N0: xxx }（标识符 key，避开 vue-i18n 不识别的数字字符串 key）
-        //   React  → 资源 {{0}} 双括号索引插值，参数对象 { "0": xxx }（i18next 原生支持，保持不变）
-        //   Generic（.ts 纯工具、package.json 无 React/Vue 依赖等）→ 兼容旧行为：资源 {0}、参数 { "0": xxx }
-        val containingFile = ele.containingFile
-        val isVue = (containingFile != null && processor.isVueFile(containingFile)) || Util.isVue(ele)
-        val isReact = !isVue && Util.isReact(ele)
+        // 占位符策略由 I18nFramework 决定（Vue {N0} / React {{0}} / Generic {0}），
+        // 框架检测委托 I18nFrameworkRegistry.detect，行为与原 isVue/isReact 判定一致。
+        val fw = I18nFrameworkRegistry.detect(ele)
         val message = templateVarRegex.replace(content) { match ->
             val innerContent = match.groupValues[1].trim()
             // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
@@ -74,20 +70,8 @@ class JsStringCollector(private val processor: I18nProcessor) {
                 return@replace pureString
             }
             val rawIndex = index++
-            val (key, placeholder) = when {
-                isReact -> {
-                    val k = rawIndex.toString()
-                    k to "{{$k}}"
-                }
-                isVue -> {
-                    val k = vuePlaceholderKey(rawIndex)
-                    k to "{$k}"
-                }
-                else -> {
-                    val k = rawIndex.toString()
-                    k to "{$k}"
-                }
-            }
+            val key = fw.paramKey(rawIndex)
+            val placeholder = fw.placeholderFor(rawIndex)
             params[key] = innerContent
             placeholder
         }
@@ -105,7 +89,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
         // 步骤5：预生成 paramsObject
         // - Vue ：标识符 key，无引号（因为 key 形如 N0/N1）
         // - React / Generic ：字符串 key，加引号（因为 key 形如 "0"/"1"）
-        val paramKeyNeedsQuote = !isVue
+        val paramKeyNeedsQuote = fw.paramKeyNeedsQuote
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
@@ -181,29 +165,15 @@ class JsStringCollector(private val processor: I18nProcessor) {
         val content = raw.substring(1, raw.length - 1)
         val params = LinkedHashMap<String, String>()
         var index = 0
-        val containingFile = ele.containingFile
-        val isVue = (containingFile != null && processor.isVueFile(containingFile)) || Util.isVue(ele)
-        val isReact = !isVue && Util.isReact(ele)
+        val fw = I18nFrameworkRegistry.detect(ele)
 
         val message = templateVarRegex.replace(content) { match ->
             val innerContent = match.groupValues[1].trim()
             val pureString = processor.extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
             val rawIndex = index++
-            val (key, placeholder) = when {
-                isReact -> {
-                    val k = rawIndex.toString()
-                    k to "{{$k}}"
-                }
-                isVue -> {
-                    val k = vuePlaceholderKey(rawIndex)
-                    k to "{$k}"
-                }
-                else -> {
-                    val k = rawIndex.toString()
-                    k to "{$k}"
-                }
-            }
+            val key = fw.paramKey(rawIndex)
+            val placeholder = fw.placeholderFor(rawIndex)
             params[key] = innerContent
             placeholder
         }
@@ -212,7 +182,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
         processor.extractedStrings.putIfAbsent(key, message)
 
         // 参数对象：Vue 用标识符 key（无引号）；React/Generic 用字符串 key（加引号）
-        val paramKeyNeedsQuote = !isVue
+        val paramKeyNeedsQuote = fw.paramKeyNeedsQuote
         val paramsObject = params.entries.joinToString(
             prefix = "{ ",
             postfix = " }"
