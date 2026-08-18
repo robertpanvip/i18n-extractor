@@ -131,6 +131,55 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         assertEquals("数组字面量中的三个中文都应被提取", 3, processor.extractedStrings.size)
     }
 
+    /**
+     * P0.6 高危险性正确性：同一函数调用的多个字符串参数必须各自独立包裹，
+     * 绝不能错误合并成 `$t('第一项', '第二项')`（该形态在 vue-i18n/regex 下会被
+     * 当成缺省命名的复数 key，语义完全不同）。对应 BUG_ANALYSIS 4.3。
+     */
+    fun testMultiStringArgsNotMergedIntoSingleCall() {
+        val file = configureFile(
+            "src/nested4.ts",
+            """
+            foo('第一项', '第二项');
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals("两个参数中文都应被提取", 2, processor.extractedStrings.size)
+
+        processor.runWithUndo()
+        val rewritten = file.text
+        assertFalse(
+            "不应把多参合并成单个 \${'$'}t('第一项','第二项')，实际:\n$rewritten",
+            Regex("""\${'$'}t\(\s*['"]第一项['"]\s*,\s*['"]第二项['"]\s*\)""").containsMatchIn(rewritten)
+        )
+        assertTrue(
+            "两个参数应各自独立包裹为 \${'$'}t(...)，实际:\n$rewritten",
+            Regex("""\${'$'}t\(\s*['"]第一项['"]\s*\)""").containsMatchIn(rewritten) &&
+                Regex("""\${'$'}t\(\s*['"]第二项['"]\s*\)""").containsMatchIn(rewritten)
+        )
+    }
+
+    // ── P2: 批量 / 大文件提取 ────────────────────────────────────
+
+    /**
+     * P2 大文件场景（BUG_ANALYSIS section 5）：批量 1000 个中文字符串应全部提取，
+     * 且不得丢项、不得出现重复（extractedStrings 为 key→value 映射，key 唯一且数量精确）。
+     */
+    fun testLargeBatchExtraction() {
+        val count = 1000
+        val sb = StringBuilder()
+        for (i in 0 until count) {
+            sb.append("const s$i = '批量字符串$i';\n")
+        }
+        val file = configureFile("src/large_batch.ts", sb.toString())
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertEquals("批量 $count 个中文字符串应全部提取", count, processor.extractedStrings.size)
+        assertTrue("应含首个字符串", processor.extractedStrings.containsValue("批量字符串0"))
+        assertTrue("应含最后字符串", processor.extractedStrings.containsValue("批量字符串${count - 1}"))
+    }
+
     // ── P0.6: TSX / JSX 场景 ─────────────────────────────────────
 
     fun testTSXAttributeChinese() {
