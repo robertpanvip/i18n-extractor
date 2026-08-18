@@ -23,8 +23,8 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
 
-        webstorm("2026.1") {
-            useInstaller = true
+        intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
+            useInstaller = false
         }
 
         testFramework(TestFrameworkType.Plugin.XML)
