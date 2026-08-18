@@ -8,6 +8,7 @@ import com.intellij.lang.javascript.psi.JSFunction
 import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.psi.PsiComment
@@ -294,13 +295,28 @@ internal object I18nPsiTools {
      * 【Bug A10】排除「同名本地普通函数」的 t/tc 调用。
      * 若引用名 `t`/`tc` 解析到**本文件内**声明的普通函数（function t / function tc），
      * 说明它不是 i18n 翻译函数，其参数里的中文仍应被提取，而不是被当成「已翻译」跳过。
+     *
+     * 除函数声明外，也覆盖“本地只读函数变量”形态：`const t = (s) => s` / `const tc = function(){}`。
+     * 这类 t/tc 同样是本文件内定义的普通函数（JSVariable 的 initializer 是 JSFunction 或箭头函数），
+     * 若被当成 i18n 调用会漏提参数中的中文（PROJECT_ANALYSIS §2 symbol collision / local t VS real i18n）。
      */
     fun isLocalFunctionNamedTCall(call: JSCallExpression): Boolean {
         val method = call.methodExpression as? JSReferenceExpression ?: return false
         val name = method.referenceName
         if (name != "t" && name != "tc") return false
         val resolved = method.resolve() ?: return false
-        return resolved is JSFunction && resolved.containingFile == call.containingFile
+        // 本文件内的函数声明（function t / function tc）
+        if (resolved is JSFunction) return resolved.containingFile == call.containingFile
+        // 本文件内的只读函数变量：const t = () => … / let tc = function(){}
+        if (resolved is JSVariable) {
+            if (resolved.containingFile != call.containingFile) return false
+            val initializer = resolved.initializer ?: return false
+            // initializer 本身是函数 / 箭头函数
+            if (initializer is JSFunction) return true
+            // initializer 是表达式且其内嵌含函数体（如 (x) => x 解析形态）
+            return PsiTreeUtil.findChildOfType(initializer, JSFunction::class.java) != null
+        }
+        return false
     }
 
     /**

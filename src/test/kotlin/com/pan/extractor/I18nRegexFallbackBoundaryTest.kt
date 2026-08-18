@@ -151,4 +151,48 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             p.existingStrings.containsKey("nav.home"))
         assertFalse("i18n 全局链式 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.home"))
     }
+
+    // ── 3.2c symbol collision：本地 const/let 函数变量覆盖同名 t/tc ────
+    // 见 PROJECT_ANALYSIS §2：`const t = fn; t('中文')` 是本文件普通函数变量，
+    // 应被当成普通函数调用，参数中的中文仍应提取（不得漏提），也不能进 existingStrings。
+
+    fun testLocalConstFunctionVarTChineseExtracted() {
+        val p = collectFs(
+            "src/constfnvar.ts",
+            """
+            const t = (s: string) => s.trim();
+            const r = t('本地变量函数中文');
+            """.trimIndent()
+        )
+        assertTrue("const t = …; t('本地变量函数中文') 是普通函数调用，中文应被提取（symbol collision）",
+            p.extractedStrings.containsValue("本地变量函数中文"))
+        assertFalse("本地变量函数 t 不应进 existingStrings", p.existingStrings.containsKey("本地变量函数中文"))
+    }
+
+    fun testLocalLetFunctionVarTcChineseExtracted() {
+        val p = collectFs(
+            "src/letfuncvar.ts",
+            """
+            let tc = function (s: string) { return s; };
+            const r = tc('本地函数变量中文');
+            """.trimIndent()
+        )
+        assertTrue("let tc = function…; tc('本地函数变量中文') 中文应被提取（symbol collision）",
+            p.extractedStrings.containsValue("本地函数变量中文"))
+        assertFalse("本地变量函数 tc 不应进 existingStrings", p.existingStrings.containsKey("本地函数变量中文"))
+    }
+
+    // 反向保证：真实 useI18n 解构的裸 t 仍应判定为已翻译 key，不被上述逻辑误伤
+    fun testDestructuredRealI18nTBareNameStillExisting() {
+        val p = collectFs(
+            "src/usei18nbare.ts",
+            """
+            import { useI18n } from 'vue-i18n';
+            const { t } = useI18n();
+            const msg = t('nav.about');
+            """.trimIndent()
+        )
+        assertTrue("useI18n 解构的裸 t('nav.about') 应仍是 i18n 调用", p.existingStrings.containsKey("nav.about"))
+        assertFalse("解构裸 t 的 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.about"))
+    }
 }

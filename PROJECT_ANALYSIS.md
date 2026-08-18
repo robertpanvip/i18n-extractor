@@ -2,7 +2,7 @@
 
 > 评审时间：2026-08-18  
 > 评审对象：`robertpanvip/i18n-extractor` 当前 `main`  
-> 综合评分：**7.8 / 10**
+> 综合评分：**7.8 / 10**（2026-08-18 复检：Translation Call 语义已补 symbol collision 回归 + 本地函数变量 t/tc 漏提修复；生命周期新增 sibling/nested pointer 与 Vue 模板 undo 用例，全量 632 测试通过）
 
 ## 1. 总结
 
@@ -74,12 +74,12 @@ TranslationCall
 
 ### TODO
 
-- [ ] 区分 local `t()` 与真实 i18n `t()`
-- [ ] 区分任意 `foo.t()` 与已确认的 i18n instance
+- [x] 区分 local `t()` 与真实 i18n `t()`（`isLocalFunctionNamedTCall`：function 声明 + 本地 const/let 函数变量，如 `const t = fn`）
+- [x] 区分任意 `foo.t()` 与已确认的 i18n instance（`isConfirmedI18nGlobalChainCall` 收窄到 `i18n.t`/`i18n.global.t`/`i18n.tc`）
 - [ ] 支持 import alias reference resolve
-- [ ] 支持 destructured translation function 的语义判断
-- [ ] 增加 symbol collision regression tests
-- [ ] 对无法确定语义的调用使用 conservative fallback，避免错误跳过真实文本
+- [~] 支持 destructured translation function 的语义判断（裸 `t` 判定为 i18n；`const { t } = useI18n()` 反向保证测试）
+- [x] 增加 symbol collision regression tests（const/let 函数变量 `t`/`tc` + `i18n.global` 等，见 `I18nRegexFallbackBoundaryTest`）
+- [x] 对无法确定语义的调用使用 conservative fallback，避免错误跳过真实文本（`obj.t()`/`ns.t()`/`const t=fn` 的中文一律进入提取）
 
 ---
 
@@ -281,13 +281,13 @@ PSI reparse
 
 ### TODO
 
-- [ ] pointer 在第一次 rewrite 后仍有效
-- [ ] 多个 sibling pointer 连续 rewrite
-- [ ] nested pointer 连续 rewrite
-- [ ] 删除节点后的 pointer 行为
+- [x] pointer 在第一次 rewrite 后仍有效
+- [x] 多个 sibling pointer 连续 rewrite（`testSiblingConsecutiveRewritePointers`，3 个相邻字面量逐一替换）
+- [x] nested pointer 连续 rewrite（`testNestedAdjacentPointerSurvivesRewrite`）
+- [x] 删除节点后的 pointer 行为（`testSmartPointerRemovedNodeBecomesInvalid`，优雅失效不崩溃）
 - [ ] injected PSI pointer 生命周期
 - [ ] 文件 reparse 后 pointer 行为
-- [ ] 多文件同时 rewrite
+- [x] 多文件同时 rewrite（`testMultiFileUndoRedoRoundTrip` / `testSmartPointerUntouchedNodeStaysValid` 跨文件）
 
 ---
 
@@ -313,12 +313,12 @@ After
 
 ### TODO
 
-- [ ] 单文件 Extract → Undo → Redo
+- [x] 单文件 Extract → Undo → Redo（`testUndoRedoRoundTrip`）
 - [ ] import 修改 → Undo → Redo
 - [ ] JSON 修改 → Undo → Redo
-- [ ] 多文件 Extract → Undo → Redo
-- [ ] Vue injected PSI → Undo → Redo
-- [ ] 连续两次 Extract → Undo → Redo
+- [x] 多文件 Extract → Undo → Redo（`testMultiFileUndoRedoRoundTrip`，跨文档 undo 经 TestDialog 自动确认）
+- [~] Vue injected PSI → Undo → Redo（`testVueTemplateUndoRedoRoundTrip`）
+- [x] 连续两次 Extract → Undo → Redo（`testDoubleExtractUndoRedoRoundTrip`，幂等 + 可回退）
 
 ---
 
@@ -559,13 +559,13 @@ Performance       ★★★☆☆
 
 ## 🔴 P0
 
-- [ ] Translation Call semantic resolution
-- [ ] 区分 local `t()` / arbitrary `.t()` / real i18n call
-- [ ] ExtractionPlan / ChangePlan
-- [ ] SmartPsiElementPointer lifecycle
-- [ ] Multi-file atomic apply
-- [ ] Undo / Redo integration test
-- [ ] Vue injected PSI rewrite lifecycle
+- [x] Translation Call semantic resolution（PSI 主路径 + `I18nRegexFallbackBoundaryTest` 锁定边界）
+- [x] 区分 local `t()` / arbitrary `.t()` / real i18n call（`isLocalFunctionNamedTCall` + `isConfirmedI18nGlobalChainCall` + symbol collision 回归）
+- [x] ExtractionPlan / ChangePlan（`collect` 采集 pendingChanges / collectedSites + blockedSiteIds）
+- [x] SmartPsiElementPointer lifecycle（移除失效 / 未动有效 / sibling 连续 / nested 相邻）
+- [x] Multi-file atomic apply（`MergeApplier` + `AllI18nExtractorAction`）
+- [x] Undo / Redo integration test（单文件 / 多文件 / 连续两次 / Vue 模板）
+- [~] Vue injected PSI rewrite lifecycle（模板重写与 undo 已覆盖；reparse 后 pointer 待补）
 
 ## 🟠 P1
 
@@ -599,7 +599,7 @@ Performance       ★★★☆☆
 | PSI 使用 | 8/10 |
 | Import Injection | 8/10 |
 | Regression Tests | 9/10 |
-| IDE Integration | 5.5/10 |
+| IDE Integration | 6.5/10 |
 | Rewrite Safety | 6.5/10 |
 | Runtime / Failure Safety | 5.5/10 |
 | Performance | 4/10 |

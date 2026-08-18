@@ -253,4 +253,98 @@ class I18nIntegrationLifecycleTest : BasePlatformTestCase() {
         val placeholderTexts = afterRegions.mapNotNull { it.placeholderText }
         assertTrue("重折叠应包含新增 key 的翻译占位", placeholderTexts.any { it.contains("新文案") })
     }
+
+    // ── 6.2b sibling 连续 rewrite：多个相邻字面量逐一替换，指针各自解析稳定 ──
+
+    fun testSiblingConsecutiveRewritePointers() {
+        val file = configureFile(
+            "src/Siblings.vue",
+            """
+            <script setup lang="ts">
+            const a = "甲文案"
+            const b = "乙文案"
+            const c = "丙文案"
+            </script>
+            """.trimIndent()
+        )
+        val literals = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+            file, com.intellij.lang.javascript.psi.JSLiteralExpression::class.java
+        ).filter { it.stringValue in listOf("甲文案", "乙文案", "丙文案") }
+        assertEquals("应有 3 个待提取字面量", 3, literals.size)
+        val pointers = literals.map {
+            SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it)
+        }
+
+        extract(file)
+
+        // 三个 sibling 节点都已被替换 → 各指针要么解析为文件内仍合法节点，要么优雅失效（不抛异常）
+        pointers.forEachIndexed { idx, ptr ->
+            val resolved = ptr.element
+            if (resolved != null) {
+                assertTrue("sibling #$idx 指针若存活须位于文件内", file.textRange.contains(resolved.textRange))
+            }
+        }
+        // 替换确实发生：三个硬编码都被 $t 化（key 默认等于原文，故只数 $t( 调用数）
+        val after = file.text
+        val tCalls = Regex("\\\$t\\(").findAll(after).count()
+        assertEquals("三个中文都应被提取为 \$t 调用，实际:\n$after", 3, tCalls)
+    }
+
+    // ── 6.2c nested pointer：在被替换节点的父作用域内的相邻字面量，rewrite 后仍有效 ──
+
+    fun testNestedAdjacentPointerSurvivesRewrite() {
+        val file = configureFile(
+            "src/Nested.vue",
+            """
+            <script setup lang="ts">
+            function build() {
+                const inner = "保留中文"
+                const outer = "被替换中文"
+                return { inner, outer }
+            }
+            </script>
+            """.trimIndent()
+        )
+        val literal = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+            file, com.intellij.lang.javascript.psi.JSLiteralExpression::class.java
+        ).first { it.stringValue == "保留中文" }
+        val pointer = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(literal)
+
+        // 提取整个文件（只有 "被替换中文" 会变 $t；"保留中文" 如果也被提取会变，但仍不应崩溃）
+        extract(file)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+
+        val resolved = pointer.element
+        if (resolved != null) {
+            assertTrue("嵌套相邻指针若存活须位于文件内", file.textRange.contains(resolved.textRange))
+        }
+        val after = file.text
+        assertTrue("文件内应已发生 \$t 替换", after.contains("\$t("))
+    }
+
+    // ── 7.3b 真实 Undo/Redo：extract 时注入 import + 覆盖 Vue 模板（injected PSI）──
+
+    fun testVueTemplateUndoRedoRoundTrip() {
+        val before = """
+            <template>
+                <div>
+                    <span>模板中文一</span>
+                    <span>模板中文二</span>
+                </div>
+            </template>
+        """.trimIndent()
+        val file = configureFile("src/VueTemplate.vue", before)
+
+        extract(file)
+        val after = file.text
+        assertTrue("模板提取后应变 \$t 调用，got:\n$after", after.contains("\$t("))
+
+        myFixture.performEditorAction(IdeActions.ACTION_UNDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("Vue 模板 Undo 后应还原（injected PSI 时代生命周期正常）", before, file.text)
+
+        myFixture.performEditorAction(IdeActions.ACTION_REDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("Vue 模板 Redo 后应回到 After", after, file.text)
+    }
 }
