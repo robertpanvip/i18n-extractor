@@ -929,26 +929,16 @@ object TsFileEditor {
     //       生成写回该文件所需的"新文本"。
     // 返回：Pair(newText, writtenEntryRange in newText) 或 null（无法解析，回退剪贴板）
     // ==========================================================================
+    // 目标架构 Resource 层：实现体已迁入 com.pan.extractor.resource.TsResourceWriter，
+    // 此处保留为委托门面（签名不变，测试兼容）。
     fun regenerateTsFileWithNewJson(
         project: Project,
         entryVf: VirtualFile,
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet(),
-    ): String? {
-        val psiFile = ApplicationManager.getApplication().runReadAction<PsiFile?> {
-            PsiManager.getInstance(project).findFile(entryVf)
-        }
-        val text = if (psiFile != null) psiFile.text else try {
-            String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
-        } catch (_: Exception) { return null }
-        val info = parseTsExportedObject(text) ?: return null
-        val merged = mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
-        // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
-        // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
-        val oldObjBody = text.substring(info.objectRange.first, info.objectRange.endExclusive)
-        val newObjBody = regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
-        return text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
-    }
+    ): String? = com.pan.extractor.resource.TsResourceWriter.regenerateTsFile(
+        project, entryVf, newFlatJson, dropExistingKeys
+    )
 
     // ==========================================================================
     // JSON 文件：直接解析 + 合并扁平 JSON（点式 key 尝试展开嵌套，冲突以新为准）+ 重新生成
@@ -956,7 +946,11 @@ object TsFileEditor {
     // 边界（P1 §11 Resource Writer）：写回时保持原文件的 UTF-8 BOM 与换行风格（LF / CRLF），
     // 并用 disableHtmlEscaping 保证非 ASCII（中文/emoji）以原文写出而非被转义。
     // ==========================================================================
-    /** 记录原 JSON 文件的编码/换行特征，供写回时保持格式。 */
+    /**
+     * 记录原 JSON 文件的编码/换行特征（实现已迁入 resource.JsonWriter）。
+     * 此处的 data class 保留为类型别名兼容（测试直接引用）；写回逻辑在 JsonWriter 内。
+     */
+    @Deprecated("迁至 com.pan.extractor.resource.JsonWriteFormat")
     data class JsonWriteFormat(
         val bom: Boolean,
         val crlf: Boolean,
@@ -964,77 +958,24 @@ object TsFileEditor {
         val newline: String get() = if (crlf) "\r\n" else "\n"
     }
 
-    internal fun detectJsonWriteFormat(content: String): JsonWriteFormat {
-        val body = if (content.startsWith("\uFEFF")) content.removePrefix("\uFEFF") else content
-        return JsonWriteFormat(bom = content != body, crlf = body.contains("\r\n"))
-    }
+    internal fun detectJsonWriteFormat(content: String): com.pan.extractor.resource.JsonWriteFormat =
+        com.pan.extractor.resource.JsonWriter.detectJsonWriteFormat(content)
 
-    /** 依据格式特征补回换行风格与 UTF-8 BOM。 */
-    private fun applyJsonWriteFormat(jsonText: String, fmt: JsonWriteFormat): String {
-        val nlJson = if (fmt.crlf) jsonText.replace("\n", "\r\n") else jsonText
-        return if (fmt.bom) "\uFEFF$nlJson" else nlJson
-    }
-
+    /** 目标架构 Resource 层：实现体已迁入 com.pan.extractor.resource.JsonWriter，此处委托。 */
     fun regenerateJsonFileWithNewJson(
         entryVf: VirtualFile,
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet(),
-    ): String? {
-        val content = try {
-            String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
-        } catch (_: Exception) { return null }
-        val fmt = detectJsonWriteFormat(content)
-        val body = if (fmt.bom) content.removePrefix("\uFEFF") else content
-        val rootJson: JsonElement = try {
-            JsonParser.parseString(body)
-        } catch (_: Exception) {
-            // JSON 解析失败 → 兜底：把新 JSON 格式化返回（整个文件被新值覆盖）
-            val g = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-            return applyJsonWriteFormat(g.toJson(newFlatJson), fmt)
-        }
-        val existingMap = jsonElementToNestedMap(rootJson)
-        val merged = mergeFlatIntoNested(existingMap, newFlatJson, dropExistingKeys)
-        val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-        return applyJsonWriteFormat(gson.toJson(merged), fmt)
-    }
-
-    private fun jsonElementToNestedMap(el: JsonElement): Map<String, Any?> {
-        if (!el.isJsonObject) return emptyMap()
-        val obj = el.asJsonObject
-        val result = LinkedHashMap<String, Any?>()
-        for ((k, v) in obj.entrySet()) {
-            result[k] = jsonElementToKotlin(v)
-        }
-        return result
-    }
-
-    private fun jsonElementToKotlin(el: JsonElement): Any? {
-        return when {
-            el.isJsonNull -> null
-            el.isJsonPrimitive -> {
-                val p = el.asJsonPrimitive
-                when {
-                    p.isBoolean -> p.asBoolean
-                    p.isNumber -> {
-                        val n = p.asNumber
-                        if (n is Long || n is Int) n.toLong() else n.toDouble()
-                    }
-                    p.isString -> p.asString
-                    else -> p.asString
-                }
-            }
-            el.isJsonObject -> jsonElementToNestedMap(el)
-            el.isJsonArray -> el.asJsonArray.map { jsonElementToKotlin(it) }.toList()
-            else -> null
-        }
-    }
+    ): String? = com.pan.extractor.resource.JsonWriter.regenerateJsonFile(
+        entryVf, newFlatJson, dropExistingKeys
+    )
 
     // ==========================================================================
     // Spread 引用解析：export default { ...common } 中 common 指向同文件 const 或本地 import。
     // 支持：同文件 const 对象、本地 import 的 TS/JS、本地 import 的 JSON（非 node_modules）。
     // 路由规则：新 key 写进 spread 变量指向的文件，入口对象只更新自身已有的 key。
     // ==========================================================================
-    private data class ResolvedSpreadTarget(
+    internal data class ResolvedSpreadTarget(
         val file: VirtualFile,        // 要写入的文件（同文件 const 时 = 入口文件）
         val objRangeInText: IntRange, // 目标对象在 file 文本中的区间（JSON 目标占位 0..-1）
         val existingKeys: Map<String, Any?>,
@@ -1043,13 +984,13 @@ object TsFileEditor {
     )
 
     /** 一个 spread 引用：`...varName`，path 为它被展开所在的容器对象路径（顶层为空列表）。 */
-    private data class SpreadRef(val varName: String, val path: List<String>)
+    internal data class SpreadRef(val varName: String, val path: List<String>)
 
     /**
      * 从对象字面量文本中递归提取 spread 引用（含嵌套对象里的 spread，如 `nav: { ...common }`）。
      * path 记录每个 spread 所在的容器路径，用于把新 key 精确路由到对应目标文件。
      */
-    private fun findSpreadRefs(objBody: String, path: List<String>, depth: Int = 0): List<SpreadRef> {
+    internal fun findSpreadRefs(objBody: String, path: List<String>, depth: Int = 0): List<SpreadRef> {
         // 深度防护：字面嵌套极其罕见会超过此深度，防止病态递归导致栈溢出。
         if (depth > 32) return emptyList()
         val result = mutableListOf<SpreadRef>()
@@ -1074,27 +1015,27 @@ object TsFileEditor {
     }
 
     /** 判断 key 是否位于 path 容器之下（path 为空 → 恒 true）。 */
-    private fun isUnder(path: List<String>, key: String): Boolean {
+    internal fun isUnder(path: List<String>, key: String): Boolean {
         if (path.isEmpty()) return true
         val prefix = path.joinToString(".")
         return key == prefix || key.startsWith("$prefix.")
     }
 
     /** 把 key 转成相对 path 容器下的相对 key；key 不在 path 容器下则返回 null。 */
-    private fun relativeKey(path: List<String>, key: String): String? {
+    internal fun relativeKey(path: List<String>, key: String): String? {
         if (path.isEmpty()) return key
         val prefix = path.joinToString(".")
         return if (key.startsWith("$prefix.")) key.removePrefix("$prefix.") else null
     }
 
     /** 把容器路径 + 相对 key 拼成入口扁平 key。 */
-    private fun joinPath(path: List<String>, k: String): String {
+    internal fun joinPath(path: List<String>, k: String): String {
         return if (path.isEmpty()) k else path.joinToString(".") + "." + k
     }
 
 
     /** 解析一个 spread 变量指向的目标对象。 */
-    private fun resolveSpreadTarget(
+    internal fun resolveSpreadTarget(
         project: Project,
         entryVf: VirtualFile,
         entryText: String,
@@ -1143,7 +1084,7 @@ object TsFileEditor {
         return when (targetVf.extension?.lowercase()) {
             "json" -> {
                 val root = try { JsonParser.parseString(targetText) } catch (_: Exception) { return null }
-                val existing = jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))
+                val existing = com.pan.extractor.resource.JsonWriter.jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))
                 ResolvedSpreadTarget(targetVf, 0 until 0, existing, "json", readOnly)
             }
             else -> {
@@ -1218,14 +1159,14 @@ object TsFileEditor {
     }
 
     /** 计算某个对象区间在给定文本中的新文本（基于合并后的扁平 key）。 */
-    private fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>, dropExistingKeys: Set<String> = emptySet()): String {
+    internal fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>, dropExistingKeys: Set<String> = emptySet()): String {
         val merged = mergeFlatIntoNested(existing, newFlat, dropExistingKeys)
         val oldObjBody = text.substring(objRange.first, objRange.endExclusive)
         return regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
     }
 
     /** 对同一文本应用多处区间替换（按区间从后往前，避免偏移漂移）。 */
-    private fun applyRangeReplacements(text: String, replacements: List<Pair<IntRange, String>>): String {
+    internal fun applyRangeReplacements(text: String, replacements: List<Pair<IntRange, String>>): String {
         var result = text
         for ((range, newText) in replacements.sortedByDescending { it.first.last }) {
             result = result.substring(0, range.first) + newText + result.substring(range.endExclusive)
@@ -1238,102 +1179,24 @@ object TsFileEditor {
      * 返回要写盘的 (VirtualFile, newText) 列表；返回 null 表示未处理（无 spread 或无可解析目标），
      * 调用方应回退到 regenerateTsFileWithNewJson。
      */
+    // 目标架构 Resource 层：实现体已迁入 com.pan.extractor.resource.TsResourceWriter，此处委托。
     fun regenerateTsFileWithSpreadRouting(
         project: Project,
         entryVf: VirtualFile,
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet()
-    ): List<Pair<VirtualFile, String>>? {
-        val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
-        val entryInfo = parseTsExportedObject(entryText) ?: return null
-        val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.endExclusive)
-        val spreadRefs = findSpreadRefs(entryObjBody, emptyList())
-        if (spreadRefs.isEmpty()) return null
-        val entryKeys = entryInfo.staticKV.keys.toSet()
-
-        // 解析每个 spread 引用指向的目标（含 node_modules 只读识别）。
-        // 共享 visited 集合防止 const 相互 spread 造成重复解析/循环依赖。
-        val visited = HashSet<String>()
-        val resolved = spreadRefs.mapNotNull { ref ->
-            resolveSpreadTarget(project, entryVf, entryText, ref.varName, ref.path, visited)?.let { ref to it }
-        }
-        if (resolved.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
-        // 所有目标已识别的 key（按各自容器路径展开成入口扁平 key），用于避免重复写入
-        val covered = resolved.flatMap { (ref, target) ->
-            target.existingKeys.keys.map { joinPath(ref.path, it) }
-        }.toSet()
-        val writableResolved = resolved.filter { !it.second.readOnly }
-
-        // 只有只读（node_modules）目标 → 识别内容，真正新增的 key 写入口对象
-        if (writableResolved.isEmpty()) {
-            val entryAll = newFlatJson.filterKeys { it in entryKeys || it !in covered }
-            return listOf(entryVf to applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV, dropExistingKeys)
-            )))
-        }
-
-        // 为每个真正新增的 key 决定去向：优先最深的可写容器 spread 目标，否则入口
-        data class WriteUnit(val target: ResolvedSpreadTarget, val path: List<String>, val relative: MutableMap<String, String>)
-        val targetWrites = linkedMapOf<String, WriteUnit>() // key = 目标文件 path
-        val entryNew = mutableMapOf<String, String>()
-
-        for ((k, v) in newFlatJson) {
-            if (k in entryKeys) { entryNew[k] = v; continue }
-            if (k in covered) continue // 已被某个 spread 提供的 key 覆盖
-            val best = writableResolved
-                .filter { isUnder(it.first.path, k) }
-                .maxByOrNull { it.first.path.size }
-            if (best == null) { entryNew[k] = v; continue }
-            val rel = relativeKey(best.first.path, k) ?: run { entryNew[k] = v; continue }
-            targetWrites.getOrPut(best.second.file.path) { WriteUnit(best.second, best.first.path, linkedMapOf()) }
-                .relative[rel] = v
-        }
-
-        // 组装入口写盘（含同文件 const 目标范围）
-        val entryReplacements = mutableListOf<Pair<IntRange, String>>(entryInfo.objectRange to
-                newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV, dropExistingKeys))
-        val separateWrites = mutableListOf<Pair<VirtualFile, String>>()
-        for ((_, unit) in targetWrites) {
-            val target = unit.target
-            // 入口扁平 drop key → 该容器下的相对 key（best-effort；历史整句 key 通常在入口对象里）
-            val relativeDrop = dropExistingKeys.mapNotNull { relativeKey(unit.path, it) }.toSet()
-            when (target.kind) {
-                "json" -> {
-                    val newTarget = regenerateJsonFileWithNewJson(target.file, unit.relative, relativeDrop) ?: return null
-                    separateWrites.add(target.file to newTarget)
-                }
-                "ts" -> {
-                    val targetText = Util.readVirtualFileText(project, target.file) ?: return null
-                    val newTarget = applyRangeReplacements(targetText, listOf(
-                        target.objRangeInText to newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
-                    ))
-                    separateWrites.add(target.file to newTarget)
-                }
-                else -> { // const：与入口同文件，合并进同一文本替换
-                    entryReplacements.add(
-                        target.objRangeInText to newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
-                    )
-                }
-            }
-        }
-        val entryCombined = applyRangeReplacements(entryText, entryReplacements)
-        return listOf(entryVf to entryCombined) + separateWrites
-    }
+    ): List<Pair<VirtualFile, String>>? = com.pan.extractor.resource.TsResourceWriter.regenerateTsFileWithSpreadRouting(
+        project, entryVf, newFlatJson, dropExistingKeys
+    )
 
     // ==========================================================================
     // 把 VirtualFile 内容替换为新文本（Write 安全封装）。
     // 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
     // 返回是否写入成功；newText 若以 \uFEFF 开头则以 UTF-8 BOM 写盘（跨平台保留）。
     // ==========================================================================
-    fun writeVirtualFileText(entryVf: VirtualFile, newText: String): Boolean {
-        return try {
-            val bytes = newText.toByteArray(StandardCharsets.UTF_8)
-            entryVf.setBinaryContent(bytes, 0L, bytes.size.toLong(), null)
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
+    // 目标架构 Resource 层：实现体已迁入 com.pan.extractor.resource.TsResourceWriter，此处委托。
+    fun writeVirtualFileText(entryVf: VirtualFile, newText: String): Boolean =
+        com.pan.extractor.resource.TsResourceWriter.writeVirtualFileText(entryVf, newText)
 
     /** 把虚拟文件路径作为"候选"持久化，供下次优先命中。 */
     fun persistEntryPathIfNeeded(project: Project, entryVf: VirtualFile) {

@@ -1,4 +1,7 @@
-package com.pan.extractor
+package com.pan.extractor.ui
+
+import com.pan.extractor.*
+import com.pan.extractor.analyzer.*
 
 import com.intellij.lang.ASTNode
 import com.intellij.lang.folding.FoldingBuilderEx

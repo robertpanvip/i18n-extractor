@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.lang.folding.FoldingDescriptor
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.psi.PsiDocumentManager

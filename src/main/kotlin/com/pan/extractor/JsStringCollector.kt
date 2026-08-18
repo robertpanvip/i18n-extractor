@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
@@ -109,10 +111,10 @@ class JsStringCollector(private val processor: I18nProcessor) {
             anchor = ele,
             changes = changes
         ) {
+            // 目标架构 Rewriter 层：JsRewriter 纯文本节点替换（行为与原闭包 1:1）
             val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
             val text = creator(newExprText)
-            val newElement = createStringExpressionNode(text, ele)
-            ele.replace(newElement)
+            com.pan.extractor.rewriter.JsRewriter.rewriteWithStringNode(ele, text)
         }
     }
 
@@ -419,11 +421,8 @@ class JsStringCollector(private val processor: I18nProcessor) {
             anchor = ele,
             changes = changes
         ) {
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(processor.project, newExprText, null, false)
-            if (newExpr != null) {
-                val newElement = newExpr.psi
-                ele.replace(newElement)
-            }
+            // 目标架构 Rewriter 层：JsRewriter 表达式替换（行为与原闭包 1:1）
+            com.pan.extractor.rewriter.JsRewriter.rewriteLiteral(ele, newExprText, processor.project)
         }
     }
 

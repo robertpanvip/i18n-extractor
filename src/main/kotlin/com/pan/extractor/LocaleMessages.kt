@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.google.gson.JsonParser
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.Project
