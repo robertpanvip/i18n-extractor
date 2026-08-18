@@ -24,7 +24,7 @@ dependencies {
         jetbrainsRuntime()
 
         webstorm("2026.1") {
-            useInstaller = false
+            useInstaller = true
         }
 
         testFramework(TestFrameworkType.Plugin.XML)
