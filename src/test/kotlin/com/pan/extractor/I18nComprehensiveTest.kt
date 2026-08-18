@@ -131,6 +131,22 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         assertEquals("数组字面量中的三个中文都应被提取", 3, processor.extractedStrings.size)
     }
 
+    /* P0.6 nested：箭头函数体表达式（BUG_ANALYSIS 4.2 点名 `items.map(item => "你好")`）。 */
+    fun testArrowBodyStringInMap() {
+        val file = configureFile(
+            "src/nested5.ts",
+            """
+            const labels = items.map(item => '项目' + item.name);
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "箭头函数体中含中文的字符串应被提取",
+            processor.extractedStrings.any { it.value.contains("项目") }
+        )
+    }
+
     /**
      * P0.6 高危险性正确性：同一函数调用的多个字符串参数必须各自独立包裹，
      * 绝不能错误合并成 `$t('第一项', '第二项')`（该形态在 vue-i18n/regex 下会被
