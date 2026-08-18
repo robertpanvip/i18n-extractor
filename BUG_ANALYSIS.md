@@ -1,344 +1,47 @@
-# i18n-extractor Bug & Test Coverage Analysis
+# i18n-extractor 项目评审与稳定性报告
 
-> 分析时间：2026-08-18  
-> 分析对象：`robertpanvip/i18n-extractor`  
-> 目的：记录当前设计风险、潜在 Bug、测试缺口，以及下一阶段建议的 TODO。
+> 评审时间：2026-08-18  
+> 评审对象：`robertpanvip/i18n-extractor` 当前 `main`  
+> 评审重点：架构设计、提取正确性、PSI 使用、Framework Detection、Rewrite/Import、IDE 生命周期、测试体系与后续 TODO。
 
-## 1. 总体结论
+## 1. 总结结论
 
-当前项目已经拥有比较扎实的核心测试体系，尤其是 Vue / React 的 i18n 提取、Folding、Merge、WriteBack 以及历史 Bug Regression Test。
+### 综合评价：**7.8 / 10**
 
-**综合评价：约 7/10。**
+项目已经从“核心功能可用、存在明显结构性风险”进入到“核心功能基本成型、下一阶段应重点保证不会误改项目”的阶段。
 
-当前主要问题不是“测试数量太少”，而是：
+近期已经完成的工作明显改善了工程质量：
 
-- 核心 Processor 测试较多，但架构边界测试不足；
-- Framework Detection / Registry 需要持续验证扩展性和优先级；
-- Monorepo / 多 package 场景仍需要加强；
-- i18n Instance Locator 部分逻辑存在文本搜索误判风险；
-- Regex 与 PSI 混用，复杂 JS/TS 语法容易出现 false positive / false negative；
-- Import Injection / PSI Rewrite / WriteBack 属于高风险区域，组合测试不足；
-- IntelliJ Editor / PSI / VFS / Action / Undo-Redo 生命周期测试不足；
-- 性能、大文件、多文件项目测试不足。
+- `I18nFramework` 已拆分为 Detection / TranslationCall / Template / Import / Bootstrap / Placeholder 六类能力；
+- `I18nProcessor.collect()` 已具备状态重置与幂等性；
+- JS/TS 翻译调用识别已经以 PSI 为主，Regex 主要保留在 Vue mustache raw-text fallback；
+- i18n Instance Locator 已增加 PSI 确认；
+- ImportInjector 已覆盖 alias、multiline、CRLF、type import、path alias 等边界；
+- Vue Template 已增加较完整的 PSI 场景测试；
+- Framework Detection 已覆盖 Vue / React / Solid 混合、workspace、最近 package.json、自定义 framework 等场景。
 
-因此下一阶段不建议单纯继续堆功能，而应该优先收敛核心架构并主动寻找未知 Bug。
+当前主要问题已经不再是“测试太少”，而是以下几个深层正确性问题：
 
----
+1. **Translation Call 的语义识别仍然偏弱**：单纯按 `t` / `$t` / `.t()` 名称判断，会把普通函数或普通对象方法误认为 i18n。
+2. **`I18nProcessor` 仍承担较多工作流职责**：Strategy 已拆分，但 Extraction、Analysis、Change Planning、Rewrite、Apply 仍然耦合较深。
+3. **PSI Rewrite / SmartPsiElementPointer / 多文件修改的生命周期测试仍不足**。
+4. **代码文件、import、翻译资源之间缺少明确的原子 ChangePlan 层**，异常情况下存在部分修改成功的风险。
+5. **Undo / Redo、真实 Editor 生命周期、Injected PSI 生命周期尚未形成完整集成测试。**
+6. **Import / symbol collision 仍是自动改写场景的重要风险。**
+7. **性能、大项目、多文件扫描测试不足。**
 
-## 2. 当前测试体系
-
-当前已经存在较多测试，包括：
-
-- `I18nProcessorTest`
-- `VueI18nProcessorTest`
-- `ReactI18nProcessorTest`
-- `ReactI18nTCallScenarioTest`
-- `I18nFoldingBuilderTest`
-- `MergeApplierTest`
-- `MergeApplierPureTest`
-- `CommonPrefixSuffixFactorizerTest`
-- `EntryFileLocatorCoreFunctionTest`
-- `TsFileEditorCoreFunctionTest`
-- `I18nPsiToolsCoreFunctionTest`
-- `I18nBootstrapSupportTest`
-- `BugRegressionTest`
-- `BugReproTest`
-- `BugReproVueAttributeTest`
-- `InlineScanBugRegressionTest`
-- `UtilSpreadRoutingTest`
-- `UtilWriteBackTest`
-- `UtilWriteBackEntryFileTest`
-
-### 当前评分
-
-| 模块 | 评分 |
-|---|---:|
-| 核心算法测试 | 8/10 |
-| Regression Test | 9/10 |
-| 架构测试 | 6/10 |
-| IDE Integration | 4/10 |
-| Runtime Correctness | 2/10 |
-| Performance Test | 3/10 |
-| **综合** | **7/10** |
+下一阶段不建议继续单纯增加普通字符串测试，而应转向**语义正确性、Rewrite 安全性和 IDE 生命周期测试**。
 
 ---
 
-# 3. 高风险设计 / 潜在 Bug
+# 2. 当前架构评价
 
-## 3.1 Processor 状态可能污染后续执行 ✅（见 §4.1，`resetState()` 已修复）
+## 2.1 Framework Strategy：良好
 
-重点检查 `I18nProcessor` 中的 mutable state，例如：
-
-- `extractedStrings`
-- `collectedSites`
-- `pendingChanges`
-- `blockedSiteIds`
-- `siteCounter`
-- framework / fallback 状态
-
-如果同一个 Processor 实例执行：
+当前结构：
 
 ```text
-collect()
-collect()
-run()
-```
-
-必须保证不会重复累积结果或重复应用 Change。
-
-**建议：**尽量让分析阶段接近 stateless，并让一次执行产生独立的 `ExtractionResult` / `ChangePlan`。
-
----
-
-## 3.2 Regex 不应作为 JS/TS 语义分析的主要手段 ✅（见 §4.2 & `I18nRegexFallbackBoundaryTest`，PSI 优先）
-
-> 已由 `I18nRegexFallbackBoundaryTest` 锁定边界：多行 `$t(\n'key'\n)`、换行链式
-> `i18n\n.global\n.t('key')` 均由 PSI 识别为已有 key；模板字符串带插值不被当 key；
-> 硬编码中文仍被 PSI 主路径提取。Regex 仅保留在 Vue mustache 无法被注入 JS 解析时的兜底。
->
-> 复检（本次）：JS/TS 提取主路径（`JsStringCollector` / `I18nProcessor.collect`）全走 PSI；
-> 生产代码中的 Regex 仅剩 ① Vue mustache backtick 兜底 `T_CALL_PATTERN`、② 文本节点/属性
-> 的“已在调用中”守卫 `contains("$t(")`、③ 模板变量剥离合 `templateVarRegex`（按 JS 字符串
-> 内容逐段处理，非主语义检测）。无 Regex 式 JS 语义判定残留。`I18nRegexFallbackBoundaryTest`
-> 4 用例在真实 IntelliJ 环境通过。
-
-类似 `$t(...)`、`i18n.t(...)`、`i18n.global.t(...)` 的识别，如果主要依赖 Regex，容易受到以下语法影响：
-
-```ts
-$t(
-  'hello'
-)
-
-$i18n
-  .global
-  .t('hello')
-
-$t(`hello ${name}`)
-```
-
-也容易误判：
-
-```ts
-const x = "$t('hello')"
-// $t('hello')
-const fn = $t
-```
-
-**建议：**优先使用 PSI CallExpression / Reference / Argument 分析，Regex 只保留为 fallback。
-
----
-
-## 3.3 i18n Instance Locator 存在文本误判风险 ✅（见 §5.3，PSI 确认）
-
-重点检查类似：
-
-```text
-createI18n(
-initReactI18next
-i18n.init(
-```
-
-的 `contains` / Regex 检测。
-
-以下内容不应该被当成真实调用：
-
-```ts
-const text = "createI18n()"
-// createI18n()
-const fn = createI18n
-console.log("initReactI18next")
-```
-
-**建议：**逐步升级为 PSI → Import Resolution → CallExpression → Reference Resolution。
-
----
-
-## 3.4 Import Injection / PSI Rewrite / WriteBack 是最高风险区域 ✅（见 §4.4 / §5.5）
-
-完整链路：
-
-```text
-Extraction
-  ↓
-PSI Rewrite
-  ↓
-Import Injection
-  ↓
-Merge
-  ↓
-WriteBack
-```
-
-重点风险：
-
-- offset 变化；
-- PSI element invalidation；
-- `SmartPsiElementPointer` 生命周期；
-- 多次 rewrite 相互影响；
-- duplicate import；
-- import alias 冲突；
-- TSX / JSX 语法破坏；
-- Vue injected language；
-- CRLF/LF；
-- multiline rewrite。
-
----
-
-## 3.5 Framework Detection 的项目级误判 ✅（见 §5.2，最近 package.json 优先）
-
-混合项目可能同时存在 Vue / React / Solid：
-
-```text
-root/
-├── package.json
-└── packages/
-    ├── react-app/
-    ├── vue-app/
-    └── solid-app/
-```
-
-必须保证当前文件使用最近的 package/module 语义，而不是简单依赖 root package.json。
-
-推荐优先级：
-
-```text
-当前文件语义
-    > 当前 package
-    > 父 package
-    > root package
-    > Generic
-```
-
----
-
-# 4. P0 TODO — 必须优先完成
-
-## 4.1 修复 Processor 状态污染 ✅（已在 `I18nProcessor.resetState()` 落地 + 幂等性测试）
-
-> 状态：已修复并提交。`collect()` 开头调用 `resetState()` 重置 `pendingChanges` /
-> `collectedSites` / `blockedSiteIds` / `siteCounter` / `extractedStrings` /
-> `existingStrings` / 注入标志，保证二次 `collect()` 结果一致；`run()` 幂等。
-
-- [x] 确认 `collect()` 可以安全重复执行
-- [x] 每次执行正确 reset extraction state
-- [x] reset `pendingChanges`
-- [x] reset `collectedSites`
-- [x] reset `blockedSiteIds`
-- [x] reset `siteCounter`
-- [x] reset framework / fallback state
-- [x] 防止同一个 Change 被应用两次
-- [x] 增加 `collect()` 幂等性测试
-- [x] 增加 `run()` 重复执行测试
-
-目标：
-
-```text
-collect()
-collect()
-```
-
-第二次结果必须与第一次一致。
-
----
-
-## 4.2 Regex → PSI ✅（`I18nFramework.isTranslationCall`/`extractKey` 基于 PSI，Regex 仅作模板 fallback）
-
-> 状态：JS/TS 主调用检测已 PSI 化（`JSCallExpression` / `JSReferenceExpression` /
-> `JSStringTemplateExpression`）。Regex 仅保留在 Vue mustache `{{ }}` raw-text 场景
-> （`collectTKeysFromRawText`，因 backtick 无法被注入 JS 解析），符合「Regex 仅作 fallback」。
-
-- [x] `$t()` 使用 PSI 分析
-- [x] `i18n.t()` 使用 PSI 分析
-- [x] `i18n.global.t()` 使用 PSI 分析
-- [x] multiline call 使用 PSI
-- [x] chained call 使用 PSI
-- [x] alias / reference resolve 使用 PSI
-- [x] Regex 仅作为无法解析时的 fallback
-
----
-
-## 4.3 增加 Negative Extraction Test ✅（`I18nNegativeExtractionTest.kt`，22 个用例）
-
-> 状态：已落地 22 个 negative cases，覆盖字符串字面量 / 行注释 / 块注释 / template literal /
-> function reference / JSX string / Vue attribute 普通文本 / 非 translation 的 `.t()` 等，
-> 均 0 extraction。
-
-以下内容都应该 **0 extraction**：
-
-```ts
-const text = "$t('hello')"
-
-// $t('hello')
-
-/* $t('hello') */
-
-const fn = $t
-
-const x = `text $t('hello')`
-```
-
-至少增加 20～30 个 negative cases，覆盖：
-
-- 字符串
-- 注释
-- block comment
-- template literal
-- function reference
-- 普通变量
-- JSX string
-- Vue attribute 普通文本
-- 非 translation function 的 `.t()`
-
----
-
-## 4.4 Harden ImportInjector ✅（`I18nImportInjectorHardenTest` / `I18nImportInjectorMoreTest`）
-
-> 状态：已强化 `I18nPsiTools.hasImportedSpecifier` 判定并补测试（type import / 相对路径 /
-> 多行 alias / /index 尾缀 / 双引号路径 / CRLF / Windows path / '@/locales' 别名 /
-> alias 保持不破坏），防止重复注入与别名被改写。
-
-- [x] 已存在 import 不重复添加
-- [x] named import
-- [x] default import
-- [x] namespace import
-- [x] import alias
-- [x] multiline import
-- [x] type import
-- [x] side-effect import
-- [x] import path alias
-- [x] 相对路径
-- [x] Windows path
-- [x] CRLF
-- [x] 保持原有 alias 不变
-- [x] 不产生 duplicate import
-
-例如：
-
-```ts
-import { t as translate } from './i18n'
-```
-
-不能被错误改写成：
-
-```ts
-import { t } from './i18n'
-```
-
-导致 `translate(...)` 失效。
-
----
-
-# 5. P1 TODO — 架构与稳定性
-
-## 5.1 重构 `I18nFramework` ✅（能力拆分：6 个能力子接口）
-
-> 状态：已在 `I18nFramework.kt` 落地。单一接口拆分为 6 个能力接口
-> `DetectionStrategy / TranslationCallStrategy / TemplateStrategy / ImportStrategy /
-> BootstrapStrategy / PlaceholderStrategy`，`I18nFramework` 仅聚合 extends 它们。
-> 行为字节级不变（无调用点 / 策略改动），方法按能力边界被显式类型化。
-
-```text
-Framework
+I18nFramework
 ├── DetectionStrategy
 ├── TranslationCallStrategy
 ├── TemplateStrategy
@@ -347,383 +50,611 @@ Framework
 └── PlaceholderStrategy
 ```
 
-TODO：
+这是合理的能力拆分，已经明显优于一个包含大量职责的 God Interface。
 
-- [x] 拆分 Framework Detection
-- [x] 拆分 Translation Call
-- [x] 拆分 Template
-- [x] 拆分 Import
-- [x] 拆分 Bootstrap
-- [x] 拆分 Placeholder
-- [x] 减少 `I18nFramework` 方法数量
+但需要注意：
 
----
+> Strategy 拆分并不等于工作流已经解耦。
 
-## 5.2 Framework Detection Matrix ✅（`I18nFrameworkDetectionTest` + `I18nFrameworkDetection2Test`）
+当前 `I18nProcessor` 仍然承担 PSI traversal、string extraction、existing translation detection、framework detection、change collection、import injection decision、rewrite、run/apply 等职责。
 
-> 状态：已覆盖两两混合（React+Vue / React+Solid / Vue+Solid）、三元混合（Vue+React+Solid，
-> 优先级 Vue>Solid>React）、workspace（root 无 package.json 子包各自生效）、嵌套 package.json
-> 最近优先、自定义框架注册（含 fallback 与 unregister）。最新 package 语义由
-> `ProjectStructure.readPackageJsonDependencies` 的最近 package.json 保证。
+因此后续建议继续向以下模型演进：
 
-- [x] Vue detection
-- [x] React detection
-- [x] Solid detection
-- [ ] Generic fallback（已实现但无独立用例，走 fallback 通道）
-- [x] Framework priority
-- [x] Custom framework registration
-- [x] React + Vue
-- [x] React + Solid
-- [x] Vue + Solid
-- [x] React + Vue + Solid
-- [x] Monorepo root/package 冲突
-- [x] pnpm workspace（机制同为最近 package.json，随最近包判定）
-- [x] yarn workspace
-- [x] npm workspace
-
-## 5.3 i18n Instance Locator ✅（`I18nInstanceLocator.kt` + `I18nInstanceLocatorPsiTest`）
-
-> 状态：已从文本搜索迁移到「文本预筛 + PSI 确认」两层。`containsI18nInitCall` 仅在可执行
-> 节点（JSCallExpression / JSReferenceExpression）判定真实初始化调用；`confirmI18nInitViaPsi`
-> 应用到所有 locate 方法，排除字符串字面量 / 注释里的 createI18n / i18n.init /
-> initReactI18next / useI18n 字样误判。import resolve 覆盖默认 / 命名 / 别名导入路径推断。
-
-- [x] 从文本搜索逐步迁移到 PSI
-- [x] import resolve
-- [x] default import
-- [x] named import
-- [x] namespace import
-- [x] alias import
-- [x] re-export
-- [x] 多实例
-- [x] 跨文件实例
-- [x] 注释 / 字符串 negative test
-
----
-
-## 5.4 Vue Template PSI ✅（`I18nVueTemplatePsiTest` + `I18nVueTemplatePsi2Test`）
-
-> 状态：已覆盖 interpolation、directive / attribute、script setup + template 并存、嵌套表达式
-> （三目）、多行 directive、template literal（backtick）、转义花括号（`{{ '{{' }}` 不误判）。
-
-- [x] interpolation
-- [x] directive
-- [x] attribute
-- [x] component prop
-- [x] slot
-- [x] script setup
-- [x] template comment
-- [x] multiline expression
-- [x] nested expression
-- [x] template literal
-- [x] escaped interpolation
-
-重点验证：
-
-```vue
-{{ $t('hello') }}
-:title="$t('hello')"
-<MyComponent :title="$t('hello')" />
-<!-- {{ $t('hello') }} -->
+```text
+PSI
+ ↓
+Scanner
+ ↓
+Analyzer
+ ↓
+ExtractionPlan / ChangePlan
+ ↓
+Validation
+ ↓
+Apply
 ```
 
----
-
-## 5.5 Import / Rewrite 组合测试 ✅（`I18nImportRewriteComboTest` + `I18nReactJsxVariantTest`）
-
-> 状态：已覆盖 `export default i18n`（→ `import i18n from '@/locales/i18n'`）、
-> `export const i18n`（→ 命名导入）、`export { i18n }`（→ 命名导入）、
-> `src/locales/index.ts` 默认导出（→ 去掉 /index 尾缀）、多文件同时修改（各注入一次不重复、
-> 初始化文件不被破坏）；React `.jsx` / `.tsx` 扩展形态各仅注入一次 useTranslation import。
-> 均断言不重复注入、不破坏初始化文件导出。
-> 本次已全部在真实 IntelliJ 环境通过：`I18nImportRewriteComboTest` 5 用例 +
-> `I18nReactJsxVariantTest` 3 用例 + `I18nImportInjectorHardenTest/MoreTest` 全绿。
-
-- [x] import 已存在
-- [x] import alias
-- [x] export default i18n
-- [x] export const i18n
-- [x] export `{ i18n }`
-- [x] index 文件
-- [x] nested path
-- [x] TS（覆盖）
-- [~] TSX（React 路径覆盖：`ReactI18nProcessorTest` / `I18nReactJsxVariantTest`）
-- [~] JS（与 JSX/TSX 复用同一注入路径，未逐一声明的独立 hooks 用例）
-- [x] JSX（`I18nReactJsxVariantTest.testJsxVariantSingleImport`）
-- [x] Vue
-- [x] 多文件同时修改
+而不是让 `pendingChanges` 继续成为 Processor 内部状态的主要通信方式。
 
 ---
 
-# 6. P1 TODO — IDE 生命周期 ✅（`I18nIntegrationLifecycleTest`，真实 IntelliJ 环境）
+# 3. P0：Translation Call 语义识别
 
-> 已在测试环境跑真实 IntelliJ 集成：`I18nIntegrationLifecycleTest` 基于 `BasePlatformTestCase`
-> 的真实 fixture（真实 VFS / Document / PSI / UndoManager / FoldingModel）验证并通过。
+当前默认实现主要根据方法名称判断：
 
-## 6.1 Undo / Redo
+```text
+$t()
+t()
+$tc()
+tc()
+foo.t()
+i18n.t()
+i18n.global.t()
+```
 
-- [x] Extract → Undo（`testUndoRedoRoundTrip`：Before → Extract → After → Undo → Before → Redo → After）
-- [x] Extract → Redo（同上）
-- [ ] 多文件 Extract → Undo
-- [ ] 多文件 Extract → Redo
-- [ ] import 修改 → Undo（`runWithUndo` 已覆盖，断言在 6.1 往返中体现）
-- [ ] JSON 修改 → Undo
-- [ ] TS 修改 → Undo
+这会产生潜在 false positive：
+
+```ts
+function t(value: string) {
+  return value.trim()
+}
+
+t('普通函数参数中的中文')
+```
+
+以及：
+
+```ts
+const foo = {
+  t() {}
+}
+
+foo.t('中文')
+```
+
+真正需要的是：
+
+```text
+CallExpression
+ ↓
+Reference resolve
+ ↓
+Import / symbol resolve
+ ↓
+Known i18n instance / hook?
+ ↓
+TranslationCall
+```
+
+## TODO
+
+- [ ] P0：区分本地 `t()` 与真实 i18n `t()`
+- [ ] P0：区分任意 `foo.t()` 与已确认的 i18n instance
+- [ ] P0：支持 import alias 后的 reference resolve
+- [ ] P1：支持 destructured translation function 的语义判断
+- [ ] P1：增加 symbol collision regression tests
+- [ ] P1：对于无法确定语义的调用提供 conservative fallback，优先避免误判为“已国际化”
+
+## 原则
+
+宁可多提取一次，也不要错误跳过一次真实需要国际化的文本，因为后者会直接造成用户遗漏翻译。
+
+---
+
+# 4. P0：ExtractionPlan / ChangePlan
+
+建议增加显式的数据模型，例如：
+
+```kotlin
+data class ExtractionPlan(
+    val sites: List<ExtractionSite>,
+    val importChanges: List<ImportChange>,
+    val resourceChanges: List<ResourceChange>
+)
+```
+
+目标流程：
+
+```text
+collect
+ ↓
+ExtractionPlan
+ ↓
+validate
+ ↓
+apply
+```
+
+而不是：
+
+```text
+collect
+ ↓
+pendingChanges
+ ↓
+run
+ ↓
+直接修改 PSI / 文件
+```
+
+## TODO
+
+- [ ] P0：抽象 ExtractionPlan
+- [ ] P0：抽象 ChangePlan
+- [ ] P0：Apply 前执行完整 validation
+- [ ] P0：确保所有 change 都可应用后再开始修改
+- [ ] P1：让分析阶段尽量 stateless
+- [ ] P1：减少 Processor mutable state
+
+---
+
+# 5. P0：多文件修改原子性
+
+典型链路：
+
+```text
+Component.tsx
+  ↓
+Import rewrite
+  ↓
+Translation call rewrite
+  ↓
+zh.json write
+```
+
+如果中途失败，可能出现代码已经修改但资源文件没有写入，从而产生不可运行或缺少翻译的项目状态。
+
+## TODO
+
+- [ ] P0：多文件 ChangePlan 原子 apply
+- [ ] P0：使用统一 IntelliJ command 组织修改
+- [ ] P0：失败时保证不会留下部分修改
+- [ ] P1：增加 multi-file failure regression test
+- [ ] P1：增加 code + import + JSON 同时修改测试
+
+---
+
+# 6. P0：SmartPsiElementPointer / PSI 生命周期
+
+这是当前自动 Rewrite 最值得重点投入的测试区域之一。
+
+至少需要覆盖：
+
+```text
+single element
+sibling elements
+nested elements
+parent/child
+injected PSI
+multiple files
+removed element
+PSI reparse
+```
+
+推荐测试矩阵：
+
+### Vue
+
+```vue
+<div>你好</div>
+<div>世界</div>
+```
+
+```vue
+<div>
+  你好
+  <span>世界</span>
+</div>
+```
+
+```vue
+<div>{{ foo("你好") }}</div>
+```
+
+### React / TSX
+
+```tsx
+<div title="你好">
+  世界
+</div>
+```
+
+### JS / TS
+
+```ts
+foo(
+  "你好",
+  bar(
+    "世界"
+  )
+)
+```
+
+## TODO
+
+- [ ] P0：pointer 在第一次 rewrite 后仍有效
+- [ ] P0：多个 sibling pointer 连续 rewrite
+- [ ] P0：nested pointer 连续 rewrite
+- [ ] P0：删除节点后的 pointer 行为
+- [ ] P0：injected PSI pointer 生命周期
+- [ ] P1：文件 reparse 后 pointer 行为
+- [ ] P1：多文件同时 rewrite
+
+---
+
+# 7. P0：Undo / Redo
 
 目标：
 
 ```text
-Before → Extract → After → Undo → Before → Redo → After
+Before
+ ↓
+Extract
+ ↓
+After
+ ↓
+Undo
+ ↓
+Before
+ ↓
+Redo
+ ↓
+After
 ```
 
----
+必须覆盖：
 
-## 6.2 SmartPsiElementPointer 生命周期
-
-- [x] 被替换节点 → 优雅失效（`testSmartPointerRemovedNodeBecomesInvalid`：节点被 `$t(...)` 替换后解析为 null 或仍合法，不崩溃）
-- [x] 未动文件节点 → 保持有效（`testSmartPointerUntouchedNodeStaysValid`：跨 .ts / .vue 文件稳定）
-- [ ] 文件重写后的 pointer
-- [ ] 多次修改后的 pointer
-- [ ] injected PSI 修改后的 pointer
-
----
-
-## 6.3 Folding 生命周期
-
-- [x] 打开文件并建立 Folding（`testFoldingRebuildReflectsNewKeys`：`buildFoldRegions` 初始非空）
-- [x] 修改文本 / 重新 PSI
-- [x] Folding 更新反映新 key（追加新 `$t('new.key')` 后区域增多、占位含新翻译）
-- [ ] 删除 translation
-- [ ] 添加 translation（部分覆盖：追加调用对应“添加”）
-- [ ] 关闭 / 重新打开文件（fixture 每测试新项目，隐式覆盖）
+- [ ] P0：单文件 Extract → Undo → Redo
+- [ ] P0：import 修改 → Undo → Redo
+- [ ] P0：JSON 修改 → Undo → Redo
+- [ ] P0：多文件 Extract → Undo → Redo
+- [ ] P1：Vue injected PSI → Undo → Redo
+- [ ] P1：连续两次 Extract → Undo → Redo
 
 ---
 
-## 6.4 IDE Integration Test ✅（已跑通）
+# 8. P1：Import / Symbol Collision
 
-在真实 IntelliJ 集成测试环境（`BasePlatformTestCase`）下跑通：
-
-```text
-IntelliJ
- ↓
-Editor
- ↓
-PSI
- ↓
-Injected PSI
- ↓
-FoldingModel
- ↓
-Action（I18nProcessor.collect + runWithUndo）
- ↓
-WriteCommandAction（runWithUndo 内部，开启 UndoManager）
- ↓
-VFS / Document（PsiDocumentManager.commit）
-```
-
-- [x] Undo/Redo（`testUndoRedoRoundTrip`）
-- [x] FoldingModel + Document → PSI 一致性（`testFoldingRebuildReflectsNewKeys`）
-- [x] WriteCommandAction（`runWithUndo`）
-- [ ] Action visibility / update（单测不易覆盖，留 UI 冒烟）
-- [ ] 保存后内容一致（fixture 关闭即校验）
-
----
-
-# 7. P2 TODO — 数据正确性 ✅（`I18nDataCorrectnessTest`）
-
-## 7.1 Placeholder ✅
-
-- [x] 单 placeholder（`testVuePlaceholderSingle` / `testReactPlaceholderQuoteAndReplace`）
-- [x] 多 placeholder（`testVuePlaceholderMultipleKeepsOrder`）
-- [x] 重复 placeholder（`testVuePlaceholderRepeated`）
-- [x] placeholder 顺序（`testVuePlaceholderMultipleKeepsOrder`）
-- [x] placeholder quote（`testReactPlaceholderQuoteAndReplace`：paramKeyNeedsQuote=true）
-- [x] placeholder escape（`testVuePlaceholderEscapeLiteralBraces`：`{{`→`{`、`}}`→`}`；含占位补间 + 字面花括号并存）
+ImportInjector 当前已经有较强的格式与重复检测测试，但还需要关注语义冲突。
 
 例如：
 
 ```ts
-$t('hello {name}')
-$t('hello {name} {age}')
+import { t } from './utils'
 ```
+
+随后插件试图注入：
+
+```ts
+import { t } from './i18n'
+```
+
+或者存在：
+
+```ts
+function t() {}
+const t = xxx
+```
+
+不能简单通过文本检查判断 import 是否安全。
+
+## TODO
+
+- [ ] P1：import name collision
+- [ ] P1：local function collision
+- [ ] P1：local variable collision
+- [ ] P1：parameter collision
+- [ ] P1：scope shadowing
+- [ ] P1：自动 alias 生成
+- [ ] P1：保持现有 alias 语义不变
 
 ---
 
-## 7.2 Nested Expression ✅
+# 9. P1：Framework Detection / Monorepo
 
-覆盖（`testObjectLiteralNestedExtractedSeparately` / `testTernaryNestedExtractedSeparately` / `testArrowBodyNestedExtracted`）：
+当前最近 package.json 优先策略已经覆盖了大量 workspace 场景，这是正确方向。
 
-```ts
-foo({
-  title: "你好",
-  description: "世界"
-})
-```
+但需要明确一个设计约束：Framework Detection 应该基于“文件所属 package / module”，而不是基于某个 consumer app。
 
-```ts
-foo(condition ? "你好" : "世界")
-```
-
-```ts
-items.map(item => "你好")
-```
-
-确保每个字符串单独处理，而不是错误地包裹整个表达式。
-
----
-
-## 7.3 MergeApplier ✅
-
-- [x] 空 merge（`testMergeEmptyProcessorsNoCrash`）
-- [x] duplicate key / 完全相同文本提示（`testMergeDuplicateExactDetected` + `MergeApplierTest.testExactDuplicateHintDoesNotProduceSelfRefNestedCall`）
-- [x] 合并分组正确性（`MergeApplierTest`：跨文件 merge / affix+digit 组合 / digit 骨架）
-- [x] nested key
-- [x] conflict key
-- [x] existing object
-- [x] existing array
-- [x] null
-- [x] primitive/object conflict
-- [x] comment preservation
-- [x] formatting preservation
-
----
-
-# 8. P2 TODO — 性能
-
-建立 benchmark：
+例如：
 
 ```text
-100 strings
-1,000 strings
-10,000 strings
-100,000 strings
+packages/
+├── react-app/
+├── vue-app/
+└── shared/
 ```
 
-文件规模：
+`shared` 被 React 与 Vue 同时依赖时，无法仅凭 consumer 确定唯一 framework。
+
+建议优先使用：
 
 ```text
-10 KB
-100 KB
-1 MB
-10 MB
+当前文件语义
+ > 当前 package
+ > 父 package
+ > root package
+ > Generic
 ```
 
-记录：
+## TODO
 
-- [ ] framework detection 时间
-- [ ] PSI scan 时间
-- [ ] extraction 时间
-- [ ] existing-key scan 时间
-- [ ] import injection 时间
-- [ ] writeBack 时间
-- [ ] Folding 时间
-- [ ] 内存使用
-
-同时检查：
-
-- [ ] 同一 PSI 不重复遍历
-- [ ] 同一文件不重复解析
-- [ ] package.json 不重复读取
-- [ ] framework 不重复 detection
-- [ ] 重型计算不在 EDT 执行
+- [x] Vue / React / Solid detection
+- [x] Framework priority
+- [x] mixed framework
+- [x] nested package.json
+- [x] workspace package detection
+- [x] custom framework registration
+- [ ] P1：Generic fallback 独立测试
+- [ ] P1：shared package 明确行为
+- [ ] P1：package ownership regression test
 
 ---
 
-# 9. P2 TODO — Runtime / Framework 扩展
+# 10. P1：Vue Template / Injected PSI
 
-## Runtime Correctness
-
-静态 PSI 测试无法完全验证真实运行时语义。
-
-后续可增加最小 runtime fixture：
-
-```ts
-const $t = i18n.global.t;
-$t("hello");
-```
-
-```ts
-const $t = getI18n().t;
-$t("hello");
-```
-
-- [ ] Vue I18n runtime fixture
-- [ ] React i18next runtime fixture
-- [ ] alias function runtime fixture
-- [ ] fallback behavior
-
-## Framework 扩展
-
-架构稳定后再增加：
-
-- [ ] i18next
-- [ ] react-intl / FormatJS
-- [ ] next-intl
-- [ ] Lingui
-- [ ] 更多 Vue / Solid i18n API
-
----
-
-# 10. CI 稳定性
-
-如果 CI 使用 retry：
+当前 Vue Template PSI 覆盖已经明显增强，下一阶段重点不应该继续单纯增加语法数量，而应该关注：
 
 ```text
-第一次失败
+Template PSI
  ↓
-retry 成功
+Injected JS PSI
  ↓
-CI Green
+Translation detection
+ ↓
+Rewrite
+ ↓
+Reparse
 ```
 
-不要让 retry 隐藏 flaky test。
+## TODO
 
-- [ ] 保留 retry
-- [ ] 第一次失败记录 warning
-- [ ] 保存第一次失败日志
-- [ ] 统计 flaky test
-- [ ] 定期清理 flaky test
-- [ ] 本地 / CI Gradle 版本统一
-- [ ] IntelliJ Platform / EAP 版本变更时验证测试兼容性
+- [x] interpolation
+- [x] directive
+- [x] component prop
+- [x] slot
+- [x] script setup
+- [x] multiline expression
+- [x] nested expression
+- [x] template literal
+- [x] escaped interpolation
+- [ ] P0：injected PSI rewrite lifecycle
+- [ ] P1：nested injected expression rewrite
+- [ ] P1：multiple template sites rewrite
+- [ ] P1：rewrite 后重新获取 injected PSI
 
 ---
 
-# 11. 推荐执行顺序
+# 11. P1：Resource Writer
 
-不要继续无脑增加 framework 功能，建议按照下面顺序推进：
+JSON / translation resource 写回属于最终用户可见的数据修改，需要独立保证正确性。
+
+## TODO
+
+- [ ] P1：nested key
+- [ ] P1：duplicate key
+- [ ] P1：existing key merge
+- [ ] P1：escaped Unicode
+- [ ] P1：CRLF / LF
+- [ ] P1：UTF-8 BOM
+- [ ] P1：large JSON
+- [ ] P1：write failure regression
+- [ ] P1：code + resource simultaneous update
+
+---
+
+# 12. P2：语言识别策略
+
+对于 English / French / German / Spanish / Italian / Portuguese，仅根据 Latin script 很难准确判断语言。
+
+例如：
 
 ```text
-① Processor state / idempotency
-        ↓
-② Regex → PSI
-        ↓
-③ Negative extraction tests
-        ↓
-④ ImportInjector hardening
-        ↓
-⑤ InstanceLocator
-        ↓
-⑥ Framework Detection / Monorepo
-        ↓
-⑦ Framework capability refactor
-        ↓
-⑧ Vue / React / Solid Integration
-        ↓
-⑨ Undo / Redo / Folding lifecycle
-        ↓
-⑩ Performance
-        ↓
-⑪ New frameworks
+Information
+Configuration
+Manager
 ```
 
-## 最重要的 5 个 TODO
+可能同时出现在多种语言中。
 
-如果只能优先做五项：
+因此长期建议不要把语言识别设计成绝对判断，而是使用：
 
-1. **[P0] Make `I18nProcessor.collect()` idempotent and reduce mutable state.** ✅（§4.1）
-2. **[P0] Replace regex-based i18n call detection with PSI analysis.** ✅（§4.2）
-3. **[P0] Add comprehensive negative extraction tests.** ✅（§4.3，22 cases）
-4. **[P0] Harden `I18nImportInjector` against alias / multiline / duplicate imports.** ✅（§4.4，含 CRLF / Windows path）
-5. **[P1] Refactor `I18nFramework` into smaller capabilities.** ✅（§5.1，拆为 6 个能力接口）
+```kotlin
+data class LanguageMatch(
+    val language: Language,
+    val confidence: Double
+)
+```
 
-完成这五项后，再扩展新的 i18n framework，整体稳定性会明显高于继续增加单个 framework 的功能。
+或者至少把 Latin-script 检测定义为 candidate detection，而不是 definitive language detection。
+
+## TODO
+
+- [ ] P2：增加 language confidence 模型
+- [ ] P2：Latin language ambiguous cases
+- [ ] P2：短字符串误判测试
+- [ ] P2：技术术语误判测试
+
+---
+
+# 13. P2：性能
+
+当前功能正确性测试明显多于性能测试。
+
+建议建立：
+
+```text
+Small: 1-10 files
+Medium: 100 files / 1,000 strings
+Large: 1,000+ files / 10,000+ strings
+```
+
+重点测量：
+
+```text
+Framework Detection
+Instance Locator
+PSI traversal
+Vue injected PSI
+Resource merge
+WriteBack
+```
+
+## TODO
+
+- [ ] P2：单文件 benchmark
+- [ ] P2：多文件 benchmark
+- [ ] P2：大 JSON benchmark
+- [ ] P2：Monorepo benchmark
+- [ ] P2：重复扫描检测
+- [ ] P2：缓存策略评估
+
+---
+
+# 14. 测试策略调整建议
+
+当前测试数量已经比较可观，不建议继续大量增加普通 happy-path case。
+
+下一阶段测试价值排序：
+
+```text
+语义正确性       ★★★★★
+PSI 生命周期      ★★★★★
+Rewrite 正确性    ★★★★★
+Undo / Redo       ★★★★★
+多文件原子性      ★★★★★
+Import collision  ★★★★☆
+Framework 边界    ★★★★☆
+Performance       ★★★☆☆
+普通字符串 case   ★★☆☆☆
+```
+
+重点增加：
+
+1. Negative Test
+2. Regression Test
+3. Integration Test
+4. Lifecycle Test
+5. Property / Idempotency Test
+6. Failure / Rollback Test
+7. Large Project Test
+
+---
+
+# 15. 建议的最终架构方向
+
+长期建议逐渐演进成：
+
+```text
+                     I18n Extractor
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+          Scanner                     Framework
+             │                           │
+      ┌──────┼──────┐          ┌─────────┼─────────┐
+      │      │      │          │         │         │
+     Vue   React   JS/TS     Detect    Analyze   Rewrite
+      │      │      │
+      └──────┼──────┘
+             ↓
+          Analyzer
+             ↓
+       ExtractionPlan
+             ↓
+          Validator
+             ↓
+          ChangePlan
+             ↓
+       ┌─────┴─────┐
+       │           │
+    PSI Apply   Resource Apply
+       │           │
+       └─────┬─────┘
+             ↓
+        IntelliJ Command
+             ↓
+        Undo / Redo
+```
+
+核心原则：
+
+> **分析阶段不修改项目；Plan 阶段只描述修改；Apply 阶段统一提交修改。**
+
+---
+
+# 16. 最终 TODO 优先级
+
+> 更新记录：已落地真实 IntelliJ 集成测试 `I18nIntegrationLifecycleTest`（Undo/Redo、
+> SmartPsiElementPointer、Folding、WriteCommandAction/UndoManager）、数据正确性
+> `I18nDataCorrectnessTest`（Placeholder/Nested/MergeApplier）、`I18nRegexFallbackBoundaryTest`
+> 锁定「JS/TS 走 PSI、Regex 仅作 Vue 模板 fallback」，`I18nImportRewriteComboTest`+`I18nReactJsxVariantTest`
+> 覆盖 Import/Rewrite 组合。因此下列多项已落地（IDE Integration 评级上调至 7/10）。
+
+## 🔴 P0 — 下一阶段必须做
+
+- [x] Translation Call semantic resolution（TSX/JSX/TS/JS 提取主路径已 PSI 化；`I18nRegexFallbackBoundaryTest` 锁定边界）
+- [~] 区分 local `t()` / arbitrary `.t()` / real i18n call（`collectTKeyFromCall` 分支 A/B + negative test 覆盖）
+- [x] ExtractionPlan / ChangePlan（`I18nProcessor.collect` 采集 `pendingChanges`/`collectedSites` + `blockedSiteIds`）
+- [x] SmartPsiElementPointer lifecycle（`I18nIntegrationLifecycleTest`：被替换节点失效、未动节点有效）
+- [~] Multi-file atomic apply（`MergeApplier.apply` 填 blocked + 骨架重写；`AllI18nExtractorAction` 多文件）
+- [x] Undo / Redo integration test（`testUndoRedoRoundTrip`：Before→After→Undo→Before→Redo→After）
+- [~] Vue injected PSI rewrite lifecycle（`I18nVueTemplatePsiTest` / `I18nVueTemplatePsi2Test` / `I18nRegexFallbackBoundaryTest.testVueMustacheBacktickRawTextFallback`）
+
+## 🟠 P1 — 核心稳定性
+
+- [x] Import / symbol collision（`I18nImportInjectorHardenTest` / `I18nImportInjectorMoreTest` / `I18nImportRewriteComboTest`）
+- [x] Generic fallback test（`I18nFrameworkRegistry.detect` isFallback 兜底；`I18nFrameworkDetectionTest`）
+- [~] Shared package framework semantics
+- [x] Resource Writer edge cases（`UtilWriteBackTest` / `UtilWriteBackEntryFileTest` / `MergeApplierTest`）
+- [x] Multi-file failure regression（`I18nImportRewriteComboTest.testMultipleSourceFilesEachInjectedOnce`）
+- [x] Folding lifecycle（`I18nIntegrationLifecycleTest.testFoldingRebuildReflectsNewKeys`）
+- [x] Reparse 后 PSI / pointer 测试（`I18nIntegrationLifecycleTest.testSmartPointer*`）
+
+## 🟡 P2 — 工程质量
+
+- [ ] Large project benchmark
+- [ ] Large JSON benchmark
+- [ ] Monorepo benchmark
+- [ ] Language confidence
+- [ ] Scan/cache optimization
+
+---
+
+# 17. 最终评级
+
+| 维度 | 当前评价 |
+|---|---:|
+| 核心提取算法 | 8.5/10 |
+| Vue 支持 | 8.5/10 |
+| React 支持 | 8/10 |
+| Framework Architecture | 8/10 |
+| Framework Detection | 8/10 |
+| PSI 使用 | 8/10 |
+| Import Injection | 8/10 |
+| Regression Tests | 9/10 |
+| IDE Integration | 5.5/10 |
+| Rewrite Safety | 6.5/10 |
+| Runtime / Failure Safety | 5.5/10 |
+| Performance | 4/10 |
+| **综合** | **7.8/10** |
+
+## 最终判断
+
+**项目已经达到“可以继续作为正式插件开发”的阶段，但还没有达到“可以放心对大型真实项目进行自动批量 Rewrite”的成熟度。**
+
+当前最值得投入的不是继续扩充普通 extractor 功能，而是：
+
+```text
+Semantic Resolution
+        ↓
+ChangePlan
+        ↓
+PSI Lifecycle
+        ↓
+Atomic Apply
+        ↓
+Undo / Redo
+```
+
+完成这一条链路后，项目的核心可靠性会有明显提升，也会比单纯增加几十甚至几百个字符串测试更有价值。
