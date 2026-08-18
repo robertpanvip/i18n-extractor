@@ -23,16 +23,13 @@ dependencies {
     intellijPlatform {
         jetbrainsRuntime()
 
-        intellijIdeaUltimate("LATEST-EAP-SNAPSHOT") {
+        webstorm("2026.1") {
             useInstaller = false
         }
 
         testFramework(TestFrameworkType.Plugin.XML)
         testFramework(TestFrameworkType.Plugin.JavaScript)
         testFramework(TestFrameworkType.Platform)
-
-        // Add necessary plugin dependencies for compilation here, example:
-        // bundledPlugin("com.intellij.java")
 
         bundledPlugins(
             "JavaScript",
@@ -41,15 +38,7 @@ dependencies {
             "com.intellij.css",
             "org.jetbrains.plugins.sass",
             "org.jetbrains.plugins.less",
-            "HtmlTools",
-            "com.intellij.copyright",
-            "intellij.webpack",
-            "JSIntentionPowerPack",
-            "JavaScriptDebugger",
         )
-
-        platformDependency(Coordinates("com.jetbrains.intellij.platform", "poly-symbols-test-framework"))
-        platformDependency(Coordinates("com.jetbrains.intellij.platform", "lsp-test-framework"))
     }
 
     testImplementation(
