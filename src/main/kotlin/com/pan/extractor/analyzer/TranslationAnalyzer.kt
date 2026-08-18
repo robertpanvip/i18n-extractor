@@ -71,6 +71,21 @@ object TranslationAnalyzer {
         statusOf(call) == TranslationCallStatus.TRANSLATION
 
     /**
+     * 名字是否为翻译函数候选（t / tc / \$t / \$tc）。
+     * 「候选名 + 无法证明」才进入三态 UNKNOWN 保守跳过；非候选名（普通方法调用）即使
+     * 无法证明来源也按普通调用处理，其参数中的中文正常提取。
+     */
+    fun isTranslationCandidateName(call: JSCallExpression): Boolean {
+        val method = call.methodExpression
+        val name = when {
+            method is com.intellij.lang.javascript.psi.JSReferenceExpression -> method.referenceName
+            method != null -> method.text.substringAfterLast('.')
+            else -> null
+        }
+        return name == "t" || name == "tc" || name == "\$t" || name == "\$tc"
+    }
+
+    /**
      * 计算字符串字面量在其外层调用上下文中的位置（用于提取 / 替换策略）。
      *
      * 判定规则：
@@ -89,8 +104,12 @@ object TranslationAnalyzer {
             else -> null
         }
 
-        // 直接参数是 UNKNOWN 调用 → 三态核心：无法证明来源，保守跳过（零误改）
-        if (directCall != null && statusOf(directCall) == TranslationCallStatus.UNKNOWN) {
+        // 直接参数是 UNKNOWN 调用且**名字是翻译候选**（t/tc/\$t/\$tc）→ 三态核心：无法证明来源，
+        // 保守跳过（零误改）。非候选名（console.log / alert / foo 等普通方法调用）即使无法证明
+        // 也按普通调用处理 → 参数中的中文正常进入提取（宁多提不漏提）。
+        if (directCall != null && statusOf(directCall) == TranslationCallStatus.UNKNOWN &&
+            isTranslationCandidateName(directCall)
+        ) {
             return StringContext.INSIDE_UNKNOWN_CALL
         }
         // 直接参数是已证明的翻译调用 → 完全跳过（已有完整 $t('x')）

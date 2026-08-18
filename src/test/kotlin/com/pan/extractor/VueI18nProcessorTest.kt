@@ -1387,6 +1387,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
               </div>
             </template>
             <script setup lang="ts">
+            import { useI18n } from 'vue-i18n'
+            const { t } = useI18n()
             const label = t('保存')
             const ok = i18n.global.t('确认')
             </script>
@@ -1640,6 +1642,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
               </div>
             </template>
             <script setup lang="ts">
+            import { useI18n } from 'vue-i18n'
+            const { tc } = useI18n()
             const x = tc('记录', 1)
             const y = i18n.global.tc('用户', 10)
             </script>

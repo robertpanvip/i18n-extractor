@@ -26,9 +26,7 @@ object MergeApplier {
      * 【P0 多文件原子性】应用前的完整性校验：确认所有将被改写 / 将作为骨架重写目标的
      * site（跨任意数量文件）所指向的 [CollectedSite.replaceRootPointer] 仍然有效。
      *
-     * 任何被选中的合并计划引用的 site 失效（文件已被外部修改 / PSI 失效）时，抛出
-     * [IllegalStateException]，调用方可在**写入任何文件之前**中止整批操作，避免留下
-     * “部分文件已改、其余未改”的半完成状态。
+     * 委托 [com.pan.extractor.validator.ChangeValidator]（目标架构 Validator 层），行为 1:1。
      *
      * @throws IllegalStateException 存在失效站点时抛出，message 列出 FQN 描述。
      */
@@ -36,37 +34,7 @@ object MergeApplier {
     fun validateAllModifiableSites(
         processors: List<I18nProcessor>,
         mergePlan: ExtractedStringsDialog.MergePlan,
-    ) {
-        val invalid = mutableListOf<String>()
-        fun checkSite(ref: SiteRef) {
-            val proc = processors.getOrNull(ref.processorIndex)
-            if (proc == null) {
-                invalid += "${ref.originalMessage}@${ref.containingFile?.name}（processor 索引 ${ref.processorIndex} 缺失）"
-                return
-            }
-            val site = proc.collectedSites.firstOrNull { it.id == ref.siteId }
-            if (site == null) {
-                invalid += "${ref.originalMessage}@${ref.containingFile?.name}（site ${ref.siteId} 缺失）"
-                return
-            }
-            val el = site.replaceRootPointer.element
-            if (el == null || !el.isValid) {
-                invalid += "${ref.originalMessage}@${ref.containingFile?.name}（替换目标已失效）"
-            }
-        }
-        for (g in mergePlan.selectedAffix) {
-            if (g.isExactDuplicate) continue
-            for (v in g.variants) for (ref in v.sites) checkSite(ref)
-        }
-        for (g in mergePlan.selectedDigit) {
-            for (ps in g.perSites) checkSite(ps.site)
-        }
-        if (invalid.isNotEmpty()) {
-            throw IllegalStateException(
-                "有 ${invalid.size} 处待改写站点已失效，操作已中止（未修改任何文件）：\n" + invalid.joinToString("\n")
-            )
-        }
-    }
+    ) = com.pan.extractor.validator.ChangeValidator.validateAllModifiableSites(processors, mergePlan)
 
     // ─────────────────────────────────────────────────────────────
     // 候选生成

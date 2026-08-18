@@ -73,6 +73,8 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
     fun testFoldTAndChainedCall() {
         val descriptors = fold(
             """
+            import { useTranslation } from 'react-i18next';
+            const { t } = useTranslation();
             const a = t('你好世界');
             const b = i18n.t('hello');
             """.trimIndent()

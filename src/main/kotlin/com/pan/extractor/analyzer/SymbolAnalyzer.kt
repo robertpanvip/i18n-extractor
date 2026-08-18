@@ -2,6 +2,7 @@ package com.pan.extractor.analyzer
 
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSExpression
 import com.intellij.lang.javascript.psi.JSFunction
 import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
@@ -271,6 +272,24 @@ object SymbolAnalyzer {
                 return SymbolOrigin.I18N_HOOK_OR_FACTORY
             }
             // 其它函数调用产物（`const i18n = makeI18n()`）→ 无法证明 → UNKNOWN
+            return SymbolOrigin.UNKNOWN
+        }
+
+        // 引用链产物：`const t = getI18n().t` / `const t = useI18n().t` —— initializer 是引用链，
+        // 下钻到最深接收者：若是已知 hook/工厂调用（getI18n()/useI18n()/...），则为翻译函数别名。
+        if (initializer is JSReferenceExpression) {
+            var q: JSExpression? = initializer
+            while (q is JSReferenceExpression) {
+                val receiver = q.qualifier
+                if (receiver is JSCallExpression) {
+                    val calleeName = (receiver.methodExpression as? JSReferenceExpression)?.referenceName
+                    if (calleeName != null && calleeName in I18N_HOOK_OR_FACTORY_NAMES) {
+                        return SymbolOrigin.I18N_HOOK_OR_FACTORY
+                    }
+                }
+                q = receiver as? JSReferenceExpression
+            }
+            // `const t = someObj.t` / `const i18n = otherI18n` 等 → 无法证明 → UNKNOWN
             return SymbolOrigin.UNKNOWN
         }
 
