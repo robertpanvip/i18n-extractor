@@ -83,7 +83,7 @@ TranslationCall
 
 ---
 
-# 3. P0：ExtractionPlan / ChangePlan
+# 3. P0：目标架构 —— Scanner / Analyzer / Planner / Rewriter
 
 当前 Processor 仍然承担较多工作流职责：
 
@@ -103,22 +103,112 @@ rewrite
 apply
 ```
 
-建议逐渐演进成：
+建议后续逐步演进成下面的目标架构。**不要求一次性重构完成，应允许按模块逐步迁移。**
 
 ```text
-PSI
- ↓
-Scanner
- ↓
-Analyzer
+I18nExtractor
+│
+├── Model
+│   ├── ExtractionSite
+│   ├── TranslationCall
+│   ├── ExtractionPlan
+│   ├── RewritePlan
+│   ├── ImportPlan
+│   └── ResourcePlan
+│
+├── Scanner
+│   ├── VueScanner
+│   ├── ReactScanner
+│   └── JsScanner
+│
+├── Analyzer
+│   ├── TranslationAnalyzer
+│   ├── FrameworkAnalyzer
+│   └── StringAnalyzer
+│
+├── Planner
+│   └── ExtractionPlan
+│
+├── Rewriter
+│   ├── VueRewriter
+│   ├── ReactRewriter
+│   └── JsRewriter
+│
+├── ImportManager
+│
+└── ResourceWriter
+```
+
+推荐的数据流：
+
+```text
+                    I18nExtractor
+                          │
+                          ▼
+                      Scanner
+                          │
+                    CandidateSite
+                          │
+                          ▼
+                      Analyzer
+                          │
+                    AnalyzedSite
+                          │
+                          ▼
+                       Planner
+                          │
+                    ExtractionPlan
+                          │
+                 ┌────────┴────────┐
+                 ▼                 ▼
+             Rewriter        ImportManager
+                 │                 │
+                 └────────┬────────┘
+                          ▼
+                    ResourceWriter
+                          │
+                          ▼
+                    IntelliJ Command
+                          │
+                          ▼
+                      Undo / Redo
+```
+
+### 各模块职责
+
+| 模块 | 职责 |
+|---|---|
+| `Model` | 定义模块之间传递的领域模型，不保存不必要的可变 PSI 状态 |
+| `Scanner` | 只负责发现候选 PSI 节点，不负责修改、不负责最终语义判断 |
+| `Analyzer` | 判断节点是否应该提取、属于什么 Framework、是不是 Translation Call、字符串是否有效 |
+| `Planner` | 把分析结果转换为 `ExtractionPlan` / `RewritePlan` / `ImportPlan` / `ResourcePlan` |
+| `Rewriter` | 根据 Plan 修改源码 PSI |
+| `ImportManager` | import 分析、重复检测、symbol collision、alias 和注入 |
+| `ResourceWriter` | 负责 JSON / YAML 等翻译资源的 merge、写回和格式保持 |
+| `I18nExtractor` | 编排完整流程，不直接处理具体 framework 的 PSI 细节 |
+
+### 核心架构原则
+
+> **Scanner 和 Analyzer 不修改 PSI；Planner 不修改 PSI；只有最终 Apply 阶段进入 Write Action。**
+
+这样可以避免把 `I18nProcessor` 继续发展成新的 God Object，也让后续增加 Solid / Svelte / Angular / Generic 等 framework 时不需要继续向 Processor 中堆叠条件分支。
+
+---
+
+# 4. P0：ExtractionPlan / ChangePlan
+
+目标流程：
+
+```text
+collect
  ↓
 ExtractionPlan
  ↓
-Validator
+validate
  ↓
 ChangePlan
  ↓
-Apply
+apply
 ```
 
 例如：
@@ -126,8 +216,9 @@ Apply
 ```kotlin
 data class ExtractionPlan(
     val sites: List<ExtractionSite>,
-    val importChanges: List<ImportChange>,
-    val resourceChanges: List<ResourceChange>
+    val rewrites: List<RewritePlan>,
+    val imports: List<ImportPlan>,
+    val resources: List<ResourcePlan>
 )
 ```
 
@@ -138,14 +229,15 @@ data class ExtractionPlan(
 ### TODO
 
 - [ ] 抽象 ExtractionPlan
-- [ ] 抽象 ChangePlan
+- [ ] 抽象 ChangePlan / RewritePlan
 - [ ] Apply 前完整 validation
 - [ ] 确认所有 change 可应用后再开始修改
 - [ ] 减少 Processor mutable state
+- [ ] 让分析阶段尽量 stateless
 
 ---
 
-# 4. P0：多文件修改原子性
+# 5. P0：多文件修改原子性
 
 典型操作可能同时修改：
 
@@ -170,7 +262,7 @@ zh.json
 
 ---
 
-# 5. P0：SmartPsiElementPointer / PSI 生命周期
+# 6. P0：SmartPsiElementPointer / PSI 生命周期
 
 自动 Rewrite 最值得重点投入的区域之一。
 
@@ -187,43 +279,6 @@ removed element
 PSI reparse
 ```
 
-### Vue
-
-```vue
-<div>你好</div>
-<div>世界</div>
-```
-
-```vue
-<div>
-  你好
-  <span>世界</span>
-</div>
-```
-
-```vue
-<div>{{ foo("你好") }}</div>
-```
-
-### React / TSX
-
-```tsx
-<div title="你好">
-  世界
-</div>
-```
-
-### JS / TS
-
-```ts
-foo(
-  "你好",
-  bar(
-    "世界"
-  )
-)
-```
-
 ### TODO
 
 - [ ] pointer 在第一次 rewrite 后仍有效
@@ -236,7 +291,7 @@ foo(
 
 ---
 
-# 6. P0：Undo / Redo
+# 7. P0：Undo / Redo
 
 必须形成真实 IDE command 生命周期测试：
 
@@ -267,7 +322,7 @@ After
 
 ---
 
-# 7. P1：Import / Symbol Collision
+# 8. P1：Import / Symbol Collision
 
 ImportInjector 已经有较强的格式和重复检测测试，但还需要语义级冲突检测。
 
@@ -304,7 +359,7 @@ const t = xxx
 
 ---
 
-# 8. P1：Framework Detection / Monorepo
+# 9. P1：Framework Detection / Monorepo
 
 当前最近 package.json 优先策略能够覆盖大量 workspace 场景，这是合理的。
 
@@ -347,7 +402,7 @@ packages/
 
 ---
 
-# 9. P1：Vue Template / Injected PSI
+# 10. P1：Vue Template / Injected PSI
 
 当前 Template PSI 覆盖已经明显增强，下一阶段重点应从“增加语法数量”转向生命周期正确性：
 
@@ -381,7 +436,7 @@ Reparse
 
 ---
 
-# 10. P1：Resource Writer
+# 11. P1：Resource Writer
 
 翻译资源属于最终用户可见的数据修改，需要独立保证安全性。
 
@@ -399,7 +454,7 @@ Reparse
 
 ---
 
-# 11. P2：语言识别
+# 12. P2：语言识别
 
 English / French / German / Spanish / Italian / Portuguese 等 Latin script 语言仅根据字符集很难准确区分。
 
@@ -431,7 +486,7 @@ data class LanguageMatch(
 
 ---
 
-# 12. P2：性能
+# 13. P2：性能
 
 建议建立三档 benchmark：
 
@@ -470,7 +525,7 @@ WriteBack
 
 ---
 
-# 13. 测试策略
+# 14. 测试策略
 
 当前测试数量已经比较可观，不建议继续大量增加普通 happy-path case。
 
@@ -497,46 +552,6 @@ Performance       ★★★☆☆
 5. Property / Idempotency Test
 6. Failure / Rollback Test
 7. Large Project Test
-
----
-
-# 14. 推荐目标架构
-
-```text
-                     I18n Extractor
-                           │
-             ┌─────────────┴─────────────┐
-             │                           │
-          Scanner                     Framework
-             │                           │
-      ┌──────┼──────┐          ┌─────────┼─────────┐
-      │      │      │          │         │         │
-     Vue   React   JS/TS     Detect    Analyze   Rewrite
-      │      │      │
-      └──────┼──────┘
-             ↓
-          Analyzer
-             ↓
-       ExtractionPlan
-             ↓
-          Validator
-             ↓
-          ChangePlan
-             ↓
-       ┌─────┴─────┐
-       │           │
-    PSI Apply   Resource Apply
-       │           │
-       └─────┬─────┘
-             ↓
-        IntelliJ Command
-             ↓
-        Undo / Redo
-```
-
-核心原则：
-
-> **分析阶段不修改项目；Plan 阶段只描述修改；Apply 阶段统一提交修改。**
 
 ---
 
