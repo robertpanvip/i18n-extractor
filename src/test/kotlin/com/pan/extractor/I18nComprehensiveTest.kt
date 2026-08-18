@@ -188,23 +188,36 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         processor.collect()
         assertEquals("Vue SFC 中文应被提取", 1, processor.extractedStrings.size)
 
-        // 验证 import 注入：与 production 调用链对齐（CommandProcessor + WriteCommandAction）
-        // 直接 WriteCommandAction 在 EAP 上会抛 IncorrectOperationException，
-        // processor.runWithUndo() 内部已封装好两层；这里手动复刻以验证 injector 单元。
-        com.intellij.openapi.command.CommandProcessor.getInstance().executeCommand(
-            project,
-            {
-                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-                    processor.injector.ensureI18nInstanceImported(file, isVue = true)
-                }
-            },
-            "ImportInjection",
-            null
+        fun injectImport() {
+            // 与 production 调用链对齐（CommandProcessor + WriteCommandAction）。
+            // 直接 WriteCommandAction 在 EAP 上会抛 IncorrectOperationException，
+            // runWithUndo() 内部已封装两层；这里手动复刻以验证 injector 单元。
+            com.intellij.openapi.command.CommandProcessor.getInstance().executeCommand(
+                project,
+                {
+                    com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                        processor.injector.ensureI18nInstanceImported(file, isVue = true)
+                    }
+                },
+                "ImportInjection",
+                null
+            )
+        }
+
+        // 第一次注入：应成功写入 i18n 实例 import
+        injectImport()
+        val textAfterFirst = file.text
+        val importOccurrences = Regex("""from\s+['"]\.\.(/locales|/locales/index)['"]|from\s+['"]@/locales['"]""")
+        assertTrue(
+            "应注入指向 vue-i18n 实例的 import，实际文件:\n$textAfterFirst",
+            importOccurrences.containsMatchIn(textAfterFirst)
         )
-        // 再次 collect 确认幂等性
-        val processor2 = I18nProcessor(project, file)
-        processor2.collect()
-        assertEquals("二次 collect 应幂等（无新增）", 0, processor2.extractedStrings.size)
+
+        // 第二次注入：幂等，不应重复追加 import（仍只有一处）
+        injectImport()
+        val textAfterSecond = file.text
+        val count = importOccurrences.findAll(textAfterSecond).count()
+        assertEquals("重复注入不应追加第二条 import，实际文件:\n$textAfterSecond", 1, count)
     }
 
     fun testWriteBackDoesNotDuplicate() {

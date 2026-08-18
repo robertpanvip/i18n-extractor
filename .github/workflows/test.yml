@@ -35,12 +35,10 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: 9.0.0
 
 
       - name: Run tests
-        run: gradle test --no-daemon --no-configuration-cache --warn
+        run: ./gradlew test --no-daemon --no-configuration-cache --warn
         continue-on-error: true
         id: test_first
 
@@ -48,7 +46,7 @@ jobs:
         if: steps.test_first.outcome == 'failure'
         run: |
           echo "::warning::First test run failed, retrying. This may indicate flaky tests."
-          gradle test --no-daemon --no-configuration-cache --warn
+          ./gradlew test --no-daemon --no-configuration-cache --warn
 
 
       - name: Upload test report
