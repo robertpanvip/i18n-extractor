@@ -72,6 +72,10 @@ tasks {
     test {
         useJUnit()
 
+        // 限制单 worker 堆与并行 fork，避免沙箱/CI 低内存环境 full-suite OOM（SIGKILL 137）。
+        maxHeapSize = "768m"
+        maxParallelForks = 1
+
         testLogging {
             showStandardStreams = true
             events(

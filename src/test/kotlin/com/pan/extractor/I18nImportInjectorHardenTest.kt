@@ -145,6 +145,18 @@ class I18nImportInjectorHardenTest : BasePlatformTestCase() {
         assertTrue("别名 translate 自身也应被视为已存在 t（避免二次注入破坏别名）", hasSpec(decl, "./i18n", "translate"))
     }
 
+    // ── Windows path / import path alias / window 反斜杠路径 ─────────
+
+    fun testAtAliasModulePath() {
+        val decl = onlyImport("import { useI18n } from '@/locales';")
+        assertTrue("@/locales 路径别名应识别 useI18n", hasSpec(decl, "@/locales", "useI18n"))
+    }
+
+    fun testAtAliasWithIndexSuffix() {
+        val decl = onlyImport("import { t } from '@/locales/index';")
+        assertTrue("@/locales/index 路径别名（含 /index 尾缀）应识别 t", hasSpec(decl, "@/locales", "t"))
+    }
+
     private fun hasSpec(decl: ES6ImportDeclaration, module: String, wanted: String): Boolean =
         I18nPsiTools.hasImportedSpecifier(decl, module, wanted)
 }

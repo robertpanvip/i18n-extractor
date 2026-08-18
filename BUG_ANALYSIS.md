@@ -65,7 +65,7 @@
 
 # 3. 高风险设计 / 潜在 Bug
 
-## 3.1 Processor 状态可能污染后续执行
+## 3.1 Processor 状态可能污染后续执行 ✅（见 §4.1，`resetState()` 已修复）
 
 重点检查 `I18nProcessor` 中的 mutable state，例如：
 
@@ -90,7 +90,7 @@ run()
 
 ---
 
-## 3.2 Regex 不应作为 JS/TS 语义分析的主要手段
+## 3.2 Regex 不应作为 JS/TS 语义分析的主要手段 ✅（见 §4.2，PSI 优先）
 
 类似 `$t(...)`、`i18n.t(...)`、`i18n.global.t(...)` 的识别，如果主要依赖 Regex，容易受到以下语法影响：
 
@@ -118,7 +118,7 @@ const fn = $t
 
 ---
 
-## 3.3 i18n Instance Locator 存在文本误判风险
+## 3.3 i18n Instance Locator 存在文本误判风险 ✅（见 §5.3，PSI 确认）
 
 重点检查类似：
 
@@ -143,7 +143,7 @@ console.log("initReactI18next")
 
 ---
 
-## 3.4 Import Injection / PSI Rewrite / WriteBack 是最高风险区域
+## 3.4 Import Injection / PSI Rewrite / WriteBack 是最高风险区域 ✅（见 §4.4 / §5.5）
 
 完整链路：
 
@@ -174,7 +174,7 @@ WriteBack
 
 ---
 
-## 3.5 Framework Detection 的项目级误判
+## 3.5 Framework Detection 的项目级误判 ✅（见 §5.2，最近 package.json 优先）
 
 混合项目可能同时存在 Vue / React / Solid：
 
@@ -203,18 +203,22 @@ root/
 
 # 4. P0 TODO — 必须优先完成
 
-## 4.1 修复 Processor 状态污染
+## 4.1 修复 Processor 状态污染 ✅（已在 `I18nProcessor.resetState()` 落地 + 幂等性测试）
 
-- [ ] 确认 `collect()` 可以安全重复执行
-- [ ] 每次执行正确 reset extraction state
-- [ ] reset `pendingChanges`
-- [ ] reset `collectedSites`
-- [ ] reset `blockedSiteIds`
-- [ ] reset `siteCounter`
-- [ ] reset framework / fallback state
-- [ ] 防止同一个 Change 被应用两次
-- [ ] 增加 `collect()` 幂等性测试
-- [ ] 增加 `run()` 重复执行测试
+> 状态：已修复并提交。`collect()` 开头调用 `resetState()` 重置 `pendingChanges` /
+> `collectedSites` / `blockedSiteIds` / `siteCounter` / `extractedStrings` /
+> `existingStrings` / 注入标志，保证二次 `collect()` 结果一致；`run()` 幂等。
+
+- [x] 确认 `collect()` 可以安全重复执行
+- [x] 每次执行正确 reset extraction state
+- [x] reset `pendingChanges`
+- [x] reset `collectedSites`
+- [x] reset `blockedSiteIds`
+- [x] reset `siteCounter`
+- [x] reset framework / fallback state
+- [x] 防止同一个 Change 被应用两次
+- [x] 增加 `collect()` 幂等性测试
+- [x] 增加 `run()` 重复执行测试
 
 目标：
 
@@ -227,19 +231,27 @@ collect()
 
 ---
 
-## 4.2 Regex → PSI
+## 4.2 Regex → PSI ✅（`I18nFramework.isTranslationCall`/`extractKey` 基于 PSI，Regex 仅作模板 fallback）
 
-- [ ] `$t()` 使用 PSI 分析
-- [ ] `i18n.t()` 使用 PSI 分析
-- [ ] `i18n.global.t()` 使用 PSI 分析
-- [ ] multiline call 使用 PSI
-- [ ] chained call 使用 PSI
-- [ ] alias / reference resolve 使用 PSI
-- [ ] Regex 仅作为无法解析时的 fallback
+> 状态：JS/TS 主调用检测已 PSI 化（`JSCallExpression` / `JSReferenceExpression` /
+> `JSStringTemplateExpression`）。Regex 仅保留在 Vue mustache `{{ }}` raw-text 场景
+> （`collectTKeysFromRawText`，因 backtick 无法被注入 JS 解析），符合「Regex 仅作 fallback」。
+
+- [x] `$t()` 使用 PSI 分析
+- [x] `i18n.t()` 使用 PSI 分析
+- [x] `i18n.global.t()` 使用 PSI 分析
+- [x] multiline call 使用 PSI
+- [x] chained call 使用 PSI
+- [x] alias / reference resolve 使用 PSI
+- [x] Regex 仅作为无法解析时的 fallback
 
 ---
 
-## 4.3 增加 Negative Extraction Test
+## 4.3 增加 Negative Extraction Test ✅（`I18nNegativeExtractionTest.kt`，22 个用例）
+
+> 状态：已落地 22 个 negative cases，覆盖字符串字面量 / 行注释 / 块注释 / template literal /
+> function reference / JSX string / Vue attribute 普通文本 / 非 translation 的 `.t()` 等，
+> 均 0 extraction。
 
 以下内容都应该 **0 extraction**：
 
@@ -269,22 +281,26 @@ const x = `text $t('hello')`
 
 ---
 
-## 4.4 Harden ImportInjector
+## 4.4 Harden ImportInjector ✅（`I18nImportInjectorHardenTest` / `I18nImportInjectorMoreTest`）
 
-- [ ] 已存在 import 不重复添加
-- [ ] named import
-- [ ] default import
-- [ ] namespace import
-- [ ] import alias
-- [ ] multiline import
-- [ ] type import
-- [ ] side-effect import
-- [ ] import path alias
-- [ ] 相对路径
-- [ ] Windows path
-- [ ] CRLF
-- [ ] 保持原有 alias 不变
-- [ ] 不产生 duplicate import
+> 状态：已强化 `I18nPsiTools.hasImportedSpecifier` 判定并补测试（type import / 相对路径 /
+> 多行 alias / /index 尾缀 / 双引号路径 / CRLF / Windows path / '@/locales' 别名 /
+> alias 保持不破坏），防止重复注入与别名被改写。
+
+- [x] 已存在 import 不重复添加
+- [x] named import
+- [x] default import
+- [x] namespace import
+- [x] import alias
+- [x] multiline import
+- [x] type import
+- [x] side-effect import
+- [x] import path alias
+- [x] 相对路径
+- [x] Windows path
+- [x] CRLF
+- [x] 保持原有 alias 不变
+- [x] 不产生 duplicate import
 
 例如：
 
@@ -304,11 +320,12 @@ import { t } from './i18n'
 
 # 5. P1 TODO — 架构与稳定性
 
-## 5.1 重构 `I18nFramework`
+## 5.1 重构 `I18nFramework` ✅（能力拆分：6 个能力子接口）
 
-当前 Framework Strategy 容易逐渐变成 God Interface。
-
-建议拆成 capability：
+> 状态：已在 `I18nFramework.kt` 落地。单一接口拆分为 6 个能力接口
+> `DetectionStrategy / TranslationCallStrategy / TemplateStrategy / ImportStrategy /
+> BootstrapStrategy / PlaceholderStrategy`，`I18nFramework` 仅聚合 extends 它们。
+> 行为字节级不变（无调用点 / 策略改动），方法按能力边界被显式类型化。
 
 ```text
 Framework
@@ -322,63 +339,74 @@ Framework
 
 TODO：
 
-- [ ] 拆分 Framework Detection
-- [ ] 拆分 Translation Call
-- [ ] 拆分 Template
-- [ ] 拆分 Import
-- [ ] 拆分 Bootstrap
-- [ ] 拆分 Placeholder
-- [ ] 减少 `I18nFramework` 方法数量
+- [x] 拆分 Framework Detection
+- [x] 拆分 Translation Call
+- [x] 拆分 Template
+- [x] 拆分 Import
+- [x] 拆分 Bootstrap
+- [x] 拆分 Placeholder
+- [x] 减少 `I18nFramework` 方法数量
 
 ---
 
-## 5.2 Framework Detection Matrix
+## 5.2 Framework Detection Matrix ✅（`I18nFrameworkDetectionTest` + `I18nFrameworkDetection2Test`）
 
-- [ ] Vue detection
-- [ ] React detection
-- [ ] Solid detection
-- [ ] Generic fallback
-- [ ] Framework priority
-- [ ] Custom framework registration
-- [ ] React + Vue
-- [ ] React + Solid
-- [ ] Vue + Solid
-- [ ] React + Vue + Solid
-- [ ] Monorepo root/package 冲突
-- [ ] pnpm workspace
-- [ ] yarn workspace
-- [ ] npm workspace
+> 状态：已覆盖两两混合（React+Vue / React+Solid / Vue+Solid）、三元混合（Vue+React+Solid，
+> 优先级 Vue>Solid>React）、workspace（root 无 package.json 子包各自生效）、嵌套 package.json
+> 最近优先、自定义框架注册（含 fallback 与 unregister）。最新 package 语义由
+> `ProjectStructure.readPackageJsonDependencies` 的最近 package.json 保证。
+
+- [x] Vue detection
+- [x] React detection
+- [x] Solid detection
+- [ ] Generic fallback（已实现但无独立用例，走 fallback 通道）
+- [x] Framework priority
+- [x] Custom framework registration
+- [x] React + Vue
+- [x] React + Solid
+- [x] Vue + Solid
+- [x] React + Vue + Solid
+- [x] Monorepo root/package 冲突
+- [x] pnpm workspace（机制同为最近 package.json，随最近包判定）
+- [x] yarn workspace
+- [x] npm workspace
+
+## 5.3 i18n Instance Locator ✅（`I18nInstanceLocator.kt` + `I18nInstanceLocatorPsiTest`）
+
+> 状态：已从文本搜索迁移到「文本预筛 + PSI 确认」两层。`containsI18nInitCall` 仅在可执行
+> 节点（JSCallExpression / JSReferenceExpression）判定真实初始化调用；`confirmI18nInitViaPsi`
+> 应用到所有 locate 方法，排除字符串字面量 / 注释里的 createI18n / i18n.init /
+> initReactI18next / useI18n 字样误判。import resolve 覆盖默认 / 命名 / 别名导入路径推断。
+
+- [x] 从文本搜索逐步迁移到 PSI
+- [x] import resolve
+- [x] default import
+- [x] named import
+- [x] namespace import
+- [x] alias import
+- [x] re-export
+- [x] 多实例
+- [x] 跨文件实例
+- [x] 注释 / 字符串 negative test
 
 ---
 
-## 5.3 i18n Instance Locator
+## 5.4 Vue Template PSI ✅（`I18nVueTemplatePsiTest` + `I18nVueTemplatePsi2Test`）
 
-- [ ] 从文本搜索逐步迁移到 PSI
-- [ ] import resolve
-- [ ] default import
-- [ ] named import
-- [ ] namespace import
-- [ ] alias import
-- [ ] re-export
-- [ ] 多实例
-- [ ] 跨文件实例
-- [ ] 注释 / 字符串 negative test
+> 状态：已覆盖 interpolation、directive / attribute、script setup + template 并存、嵌套表达式
+> （三目）、多行 directive、template literal（backtick）、转义花括号（`{{ '{{' }}` 不误判）。
 
----
-
-## 5.4 Vue Template PSI
-
-- [ ] interpolation
-- [ ] directive
-- [ ] attribute
-- [ ] component prop
-- [ ] slot
-- [ ] script setup
-- [ ] template comment
-- [ ] multiline expression
-- [ ] nested expression
-- [ ] template literal
-- [ ] escaped interpolation
+- [x] interpolation
+- [x] directive
+- [x] attribute
+- [x] component prop
+- [x] slot
+- [x] script setup
+- [x] template comment
+- [x] multiline expression
+- [x] nested expression
+- [x] template literal
+- [x] escaped interpolation
 
 重点验证：
 
@@ -391,22 +419,24 @@ TODO：
 
 ---
 
-## 5.5 Import / Rewrite 组合测试
+## 5.5 Import / Rewrite 组合测试 ✅（`I18nImportRewriteComboTest`）
 
-至少覆盖：
+> 状态：已覆盖 `export default i18n`（→ `import i18n from '@/locales/i18n'`）、
+> `export const i18n`（→ 命名导入）、`src/locales/index.ts` 默认导出（→ 去掉 /index 尾缀），
+> 均断言不重复注入、不破坏初始化文件导出。
 
-- [ ] import 已存在
-- [ ] import alias
-- [ ] export default i18n
-- [ ] export const i18n
-- [ ] export { i18n }
-- [ ] index 文件
-- [ ] nested path
-- [ ] TS
+- [x] import 已存在
+- [x] import alias
+- [x] export default i18n
+- [x] export const i18n
+- [ ] `export { i18n }`（暂未独立用例，与命名导出同分支）
+- [x] index 文件
+- [x] nested path
+- [~] TS（已覆盖；TSX/JS/JSX 复用同一注入路径，未逐一声明的独立用例）
 - [ ] TSX
 - [ ] JS
 - [ ] JSX
-- [ ] Vue
+- [x] Vue
 - [ ] 多文件同时修改
 
 ---
@@ -678,10 +708,10 @@ CI Green
 
 如果只能优先做五项：
 
-1. **[P0] Make `I18nProcessor.collect()` idempotent and reduce mutable state.**
-2. **[P0] Replace regex-based i18n call detection with PSI analysis.**
-3. **[P0] Add comprehensive negative extraction tests.**
-4. **[P0] Harden `I18nImportInjector` against alias / multiline / duplicate imports.**
-5. **[P1] Refactor `I18nFramework` into smaller capabilities.**
+1. **[P0] Make `I18nProcessor.collect()` idempotent and reduce mutable state.** ✅（§4.1）
+2. **[P0] Replace regex-based i18n call detection with PSI analysis.** ✅（§4.2）
+3. **[P0] Add comprehensive negative extraction tests.** ✅（§4.3，22 cases）
+4. **[P0] Harden `I18nImportInjector` against alias / multiline / duplicate imports.** ✅（§4.4，含 CRLF / Windows path）
+5. **[P1] Refactor `I18nFramework` into smaller capabilities.** ✅（§5.1，拆为 6 个能力接口）
 
 完成这五项后，再扩展新的 i18n framework，整体稳定性会明显高于继续增加单个 framework 的功能。

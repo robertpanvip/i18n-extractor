@@ -638,7 +638,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     fun buildReactI18nInstanceImport(psiFile: PsiElement): String? {
         val containingFile = psiFile.containingFile ?: return null
         val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return null
-        val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(projectRoot) ?: return null
+        val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(projectRoot, containingFile.project) ?: return null
         val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
         return if (I18nInstanceLocator.isVueI18nDefaultExport(initFile)) {
             "import i18n from '$importPath';\n"
@@ -928,7 +928,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
 
         // 尝试从 i18n 工厂文件导入
         val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return
-        val initFile = I18nInstanceLocator.findSolidI18nInstanceFileInRoot(projectRoot)
+        val initFile = I18nInstanceLocator.findSolidI18nInstanceFileInRoot(projectRoot, containingFile.project)
         val importText: String = if (initFile != null) {
             val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return
             // 优先导入 createAppI18n（如果工厂文件导出了它），否则导入默认导出

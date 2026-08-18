@@ -2,8 +2,10 @@ package com.pan.extractor
 
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.util.PsiTreeUtil
 import java.io.File
@@ -35,11 +37,11 @@ object I18nInstanceLocator {
      */
     fun findVueI18nInstanceFile(currentPsiFile: PsiFile): VirtualFile? {
         val projectRoot = ProjectStructure.findProjectRoot(currentPsiFile) ?: return null
-        return findVueI18nInstanceFileInRoot(projectRoot)
+        return findVueI18nInstanceFileInRoot(projectRoot, currentPsiFile.project)
     }
 
     /** [findVueI18nInstanceFile] 的 root 版本：给定项目根，查找调用了 createI18n( 的文件。 */
-    fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+    fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile, project: Project? = null): VirtualFile? {
         val commonDirs = listOf(
             "src/locales",
             "locales",
@@ -55,7 +57,7 @@ object I18nInstanceLocator {
             if (!dir.isDirectory) continue
             val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
                 if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                    if (vfContainsCreateI18n(vf)) vf else null
+                    if (hasRealCreateI18nCall(vf, project)) vf else null
                 } else null
             }
             if (result != null) return result
@@ -65,7 +67,7 @@ object I18nInstanceLocator {
         val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                if (vfContainsCreateI18n(vf)) vf else null
+                if (hasRealCreateI18nCall(vf, project)) vf else null
             } else null
         }
     }
@@ -173,16 +175,36 @@ object I18nInstanceLocator {
     }
 
     /**
-     * 读取 VirtualFile 内容并检测是否包含 createI18n( 调用（忽略注释中的字样）。
+     * 读取 VirtualFile 内容，先做文本级预筛（含注释剥离）提取 createI18n( 字样；
+     * 命中后若 [project] 可用，再用 [containsI18nInitCall] 做 PSI 级确认，
+     * 排除字符串字面量 / 注释里的 createI18n( 字样误判（BUG_ANALYSIS 3.3 / 5.3）。
+     * [project] 为 null 时退回文本级结果（无 PSI 可用）。
      */
-    private fun vfContainsCreateI18n(vf: VirtualFile): Boolean {
+    private fun hasRealCreateI18nCall(vf: VirtualFile, project: Project?): Boolean {
         val text = try {
             String(vf.contentsToByteArray(), Charsets.UTF_8)
         } catch (_: Exception) {
             return false
         }
         val code = stripJsComments(text)
-        return code.contains("createI18n(") || code.contains("createI18n (")
+        if (!code.contains("createI18n(") && !code.contains("createI18n (")) return false
+        if (project == null) return true
+        val psi = PsiManager.getInstance(project).findFile(vf) ?: return true
+        return containsI18nInitCall(psi)
+    }
+
+    /**
+     * 通用 PSI 级确认（BUG_ANALYSIS 5.3）：[textPassed] 为文本级检测结果。
+     * - 文本级未命中 → false；
+     * - 命中且无 [project]（无法获得 PSI）→ 退回文本级结果 true；
+     * - 命中且有 [project] → 加载 PSI 用 [containsI18nInitCall] 复核，排除字符串字面量 /
+     *   注释里的 `createI18n(` / `i18n.init(` / `initReactI18next` / `useI18n(` 等字样误判。
+     */
+    private fun confirmI18nInitViaPsi(project: Project?, vf: VirtualFile, textPassed: Boolean): Boolean {
+        if (!textPassed) return false
+        if (project == null) return true
+        val psi = PsiManager.getInstance(project).findFile(vf) ?: return true
+        return containsI18nInitCall(psi)
     }
 
     /** 判断文本是否是一个 i18n 初始化文件（Vue createI18n / React i18n.init / Solid useI18n 顶层调用），忽略注释中的字样。 */
@@ -199,7 +221,7 @@ object I18nInstanceLocator {
     }
 
     /** 给定项目根，查找初始化了 i18n 的文件（createI18n 或 i18n/i18next.init），Vue 与 React 通用。 */
-    fun findI18nInitFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+    fun findI18nInitFileInRoot(projectRoot: VirtualFile, project: Project? = null): VirtualFile? {
         val commonDirs = listOf(
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
@@ -210,7 +232,7 @@ object I18nInstanceLocator {
             val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
                 if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                     val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                    if (isI18nInitText(t)) vf else null
+                    if (confirmI18nInitViaPsi(project, vf, isI18nInitText(t))) vf else null
                 } else null
             }
             if (result != null) return result
@@ -219,7 +241,7 @@ object I18nInstanceLocator {
         return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                if (isI18nInitText(t)) vf else null
+                if (confirmI18nInitViaPsi(project, vf, isI18nInitText(t))) vf else null
             } else null
         }
     }
@@ -232,7 +254,7 @@ object I18nInstanceLocator {
      * `export { i18n }`）。这样避免混合项目里命中 Vue 的 createI18n 文件，也满足
      * "如果 locale 初始化导出了 i18n 才用它"的语义——未导出 i18n 的初始化文件视为不可用。
      */
-    fun findReactI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+    fun findReactI18nInstanceFileInRoot(projectRoot: VirtualFile, project: Project? = null): VirtualFile? {
         val commonDirs = listOf(
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
@@ -243,7 +265,7 @@ object I18nInstanceLocator {
             val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
                 if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                     val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                    if (isReactI18nInitWithExport(t)) vf else null
+                    if (confirmI18nInitViaPsi(project, vf, isReactI18nInitWithExport(t))) vf else null
                 } else null
             }
             if (result != null) return result
@@ -252,7 +274,7 @@ object I18nInstanceLocator {
         return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                if (isReactI18nInitWithExport(t)) vf else null
+                if (confirmI18nInitViaPsi(project, vf, isReactI18nInitWithExport(t))) vf else null
             } else null
         }
     }
@@ -275,7 +297,7 @@ object I18nInstanceLocator {
      * i18n 工厂（`createAppI18n` / `export const useI18n` / `export function ...I18n`）的文件，
      * 避免误命中 Vue 的 createI18n 或 React 的 i18n.init。
      */
-    fun findSolidI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+    fun findSolidI18nInstanceFileInRoot(projectRoot: VirtualFile, project: Project? = null): VirtualFile? {
         val commonDirs = listOf(
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
@@ -286,7 +308,7 @@ object I18nInstanceLocator {
             val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
                 if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                     val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                    if (isSolidI18nInitWithExport(t)) vf else null
+                    if (confirmI18nInitViaPsi(project, vf, isSolidI18nInitWithExport(t))) vf else null
                 } else null
             }
             if (result != null) return result
@@ -295,7 +317,7 @@ object I18nInstanceLocator {
         return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
                 val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
-                if (isSolidI18nInitWithExport(t)) vf else null
+                if (confirmI18nInitViaPsi(project, vf, isSolidI18nInitWithExport(t))) vf else null
             } else null
         }
     }

@@ -12,26 +12,37 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlText
 
 /**
- * i18n 框架策略接口：把原先散落在 [I18nFoldingBuilder] / [JsStringCollector] /
- * [I18nBootstrapSupport] / [I18nImportInjector] 中的「Vue vs React vs Generic」
- * 框架差异收敛为一份策略对象。
+ * BUG_ANALYSIS 5.1 — I18nFramework 能力拆分。
  *
- * 第 1 步（本文件）只迁移以下耦合点，且行为保持不变：
- *  - 占位符语法（资源占位符 / 参数对象 key / 是否加引号）
- *  - 折叠时的占位符插值（interpolatePlaceholders）
+ * 原 [I18nFramework] 是「单个上帝接口」，方法多且职责混在一起。为避免其继续膨胀，
+ * 按 6 类能力切分为子接口：
  *
- * 以下方法已按现有行为实现，但尚未接入业务点（留给第 2 步切换）：
- *  - [isTranslationCall] / [extractKey]：翻译调用匹配与 key 提取
- *  - [tFunctionName] / [hookImport]：注入函数名与 import 语句
- *  - [bootstrapDeps] / [buildInitFile]：缺依赖时的引导
+ *  - [DetectionStrategy]：框架识别 / 兜底 / 站点形态
+ *  - [PlaceholderStrategy]：占位符语法 / 参数 key / 插值
+ *  - [TranslationCallStrategy]：翻译调用匹配与 key 提取、注入函数名
+ *  - [TemplateStrategy]：模板（mustache）中已有 key 扫描
+ *  - [ImportStrategy]：hook import / 全局 $t 别名注入判定
+ *  - [BootstrapStrategy]：缺依赖引导
  *
- * 新增框架只需实现本接口并在 [I18nFrameworkRegistry] 注册，无需改动各业务点。
+ * [I18nFramework] 只做「聚合」：把这些能力接口全部 extends，因此对所有调用点与
+ * 各策略实现（仍实现 [I18nFramework]）保持字节级行为不变——调用方看到的仍是一个
+ * 策略对象，但能力边界被显式类型化，后续可按单一能力扩展或局部实现。
  */
-interface I18nFramework {
+interface I18nFramework :
+    DetectionStrategy,
+    PlaceholderStrategy,
+    TranslationCallStrategy,
+    TemplateStrategy,
+    ImportStrategy,
+    BootstrapStrategy
+
+/**
+ * 能力 1 — [DetectionStrategy]：框架检测。
+ * 对应原「耦合点 8（matches）+ 兜底（isFallback）+ 站点形态（getSiteForm）」。
+ */
+interface DetectionStrategy {
     /** 策略唯一标识，如 "vue-i18n" / "react-i18next" / "generic"。 */
     val id: String
-
-    // ── 耦合点 8：框架检测（[I18nFrameworkRegistry.detect] 遍历注册表用） ──────
 
     /**
      * 判断 [element] 是否命中本框架（决定检测顺序、参与注册表遍历）。
@@ -44,8 +55,41 @@ interface I18nFramework {
      */
     fun matches(element: PsiElement): Boolean
 
-    // ── 耦合点 3：占位符语法（第 1 步已接入） ──────────────────────────
+    /**
+     * 是否为兜底策略（fallback）。兜底策略不参与 [I18nFrameworkRegistry.detect] 的常规
+     * 匹配扫描，仅在所有非兜底策略都未命中后被返回。[I18nFrameworkRegistry] 保证至少存在
+     * 一个兜底策略（当前为 [GenericStrategy]），且第三方框架注册后不会被兜底遮蔽。
+     */
+    val isFallback: Boolean get() = false
 
+    /**
+     * 判定 [element] 所在站点的「形态」（用于 [I18nProcessor.recordChange] 推导 isVue/isReact）。
+     *
+     * P7 收敛点：原 [I18nProcessor.recordChange] 用 `Util.isVue(anchor) || isVueFile(f)` /
+     * `Util.isReact(anchor)` 二分判定。由于 [I18nFrameworkRegistry.detect] 已基于
+     * `Util.isVue` / `Util.isReact` / `Util.isSolid` 选定策略，策略本身即代表框架归属，
+     * 此方法只需返回框架级常量（O(1)，无 PSI 遍历），即可 1:1 还原原 isVue/isReact 结果。
+     *
+     * 默认 [SiteForm.GENERIC]：[GenericStrategy] 与 [SolidI18nStrategy] 均走此路径
+     * （Solid 在原 Util.isReact 中因 `!hasSolid` 被排除 → isReact=false，故 Solid 返回
+     * [SiteForm.SOLID_BINDING] 但不映射到 isReact，保持与原行为一致）。
+     *
+     * 形态→isVue/isReact 映射（在 [I18nProcessor.recordChange] 内）：
+     *  - VUE_BINDING / VUE_MUSTACHE → isVue=true
+     *  - JSX_ATTRIBUTE / TEMPLATE_LITERAL → isReact=true（仅当 !isVue）
+     *  - SOLID_BINDING / GENERIC → isVue=false, isReact=false（与原 Solid/Generic 一致）
+     *
+     * 注意：VUE_MUSTACHE / TEMPLATE_LITERAL 当前未由策略产出（避免热路径 PSI 遍历），
+     * 保留枚举值供未来按元素形态细分时使用；当前 isVue/isReact 派生已覆盖这两种形态。
+     */
+    fun getSiteForm(element: PsiElement): SiteForm = SiteForm.GENERIC
+}
+
+/**
+ * 能力 2 — [PlaceholderStrategy]：占位符语法。
+ * 对应原「耦合点 3」。
+ */
+interface PlaceholderStrategy {
     /** 资源文件中的占位符写法，如 Vue `{N0}`、React `{{0}}`、Generic `{0}`。 */
     fun placeholderFor(index: Int): String
 
@@ -61,9 +105,13 @@ interface I18nFramework {
      * - React/Generic：`{{0}}`/`{0}` 均为占位符，整体替换。
      */
     fun interpolatePlaceholders(value: String, params: Map<String, String>): String
+}
 
-    // ── 耦合点 2：翻译调用匹配（第 2 步接入） ──────────────────────────
-
+/**
+ * 能力 3 — [TranslationCallStrategy]：翻译调用匹配与 key 提取 + 注入函数名。
+ * 对应原「耦合点 2（isTranslationCall / extractKey）+ 耦合点 4（tFunctionName / hookImport）」。
+ */
+interface TranslationCallStrategy {
     /**
      * 判断 [call] 是否为翻译调用（`$t` / `t` / `$tc` / `tc`，含链式 `xxx.t`）。
      * 默认实现与现有 [I18nFoldingBuilder.isTranslationCall] 完全一致，Vue/React 通用；
@@ -115,22 +163,8 @@ interface I18nFramework {
         return value.takeIf { it.isNotBlank() }
     }
 
-    // ── 耦合点 4：注入函数（第 2 步接入） ──────────────────────────────
-
     /** 默认翻译函数名，如 Vue `$t`、React `t`。 */
     val tFunctionName: String
-
-    /** hook import 语句（如 `import { useI18n } from 'vue-i18n'`），无 hook 注入时为 null。 */
-    val hookImport: String?
-
-    /**
-     * 判定当前文件是否需要"全局 $t 别名"注入（纯工具文件场景，无组件无 Hook）。
-     * - Vue: 非 .vue SFC + 既无 Vue 组件也无自定义 Hook
-     * - React: 既无 React 组件也无自定义 Hook（用 useTranslation 不能在普通函数里调）
-     * - Solid/Generic: 默认 false
-     * 返回 true 时，collect() 会打 needInjectXxxGlobalDollarT=true 标记，run() 时顶部注入全局别名。
-     */
-    fun detectGlobalDollarTNeeded(file: PsiFile): Boolean = false
 
     /**
      * 探测文件中已有翻译调用使用的"长调用名"（如 Vue 的 i18n.global.t / React 的 i18n.t）。
@@ -155,9 +189,31 @@ interface I18nFramework {
      * 默认 null：与 [isTranslationElement] 默认 false 配套，保持现有行为不变。
      */
     fun extractKeyFromElement(element: PsiElement): String? = null
+}
 
-    // ── 耦合点 6：已有翻译 key 扫描（模板/注入 JS） ────────────────────
+/**
+ * 能力 4 — [ImportStrategy]：注入 import 判定。
+ * 对应原「耦合点 4 的 hookImport + detectGlobalDollarTNeeded」。
+ */
+interface ImportStrategy {
+    /** hook import 语句（如 `import { useI18n } from 'vue-i18n'`），无 hook 注入时为 null。 */
+    val hookImport: String?
 
+    /**
+     * 判定当前文件是否需要"全局 $t 别名"注入（纯工具文件场景，无组件无 Hook）。
+     * - Vue: 非 .vue SFC + 既无 Vue 组件也无自定义 Hook
+     * - React: 既无 React 组件也无自定义 Hook（用 useTranslation 不能在普通函数里调）
+     * - Solid/Generic: 默认 false
+     * 返回 true 时，collect() 会打 needInjectXxxGlobalDollarT=true 标记，run() 时顶部注入全局别名。
+     */
+    fun detectGlobalDollarTNeeded(file: PsiFile): Boolean = false
+}
+
+/**
+ * 能力 5 — [TemplateStrategy]：模板（mustache）已有 key 扫描。
+ * 对应原「耦合点 6」。
+ */
+interface TemplateStrategy {
     /**
      * 扫描框架特有的模板/注入 JS 中的已有翻译 key（如 Vue mustache `{{ }}`）。
      * 默认空实现：纯 JS/TS 文件无模板，[ReactI18nextStrategy] / [SolidI18nStrategy] /
@@ -182,33 +238,13 @@ interface I18nFramework {
     ) {
         // 默认空实现：纯 JS/TS 文件无 mustache 模板
     }
+}
 
-    // ── 耦合点 7：站点形态判定（P7：收敛 recordChange 的 isVue/isReact 二分） ──
-
-    /**
-     * 判定 [element] 所在站点的「形态」（用于 [I18nProcessor.recordChange] 推导 isVue/isReact）。
-     *
-     * P7 收敛点：原 [I18nProcessor.recordChange] 用 `Util.isVue(anchor) || isVueFile(f)` /
-     * `Util.isReact(anchor)` 二分判定。由于 [I18nFrameworkRegistry.detect] 已基于
-     * `Util.isVue` / `Util.isReact` / `Util.isSolid` 选定策略，策略本身即代表框架归属，
-     * 此方法只需返回框架级常量（O(1)，无 PSI 遍历），即可 1:1 还原原 isVue/isReact 结果。
-     *
-     * 默认 [SiteForm.GENERIC]：[GenericStrategy] 与 [SolidI18nStrategy] 均走此路径
-     * （Solid 在原 Util.isReact 中因 `!hasSolid` 被排除 → isReact=false，故 Solid 返回
-     * [SiteForm.SOLID_BINDING] 但不映射到 isReact，保持与原行为一致）。
-     *
-     * 形态→isVue/isReact 映射（在 [I18nProcessor.recordChange] 内）：
-     *  - VUE_BINDING / VUE_MUSTACHE → isVue=true
-     *  - JSX_ATTRIBUTE / TEMPLATE_LITERAL → isReact=true（仅当 !isVue）
-     *  - SOLID_BINDING / GENERIC → isVue=false, isReact=false（与原 Solid/Generic 一致）
-     *
-     * 注意：VUE_MUSTACHE / TEMPLATE_LITERAL 当前未由策略产出（避免热路径 PSI 遍历），
-     * 保留枚举值供未来按元素形态细分时使用；当前 isVue/isReact 派生已覆盖这两种形态。
-     */
-    fun getSiteForm(element: PsiElement): SiteForm = SiteForm.GENERIC
-
-    // ── 耦合点 5：引导（第 2 步接入） ──────────────────────────────────
-
+/**
+ * 能力 6 — [BootstrapStrategy]：缺依赖引导。
+ * 对应原「耦合点 5」。
+ */
+interface BootstrapStrategy {
     /** 缺 i18n 依赖时需要安装的包名列表。 */
     val bootstrapDeps: List<String>
 
@@ -238,19 +274,39 @@ object I18nFrameworkRegistry {
         strategies.add(strategy)
     }
 
+    /** 反注册一个策略，用于测试清理或热卸载第三方框架。 */
+    fun unregister(strategy: I18nFramework) {
+        strategies.remove(strategy)
+    }
+
     /**
-     * 按 [element] 所在文件检测框架策略，遍历注册表按序首个命中即返回；无命中回退 [GenericStrategy]。
+     * 按 [element] 所在文件检测框架策略，遍历注册表按序首个命中即返回；无命中回退 fallback 策略。
      *
      * 注册顺序即优先级顺序，等价于历史固定 if-else 链：
      *  - `Util.isVue` → [VueI18nStrategy]（.vue 文件 / 依赖 vue）
      *  - `Util.isSolid` → [SolidI18nStrategy]（依赖 solid-js 且不依赖 vue）
      *  - `Util.isReact` → [ReactI18nextStrategy]（依赖 react 且不依赖 vue/solid-js）
-     *  - 其余 → [GenericStrategy]（含"无 package.json 时 isVue 兜底为 true"的 Vue 历史行为）
+     *  - 其余 → fallback（[GenericStrategy]，含"无 package.json 时 isVue 兜底为 true"的 Vue 历史行为）
      *
-     * 由于 `register` 在此生效，第三方框架可通过 `register` 注册 + `matches` 自定义参与检测。
+     * fallback 策略（[I18nFramework.isFallback] = true，当前即 [GenericStrategy]）不会参与
+     * 常规匹配扫描，而是在所有非 fallback 策略都未命中后作为兜底返回。这样底层的
+     * [GenericStrategy] 就不会遮蔽其后 register() 追加的第三方策略——第三方框架通过
+     * `register` 注册 + `matches` 自定义即可真正参与检测（BUG_ANALYSIS 5.2 自定义注册）。
      */
-    fun detect(element: PsiElement): I18nFramework =
-        strategies.firstOrNull { it.matches(element) } ?: GenericStrategy
+    fun detect(element: PsiElement): I18nFramework {
+        var fallback: I18nFramework = GenericStrategy
+        for (s in strategies) {
+            if (s.isFallback) {
+                fallback = s
+                continue
+            }
+            if (s.matches(element)) return s
+        }
+        return fallback
+    }
+
+    /** 当前注册的全部策略（含 fallback），供断言/调试使用。只读快照。 */
+    fun registeredStrategies(): List<I18nFramework> = strategies.toList()
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -453,8 +509,10 @@ object GenericStrategy : I18nFramework {
     override val bootstrapDeps = emptyList<String>()
     override val paramKeyNeedsQuote = true
 
-    /** Generic 恒为兜底：排在 [I18nFrameworkRegistry] 末尾，任何元素都命中。 */
+    /** Generic 恒为兜底：匹配语义由 [I18nFrameworkRegistry.detect] 的 fallback 通道兜底。 */
     override fun matches(element: PsiElement): Boolean = true
+
+    override val isFallback: Boolean get() = true
 
     override fun placeholderFor(index: Int): String = "{$index}"
     override fun paramKey(index: Int): String = index.toString()

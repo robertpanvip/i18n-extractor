@@ -166,7 +166,7 @@ class I18nProcessor(
             if (hasI18nInstanceImported(psiFile)) return@run false
             // locale 初始化文件导出了 i18n 且路径可推断 → 走 locale，不回退
             val root = ProjectStructure.findProjectRoot(f) ?: return@run true
-            val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(root)
+            val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(root, project)
             if (initFile != null && I18nInstanceLocator.resolveVueI18nImportPath(f, initFile) != null) return@run false
             true
         }
