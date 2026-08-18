@@ -438,6 +438,41 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         assertEquals("blockedSiteIds 应被清空", 0, processor.blockedSiteIds.size)
     }
 
+    /**
+     * BUG_ANALYSIS 4.1：**同一个** processor 连续 collect()，注入类全局状态必须幂等。
+     *
+     * 用 Vue 项目里的纯 .ts 工具函数触发 `const \$t = i18n.global.t;` 全局别名注入路径
+     * （setUp 已在 package.json 声明 vue/vue-i18n，且 src/locales/index.ts 命名导出 i18n）。
+     *
+     * 关键点：必须复用同一个 [I18nProcessor] 实例（新建实例天然不带上次 flag）。
+     * 流程：collect①(run→注入) → collect②(resetState 清回 needInjectGlobalDollarT) → run。
+     * 若 resetState() 未清回该 flag，run② 会重复追加 `const \$t = i18n.global.t;`。
+     */
+    fun testRunTwiceDoesNotDuplicateGlobalTInjection() {
+        val file = configureFile(
+            "src/RunTwice.ts",
+            """
+            export function formatDate() {
+                const label = "日期"
+                return label
+            }
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+        val g1Count = java.util.regex.Pattern.compile("const\\s+\\\$t\\s*=\\s*i18n\\s*\\.\\s*global\\s*\\.\\s*t;")
+            .matcher(file.text).let { var c=0; while (it.find()) c++; c }
+        assertTrue("首次执行应注入 1 条 \$t 别名（GLOBAL），实际=$g1Count", g1Count == 1)
+
+        // 第二次：同一 processor 再 collect()，resetState() 应清回注入 flag → 不再重复注入
+        processor.collect()
+        processor.runWithUndo()
+        val g2 = java.util.regex.Pattern.compile("const\\s+\\\$t\\s*=\\s*i18n\\s*\\.\\s*global\\s*\\.\\s*t;")
+            .matcher(file.text).let { var c=0; while (it.find()) c++; c }
+        assertEquals("同一 processor 重复 collect+run 后 \$t 别名次数应不变", g1Count, g2)
+    }
+
     // ── P1.4: import / export / alias 路径推断 ──────────────────
 
     fun testVueImportPathAlias() {

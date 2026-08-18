@@ -370,6 +370,13 @@ class I18nProcessor(
         existingStrings.clear()
         reactFallbackChecked = false
         reactFallbackResult = false
+        // BUG_ANALYSIS 4.1：这些"全局 $t 别名注入"flag 也会在 collect() 里被置位，
+        // 若不在 reset 时清回，二次 collect() 会把上一次的注入意图残留到本次执行。
+        needInjectGlobalDollarT = false
+        needInjectReactGlobalDollarT = false
+        needInjectSolidGlobalDollarT = false
+        reactI18nTFallbackToDollarT = false
+        tFunctionName = "\$t"
     }
 
     fun collect(): MutableList<CollectedChange> {
