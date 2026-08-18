@@ -373,6 +373,71 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         assertEquals("WriteBack 后二次 collect 应无重复提取", 0, processor2.extractedStrings.size)
     }
 
+    // ── BUG_ANALYSIS 4.1: Processor 状态污染 / collect 幂等 ──────────
+
+    fun testCollectIsIdempotent() {
+        val file = configureFile(
+            "src/Idempotent.vue",
+            """
+            <template>
+                <div>状态文本</div>
+                <span>另一个文案</span>
+            </template>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+
+        // 第一次 collect
+        processor.collect()
+        val sites1 = processor.collectedSites.map { it.id }
+        val extracted1 = LinkedHashMap(processor.extractedStrings)
+        val existing1 = LinkedHashMap(processor.existingStrings)
+        val siteId1 = processor.collectedSites.map { it.id }.toSet()
+        assertEquals("重复执行前 site 数应为 2", 2, sites1.size)
+
+        // 第二次 collect：结果必须与第一次完全一致（不累积、不重复追加）
+        processor.collect()
+        assertEquals(
+            "重复 collect 不应累积 collectedSites",
+            sites1, processor.collectedSites.map { it.id }
+        )
+        assertTrue(
+            "重复 collect 不应重复提取 extractedStrings",
+            processor.extractedStrings.size == extracted1.size &&
+                processor.extractedStrings.keys == extracted1.keys
+        )
+        assertTrue(
+            "重复 collect 不应改变 existingStrings",
+            processor.existingStrings.keys == existing1.keys
+        )
+        assertEquals("重复 collect 后 siteId 应仍从 S1 开始稳定生成", siteId1, processor.collectedSites.map { it.id }.toSet())
+
+        // 第三次同幂等校验
+        processor.collect()
+        assertEquals("三次 collect 后 site 数仍应为 2", 2, processor.collectedSites.size)
+        assertEquals("三次 collect 后 extracted key 不变", extracted1.keys, processor.extractedStrings.keys)
+    }
+
+    fun testPendingChangesResetBetweenCollects() {
+        val file = configureFile(
+            "src/PendingReset.vue",
+            """
+            <template>
+                <div>可重置</div>
+            </template>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+
+        processor.collect()
+        val pending1 = processor.pendingChanges.size
+        assertTrue("第一次 collect 应产生 pendingChanges", pending1 > 0)
+
+        processor.collect()
+        assertEquals("重复 collect 后 pendingChanges 应被重置到同一大小", pending1, processor.pendingChanges.size)
+        assertEquals("blockedSiteIds 应被清空", 0, processor.blockedSiteIds.size)
+    }
+
     // ── P1.4: import / export / alias 路径推断 ──────────────────
 
     fun testVueImportPathAlias() {

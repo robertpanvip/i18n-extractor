@@ -353,12 +353,31 @@ class I18nProcessor(
         return changes
     }
 
+    /**
+     * 重置本 processor 的所有累积状态，保证 `collect()` 可安全重复执行（BUG_ANALYSIS 4.1）。
+     *
+     * 每次 collect 都应从"零状态"开始，否则重复执行时 collectedSites / existingStrings /
+     * extractedStrings 会被重复追加，siteCounter 递增导致 siteId 不固定，进而跨文件合并
+     * 与 blockedSiteIds 判定错位。framework / fallback 缓存标志一并重置，避免沿用上一次
+     * 检测的框架策略。
+     */
+    private fun resetState() {
+        pendingChanges = mutableListOf()
+        collectedSites.clear()
+        blockedSiteIds.clear()
+        siteCounter = 0
+        extractedStrings.clear()
+        existingStrings.clear()
+        reactFallbackChecked = false
+        reactFallbackResult = false
+    }
+
     fun collect(): MutableList<CollectedChange> {
+        resetState()
         // Bug 2: 语言包/翻译资源文件（en-US.ts、i18n/zh-CN.js、messages.ja.ts、locales/xxx）
         // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
         val containingFile = psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
-            pendingChanges = mutableListOf()
             return pendingChanges
         }
 
