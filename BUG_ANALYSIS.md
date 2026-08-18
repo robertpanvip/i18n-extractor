@@ -90,7 +90,17 @@ run()
 
 ---
 
-## 3.2 Regex 不应作为 JS/TS 语义分析的主要手段 ✅（见 §4.2，PSI 优先）
+## 3.2 Regex 不应作为 JS/TS 语义分析的主要手段 ✅（见 §4.2 & `I18nRegexFallbackBoundaryTest`，PSI 优先）
+
+> 已由 `I18nRegexFallbackBoundaryTest` 锁定边界：多行 `$t(\n'key'\n)`、换行链式
+> `i18n\n.global\n.t('key')` 均由 PSI 识别为已有 key；模板字符串带插值不被当 key；
+> 硬编码中文仍被 PSI 主路径提取。Regex 仅保留在 Vue mustache 无法被注入 JS 解析时的兜底。
+>
+> 复检（本次）：JS/TS 提取主路径（`JsStringCollector` / `I18nProcessor.collect`）全走 PSI；
+> 生产代码中的 Regex 仅剩 ① Vue mustache backtick 兜底 `T_CALL_PATTERN`、② 文本节点/属性
+> 的“已在调用中”守卫 `contains("$t(")`、③ 模板变量剥离合 `templateVarRegex`（按 JS 字符串
+> 内容逐段处理，非主语义检测）。无 Regex 式 JS 语义判定残留。`I18nRegexFallbackBoundaryTest`
+> 4 用例在真实 IntelliJ 环境通过。
 
 类似 `$t(...)`、`i18n.t(...)`、`i18n.global.t(...)` 的识别，如果主要依赖 Regex，容易受到以下语法影响：
 
@@ -419,37 +429,44 @@ TODO：
 
 ---
 
-## 5.5 Import / Rewrite 组合测试 ✅（`I18nImportRewriteComboTest`）
+## 5.5 Import / Rewrite 组合测试 ✅（`I18nImportRewriteComboTest` + `I18nReactJsxVariantTest`）
 
 > 状态：已覆盖 `export default i18n`（→ `import i18n from '@/locales/i18n'`）、
-> `export const i18n`（→ 命名导入）、`src/locales/index.ts` 默认导出（→ 去掉 /index 尾缀），
+> `export const i18n`（→ 命名导入）、`export { i18n }`（→ 命名导入）、
+> `src/locales/index.ts` 默认导出（→ 去掉 /index 尾缀）、多文件同时修改（各注入一次不重复、
+> 初始化文件不被破坏）；React `.jsx` / `.tsx` 扩展形态各仅注入一次 useTranslation import。
 > 均断言不重复注入、不破坏初始化文件导出。
+> 本次已全部在真实 IntelliJ 环境通过：`I18nImportRewriteComboTest` 5 用例 +
+> `I18nReactJsxVariantTest` 3 用例 + `I18nImportInjectorHardenTest/MoreTest` 全绿。
 
 - [x] import 已存在
 - [x] import alias
 - [x] export default i18n
 - [x] export const i18n
-- [ ] `export { i18n }`（暂未独立用例，与命名导出同分支）
+- [x] export `{ i18n }`
 - [x] index 文件
 - [x] nested path
-- [~] TS（已覆盖；TSX/JS/JSX 复用同一注入路径，未逐一声明的独立用例）
-- [ ] TSX
-- [ ] JS
-- [ ] JSX
+- [x] TS（覆盖）
+- [~] TSX（React 路径覆盖：`ReactI18nProcessorTest` / `I18nReactJsxVariantTest`）
+- [~] JS（与 JSX/TSX 复用同一注入路径，未逐一声明的独立 hooks 用例）
+- [x] JSX（`I18nReactJsxVariantTest.testJsxVariantSingleImport`）
 - [x] Vue
-- [ ] 多文件同时修改
+- [x] 多文件同时修改
 
 ---
 
-# 6. P1 TODO — IDE 生命周期
+# 6. P1 TODO — IDE 生命周期 ✅（`I18nIntegrationLifecycleTest`，真实 IntelliJ 环境）
+
+> 已在测试环境跑真实 IntelliJ 集成：`I18nIntegrationLifecycleTest` 基于 `BasePlatformTestCase`
+> 的真实 fixture（真实 VFS / Document / PSI / UndoManager / FoldingModel）验证并通过。
 
 ## 6.1 Undo / Redo
 
-- [ ] Extract → Undo
-- [ ] Extract → Redo
+- [x] Extract → Undo（`testUndoRedoRoundTrip`：Before → Extract → After → Undo → Before → Redo → After）
+- [x] Extract → Redo（同上）
 - [ ] 多文件 Extract → Undo
 - [ ] 多文件 Extract → Redo
-- [ ] import 修改 → Undo
+- [ ] import 修改 → Undo（`runWithUndo` 已覆盖，断言在 6.1 往返中体现）
 - [ ] JSON 修改 → Undo
 - [ ] TS 修改 → Undo
 
@@ -463,8 +480,8 @@ Before → Extract → After → Undo → Before → Redo → After
 
 ## 6.2 SmartPsiElementPointer 生命周期
 
-- [ ] PSI 修改后 pointer 是否有效
-- [ ] 删除节点后的 pointer
+- [x] 被替换节点 → 优雅失效（`testSmartPointerRemovedNodeBecomesInvalid`：节点被 `$t(...)` 替换后解析为 null 或仍合法，不崩溃）
+- [x] 未动文件节点 → 保持有效（`testSmartPointerUntouchedNodeStaysValid`：跨 .ts / .vue 文件稳定）
 - [ ] 文件重写后的 pointer
 - [ ] 多次修改后的 pointer
 - [ ] injected PSI 修改后的 pointer
@@ -473,20 +490,18 @@ Before → Extract → After → Undo → Before → Redo → After
 
 ## 6.3 Folding 生命周期
 
-- [ ] 打开文件
-- [ ] 建立 Folding
-- [ ] 修改文本
-- [ ] 重新 PSI
-- [ ] Folding 更新
+- [x] 打开文件并建立 Folding（`testFoldingRebuildReflectsNewKeys`：`buildFoldRegions` 初始非空）
+- [x] 修改文本 / 重新 PSI
+- [x] Folding 更新反映新 key（追加新 `$t('new.key')` 后区域增多、占位含新翻译）
 - [ ] 删除 translation
-- [ ] 添加 translation
-- [ ] 关闭 / 重新打开文件
+- [ ] 添加 translation（部分覆盖：追加调用对应“添加”）
+- [ ] 关闭 / 重新打开文件（fixture 每测试新项目，隐式覆盖）
 
 ---
 
-## 6.4 IDE Integration Test
+## 6.4 IDE Integration Test ✅（已跑通）
 
-建立真实 IntelliJ 集成测试：
+在真实 IntelliJ 集成测试环境（`BasePlatformTestCase`）下跑通：
 
 ```text
 IntelliJ
@@ -499,35 +514,31 @@ Injected PSI
  ↓
 FoldingModel
  ↓
-Action
+Action（I18nProcessor.collect + runWithUndo）
  ↓
-WriteCommandAction
+WriteCommandAction（runWithUndo 内部，开启 UndoManager）
  ↓
-VFS / Document
+VFS / Document（PsiDocumentManager.commit）
 ```
 
-- [ ] Action visibility
-- [ ] Action update
-- [ ] Editor Folding
-- [ ] Vue injected language
-- [ ] Document → PSI 一致性
-- [ ] WriteCommandAction
-- [ ] Undo/Redo
-- [ ] 保存后内容一致
+- [x] Undo/Redo（`testUndoRedoRoundTrip`）
+- [x] FoldingModel + Document → PSI 一致性（`testFoldingRebuildReflectsNewKeys`）
+- [x] WriteCommandAction（`runWithUndo`）
+- [ ] Action visibility / update（单测不易覆盖，留 UI 冒烟）
+- [ ] 保存后内容一致（fixture 关闭即校验）
 
 ---
 
-# 7. P2 TODO — 数据正确性
+# 7. P2 TODO — 数据正确性 ✅（`I18nDataCorrectnessTest`）
 
-## 7.1 Placeholder
+## 7.1 Placeholder ✅
 
-- [ ] 单 placeholder
-- [ ] 多 placeholder
-- [ ] 重复 placeholder
-- [ ] placeholder 顺序
-- [ ] placeholder alias
-- [ ] placeholder quote
-- [ ] placeholder escape
+- [x] 单 placeholder（`testVuePlaceholderSingle` / `testReactPlaceholderQuoteAndReplace`）
+- [x] 多 placeholder（`testVuePlaceholderMultipleKeepsOrder`）
+- [x] 重复 placeholder（`testVuePlaceholderRepeated`）
+- [x] placeholder 顺序（`testVuePlaceholderMultipleKeepsOrder`）
+- [x] placeholder quote（`testReactPlaceholderQuoteAndReplace`：paramKeyNeedsQuote=true）
+- [x] placeholder escape（`testVuePlaceholderEscapeLiteralBraces`：`{{`→`{`、`}}`→`}`；含占位补间 + 字面花括号并存）
 
 例如：
 
@@ -538,9 +549,9 @@ $t('hello {name} {age}')
 
 ---
 
-## 7.2 Nested Expression
+## 7.2 Nested Expression ✅
 
-覆盖：
+覆盖（`testObjectLiteralNestedExtractedSeparately` / `testTernaryNestedExtractedSeparately` / `testArrowBodyNestedExtracted`）：
 
 ```ts
 foo({
@@ -561,18 +572,19 @@ items.map(item => "你好")
 
 ---
 
-## 7.3 MergeApplier
+## 7.3 MergeApplier ✅
 
-- [ ] 空 merge
-- [ ] duplicate key
-- [ ] nested key
-- [ ] conflict key
-- [ ] existing object
-- [ ] existing array
-- [ ] null
-- [ ] primitive/object conflict
-- [ ] comment preservation
-- [ ] formatting preservation
+- [x] 空 merge（`testMergeEmptyProcessorsNoCrash`）
+- [x] duplicate key / 完全相同文本提示（`testMergeDuplicateExactDetected` + `MergeApplierTest.testExactDuplicateHintDoesNotProduceSelfRefNestedCall`）
+- [x] 合并分组正确性（`MergeApplierTest`：跨文件 merge / affix+digit 组合 / digit 骨架）
+- [x] nested key
+- [x] conflict key
+- [x] existing object
+- [x] existing array
+- [x] null
+- [x] primitive/object conflict
+- [x] comment preservation
+- [x] formatting preservation
 
 ---
 

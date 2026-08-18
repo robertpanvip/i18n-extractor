@@ -75,6 +75,10 @@ tasks {
         // 限制单 worker 堆与并行 fork，避免沙箱/CI 低内存环境 full-suite OOM（SIGKILL 137）。
         maxHeapSize = "768m"
         maxParallelForks = 1
+        // 每个测试类启用独立 fork JVM：多个类在单个 fork 内顺序执行时，IDEA 平台测试的
+        // 原生/直接内存（DirectBuffer、JIT、VFS caches）会跨类累积，最终被 cgroup OOM-kill
+        // （Gradle Test Executor 退出码 137、末位测试被标 SKIPPED）。按类重启可重置该内存。
+        forkEvery = 1
 
         testLogging {
             showStandardStreams = true

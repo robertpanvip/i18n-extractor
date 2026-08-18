@@ -108,11 +108,34 @@ class I18nImportRewriteComboTest : BasePlatformTestCase() {
         assertEquals("i18n 初始化文件内容应保持不变", initBefore, init.text)
     }
 
-    // ── 5.5.c: index.ts 形态（src/locales/index.ts 调 createI18n）───
+    // ── 5.5.d: init 文件 `export { i18n }`（花括号 re-export 形态）────
 
-    fun testIndexTsDefaultExportNoDuplicate() {
+    fun testExportBracesI18nNoDuplicate() {
         val init = myFixture.addFileToProject(
-            "src/locales/index.ts",
+            "src/locales/i18n.ts",
+            """
+            import { createI18n } from 'vue-i18n';
+            const i18n = createI18n({ legacy: false, locale: 'zh' });
+            export { i18n };
+            """.trimIndent()
+        )
+        val initBefore = init.text
+
+        val source = configureSource("src/Test.vue")
+        val result = source.text
+
+        // `export { i18n }` → 命名导入 `import { i18n } from '@/locales/i18n'`
+        assertTrue("应注入命名导入 import { i18n } from '@/locales/i18n', got:\n$result", result.contains("import { i18n } from '@/locales/i18n'"))
+        assertEquals("不应重复注入 i18n import, got:\n$result", 1, Regex("import \\{ i18n \\} from").findAll(result).count())
+        assertFalse("不应注入 useI18n, got:\n$result", result.contains("useI18n"))
+        assertEquals("i18n 初始化文件 export { i18n } 不应被破坏", initBefore, init.text)
+    }
+
+    // ── 5.5.e: 多个源文件同时修改，均只注入一次 ──────────────────────
+
+    fun testMultipleSourceFilesEachInjectedOnce() {
+        val init = myFixture.addFileToProject(
+            "src/locales/i18n.ts",
             """
             import { createI18n } from 'vue-i18n';
             const i18n = createI18n({ legacy: false, locale: 'zh' });
@@ -121,13 +144,14 @@ class I18nImportRewriteComboTest : BasePlatformTestCase() {
         )
         val initBefore = init.text
 
-        val source = configureSource("src/Test.vue")
-        val result = source.text
+        val a = configureSource("src/A.vue")
+        val b = configureSource("src/B.vue")
 
-        // index 形态 + 默认导出 → @/locales（去掉 /index 尾缀）+ 默认导入
-        assertTrue("应注入默认导入 import i18n from '@/locales', got:\n$result", result.contains("import i18n from '@/locales'"))
-        assertEquals("不应重复注入 i18n import, got:\n$result", 1, Regex("import i18n from").findAll(result).count())
-        assertFalse("不应注入 useI18n, got:\n$result", result.contains("useI18n"))
-        assertEquals("i18n 初始化文件内容应保持不变", initBefore, init.text)
+        for ((name, result) in mapOf("A.vue" to a.text, "B.vue" to b.text)) {
+            assertTrue("$name 应注入默认导入 import i18n from '@/locales/i18n', got:\n$result", result.contains("import i18n from '@/locales/i18n'"))
+            assertEquals("$name 不应重复注入 i18n import, got:\n$result", 1, Regex("import i18n from").findAll(result).count())
+            assertFalse("$name 不应注入 useI18n, got:\n$result", result.contains("useI18n"))
+        }
+        assertEquals("多文件各自提取后 i18n 初始化文件应保持不变", initBefore, init.text)
     }
 }
