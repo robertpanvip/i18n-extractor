@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression

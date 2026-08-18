@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project

@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.openapi.project.Project

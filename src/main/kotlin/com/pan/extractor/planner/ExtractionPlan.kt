@@ -1,4 +1,6 @@
 package com.pan.extractor.planner
+import com.pan.extractor.ui.*
+
 
 /**
  * Planner 层 —— 把分析结果转换为「计划」（目标架构，迁移自 MergeApplier / ExtractedStringsDialog.MergePlan）。

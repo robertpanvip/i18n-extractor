@@ -42,32 +42,32 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
                 toolWindowId="Project"
                 isLogByDefault="false"
         />
-        <applicationService serviceImplementation="com.pan.extractor.I18nSettings"/>
+        <applicationService serviceImplementation="com.pan.extractor.ui.I18nSettings"/>
         <applicationConfigurable
                 id="com.pan.extractor.settings"
                 displayName="I18n Extractor"
-                instance="com.pan.extractor.I18nSettingsConfigurable"/>
+                instance="com.pan.extractor.ui.I18nSettingsConfigurable"/>
         <lang.foldingBuilder
                 language="JavaScript"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <lang.foldingBuilder
                 language="TypeScript"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <!-- .tsx 文件的实际语言 ID 是 "TypeScript JSX"（TypeScript 的 dialect），
              需单独注册，否则 .tsx 中的 $t()/t() 不会触发展开/折叠。 -->
         <lang.foldingBuilder
                 language="TypeScript JSX"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <!-- .jsx 文件的实际语言 ID；不同版本可能是 "JSX Harmony" 或 "JSX"，此处同时注册。 -->
         <lang.foldingBuilder
                 language="JSX Harmony"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <lang.foldingBuilder
                 language="JSX"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <!-- Vue 语言的 foldingBuilder 移至 vue-support.xml（可选依赖） -->
         <editorFactoryListener
-                implementation="com.pan.extractor.I18nFoldToggleInlayProvider"/>
+                implementation="com.pan.extractor.ui.I18nFoldToggleInlayProvider"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->

@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase

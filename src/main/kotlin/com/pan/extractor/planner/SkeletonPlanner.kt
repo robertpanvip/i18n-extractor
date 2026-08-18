@@ -1,7 +1,9 @@
 package com.pan.extractor.planner
 
+import com.pan.extractor.ui.*
+
 import com.intellij.openapi.application.ApplicationManager
-import com.pan.extractor.I18nSettings
+import com.pan.extractor.ui.I18nSettings
 
 /**
  * Planner 层 —— 骨架合并计划描述（迁移自 [com.pan.extractor.MergeApplier] 的纯函数）。

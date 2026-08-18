@@ -1,6 +1,8 @@
 package com.pan.extractor.validator
 
-import com.pan.extractor.ExtractedStringsDialog
+import com.pan.extractor.ui.*
+
+import com.pan.extractor.ui.ExtractedStringsDialog
 import com.pan.extractor.I18nProcessor
 import com.pan.extractor.SiteRef
 

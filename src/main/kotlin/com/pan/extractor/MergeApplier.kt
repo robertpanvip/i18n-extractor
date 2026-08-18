@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.ui.*
+
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.psi.PsiElement
