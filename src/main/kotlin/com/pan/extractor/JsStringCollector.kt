@@ -391,10 +391,11 @@ class JsStringCollector(private val processor: I18nProcessor) {
         if (text.isEmpty()) return
         //print("$text,contains${raw.contains("\$t(")}\n")
 
-        // ── 先检查是否处于 i18n 翻译调用作用域（3 档）
+        // ── 先检查是否处于 i18n 翻译调用作用域（三态判定）──
         val tSem = detectTSemantic(ele)
-        if (tSem == I18nProcessor.TSem.DIRECT_ARG) {
-            // 字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
+        if (tSem == I18nProcessor.TSem.DIRECT_ARG || tSem == I18nProcessor.TSem.INSIDE_UNKNOWN) {
+            // DIRECT_ARG：字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
+            // INSIDE_UNKNOWN：位于无法证明来源的调用参数内部 → 保守跳过，零误改（名字不是语义证明）
             return
         }
 

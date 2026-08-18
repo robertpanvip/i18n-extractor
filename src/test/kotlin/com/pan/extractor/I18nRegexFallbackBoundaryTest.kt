@@ -267,9 +267,12 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             const r = t('其它hook中文');
             """.trimIndent()
         )
-        assertTrue("const { t } = someOtherHook(); t('其它hook中文') 非 i18n hook，中文应被提取（§2 修漏提）",
+        // 【三态 UNKNOWN】`const { t } = someOtherHook()`：someOtherHook 无法证明来自已知 i18n hook
+        //（名字是弱特征，不是语义证明）→ 调用归 UNKNOWN → 参数既不提取也不改写（零误改）。
+        // 旧模型（名字兜底 + 非已知 hook 即提取）的行为已废弃：宁可漏一次提取机会，也不破坏用户代码。
+        assertFalse("三态 UNKNOWN：无法证明来源的 hook 解构 t，参数保守跳过（不提取）",
             p.extractedStrings.containsValue("其它hook中文"))
-        assertFalse("非 i18n hook 解构的 t 不应视为已翻译 key",
+        assertFalse("三态 UNKNOWN：也不把无法证明的调用声称成已翻译 key",
             p.existingStrings.containsKey("其它hook中文"))
     }
 
