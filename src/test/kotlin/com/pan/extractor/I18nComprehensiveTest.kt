@@ -200,8 +200,9 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
 
     /**
      * P1-3（BUG_ANALYSIS section 7）：真实运行时形态的语义等价。
-     * React 项目中已存在 `getI18n().t('中文')` 调用时，参数应被识别为
-     * “已翻译 key”进 existingStrings，而**不得**作为硬编码文案进 extractedStrings。
+     * React 项目按约定使用 `t`（ReactI18nextStrategy.tFunctionName = "t"），
+     * 常用形态是 `const t = getI18n().t;` 后 `t('中文')`。
+     * 参数应被识别为“已翻译 key”进 existingStrings，而**不得**作为硬编码文案进 extractedStrings。
      */
     fun testRuntimeReactGetI18nTArgNotExtracted() {
         myFixture.addFileToProject(
@@ -212,8 +213,8 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
             "packages/react-app/useI18nCall.ts",
             """
             import { getI18n } from 'react-i18next';
-            const ${'$'}t = getI18n().t;
-            export const msg = ${'$'}t('已经国际化的中文');
+            const t = getI18n().t;
+            export const msg = t('已经国际化的中文');
             """.trimIndent()
         )
         val processor = I18nProcessor(project, file)
