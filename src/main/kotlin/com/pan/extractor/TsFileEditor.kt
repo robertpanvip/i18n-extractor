@@ -15,446 +15,58 @@ object TsFileEditor {
     // TS 文件：解析 export default / export const 对象字面量 → 嵌套 Map
     //         遇到无法确定的表达式跳过（整条属性整条跳过，不抛错）
     // ==========================================================================
-    /** 解析结果：带范围信息的（原对象在整个文件文本中的 [start,end) + 抽取出来的静态 KV map） */
-    data class TsExportedObjectInfo(
-        val objectRange: IntRange,   // 对象字面量 { ... } 在文件文本中的 [start, end)
-        val staticKV: Map<String, Any?>,  // 静态可确定的 KV（嵌套 Map / List / String / Number / Boolean / null）
-        val exportType: String,          // "default" / "named:<name>" / "module.exports"
-        val indentUnit: String           // 推断的缩进（2 spaces / 4 spaces / tab），用于重新生成
-    )
+    /** 解析结果：类型别名指向 staticparser 包的真实实现，旧引用保持兼容。 */
+    typealias TsExportedObjectInfo = com.pan.extractor.staticparser.TsExportedObjectInfo
 
     /**
-     * 从 TS/JS 文件内容（原始文本）中找到 export default / export const / module.exports 对应的
-     * 对象字面量，并抽取其中的静态 key-value。
-     *
-     * PS：不直接拿 PSI 来改，是因为重新"合并生成"时，用户自定义表达式（动态、spread、函数调用）
-     * 我们无法静态求值，需要整条保留在原位；而我们提取出的静态 KV 只用于和新 JSON 做 key 级别合并，
-     * 最后再用"字符串片段替换"只替换对象字面量区域（其他 import / const / 注释一概不动）。
+     * 从 TS/JS 文件内容中找到 export default / export const / module.exports 对应的对象字面量，
+     * 并抽取其中的静态 key-value。
+     * 实现已迁入 com.pan.extractor.staticparser.StaticObjectParser，此处委托（行为 1:1）。
      */
-    fun parseTsExportedObject(text: String): TsExportedObjectInfo? {
-        // --- 1. 找对象字面量起点：对应 export default / export const / module.exports ---
-        val (objStart, exportType, indentUnit) = findExportedObjectStart(text) ?: return null
-        // --- 2. 括号平衡，匹配到对象结束位置 ---
-        val objEnd = findBalancedCloseBrace(text, objStart) ?: return null
-        val objBody = text.substring(objStart, objEnd)  // 包含 { }
-        // --- 3. 解析对象字面量内部的静态 KV ---
-        val staticKV = parseObjectLiteralBody(objBody)
-        return TsExportedObjectInfo(
-            objectRange = objStart until objEnd,
-            staticKV = staticKV,
-            exportType = exportType,
-            indentUnit = indentUnit
-        )
-    }
+    fun parseTsExportedObject(text: String): TsExportedObjectInfo? =
+        com.pan.extractor.staticparser.StaticObjectParser.parseTsExportedObject(text)
 
-    private data class ExportAnchor(
-        val objBraceStart: Int,
-        val exportType: String,
-        val indentUnit: String
-    )
+    fun parseObjectLiteralBody(raw: String): Map<String, Any?> =
+        com.pan.extractor.staticparser.StaticObjectParser.parseObjectLiteralBody(raw)
 
-    private fun findExportedObjectStart(text: String): ExportAnchor? {
-        // 模式 1：export default {
-        run {
-            val re = Regex("""export\s+default\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val braceIdx = m.range.last  // { 的位置
-                return ExportAnchor(braceIdx, "default", inferIndent(text, braceIdx))
-            }
-        }
-        // 模式 2：export default <name> = { （非常少见，但兜底）
-        run {
-            val re = Regex("""export\s+default\s+[\w$][\w$]*\s*=\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
-                return ExportAnchor(braceIdx, "default", inferIndent(text, braceIdx))
-            }
-        }
-        // 模式 3：export const <name> = { / export let / export var。
-        // 兼容可选类型标注：export const <name>: <T> = {（T 内不含顶层 '=' 且单行，覆盖 Record<>/接口名/内联对象类型等）。
-        run {
-            val re = Regex("""export\s+(const|let|var)\s+([\w$][\w$]*)\s*(?::[^=\n]+)?\s*=\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val name = m.groupValues[2]
-                // 定位 '=' 之后第一个 '{'：类型标注里可能含 '{'（内联对象类型），
-                // 必须用「= 之后第一个 {」而不是「最后一个 {」来定位对象字面量起点。
-                val eqLocal = m.value.lastIndexOf('=')
-                var i = m.range.first + eqLocal + 1
-                while (i < text.length && text[i] != '{') i++
-                if (i >= text.length) return@run
-                return ExportAnchor(i, "named:$name", inferIndent(text, i))
-            }
-        }
-        // 模式 4：module.exports = {
-        run {
-            val re = Regex("""module\.exports\s*=\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
-                return ExportAnchor(braceIdx, "module.exports", inferIndent(text, braceIdx))
-            }
-        }
-        // 模式 5：exports = {
-        run {
-            val re = Regex("""(^|;)\s*exports\s*=\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
-                return ExportAnchor(braceIdx, "exports", inferIndent(text, braceIdx))
-            }
-        }
-        // 模式 6：export default defineXxx({ ... }) —— 支持 i18n 常用包裹函数
-        // （defineI18nConfig / defineMessages / defineConfig / createI18n 等），对象字面量在函数括号内。
-        // 兼容 TypeScript 泛型：export default defineMessages<SomeType>({ ... })
-        run {
-            val re = Regex("""export\s+default\s+([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*\(\s*\{""")
-            val m = re.find(text)
-            if (m != null) {
-                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
-                return ExportAnchor(braceIdx, "default:${m.groupValues[1]}", inferIndent(text, braceIdx))
-            }
-        }
-        return null
-    }
+    internal fun findBalancedCloseBrace(text: String, openIdx: Int): Int? =
+        com.pan.extractor.staticparser.StaticObjectParser.findBalancedCloseBrace(text, openIdx)
 
-    private fun inferIndent(text: String, braceIdx: Int): String {
-        // 找 { 所在行的起始空白作为参考；否则默认 2 spaces
-        var lineStart = braceIdx
-        while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
-        val wsPrefix = text.substring(lineStart, braceIdx).takeWhile { it == ' ' || it == '\t' }
-        if (wsPrefix.isNotEmpty()) return wsPrefix
-        return "  "
-    }
+    internal fun splitTopLevelProperties(body: String): List<String> =
+        com.pan.extractor.staticparser.StaticObjectParser.splitTopLevelProperties(body)
 
-    internal fun findBalancedCloseBrace(text: String, openIdx: Int): Int? {
-        if (openIdx >= text.length || text[openIdx] != '{') return null
-        var depth = 0
-        var i = openIdx
-        var inString: Char? = null
-        var escapeNext = false
-        var inLineComment = false
-        var inBlockComment = false
-        while (i < text.length) {
-            val c = text[i]
-            when {
-                inLineComment -> if (c == '\n') inLineComment = false
-                inBlockComment -> {
-                    if (c == '*' && i + 1 < text.length && text[i + 1] == '/') {
-                        inBlockComment = false
-                        i++
-                    }
-                }
-                escapeNext -> escapeNext = false
-                inString != null -> when (c) {
-                    '\\' -> escapeNext = true
-                    inString -> inString = null
-                }
-                c == '/' && i + 1 < text.length && text[i + 1] == '/' -> inLineComment = true
-                c == '/' && i + 1 < text.length && text[i + 1] == '*' -> {
-                    inBlockComment = true
-                    i++
-                }
-                else -> when (c) {
-                    '"', '\'', '`' -> inString = c
-                    '{' -> depth++
-                    '}' -> {
-                        depth--
-                        if (depth == 0) return i + 1
-                    }
-                }
-            }
-            i++
-        }
-        return null
-    }
+    internal fun parseOneProperty(prop: String): Pair<String, String>? =
+        com.pan.extractor.staticparser.StaticObjectParser.parseOneProperty(prop)
 
-    /**
-     * 解析对象字面量（形如 { a: 1, b: "x", c: { d: 2 } }）。
-     * 遇到无法静态确定的表达式（spread、函数调用、引用、三元、运算、模板字符串带插值等）→ 该属性整条跳过。
-     * 支持：
-     *   - 嵌套对象字面量
-     *   - 数组字面量（元素若有非静态的则整个元素跳过，其余保留；若全部被跳过则数组为空数组）
-     *   - 字符串字面量（单/双/反引号无插值）
-     *   - 数字 / true / false / null / undefined（undefined 写回时省略 → null）
-     *   - 注释（忽略）
-     *   - shorthand（如 { foo } → 跳过）
-     *   - 方法简写（如 fn(){} → 跳过）
+    internal fun parsePropertyKey(keyPart: String): String? =
+        com.pan.extractor.staticparser.StaticObjectParser.parsePropertyKey(keyPart)
+
+    internal fun unquoteString(s: String): String =
+        com.pan.extractor.staticparser.StaticObjectParser.unquoteString(s)
+
+    internal fun stripValueSuffixes(expr: String): String =
+        com.pan.extractor.staticparser.StaticValueParser.stripValueSuffixes(expr)
+
+    internal fun splitTopLevelArrayElements(body: String): List<String> =
+        com.pan.extractor.staticparser.StaticObjectParser.splitTopLevelArrayElements(body)
+
+    @Suppress("unused")
+    private data class ExportAnchorRemovedMarker(val placeholder: Unit = Unit)
+
+    // 以下方法实现已迁入 staticparser 包（StaticObjectParser / StaticValueParser），
+    // 此处保留为 internal 委托门面（见上方各 fun 定义）。原 private 解析辅助已删除。
+    @Suppress("unused") private fun migratedMarker() = Unit
+
+    // findBalancedCloseBrace / parseObjectLiteralBody / splitTopLevelProperties / parseOneProperty /
+    // parsePropertyKey / unquoteString / stripValueSuffixes / splitTopLevelArrayElements 等解析方法
+    // 实现已迁入 staticparser 包（见文件顶部 internal 委托）。原 private 解析辅助已删除。
+
+    /*
+     * 以下保留 merge / regenerate / spread 等写回相关方法（仍在本 object 内）。
+     * 旧 parseOneProperty / stripLeadingComments / parsePropertyKey / UNICODE_IDENTIFIER_RE /
+     * unquoteString / stripValueSuffixes / tryParseStaticValue / parseArrayLiteralBody /
+     * splitTopLevelArrayElements 实现已迁入 staticparser 包，委托见文件顶部。
      */
-    fun parseObjectLiteralBody(raw: String): Map<String, Any?> {
-        if (raw.isBlank()) return emptyMap()
-        val stripped = raw.trim()
-        val body = if (stripped.startsWith("{") && stripped.endsWith("}")) {
-            stripped.substring(1, stripped.length - 1)
-        } else stripped
-        val result = LinkedHashMap<String, Any?>()
-        val props = splitTopLevelProperties(body)
-        for (prop in props) {
-            val (k, vExpr) = parseOneProperty(prop) ?: continue
-            val value = tryParseStaticValue(vExpr) ?: continue
-            result[k] = value
-        }
-        return result
-    }
-
-    /** 把 { ... } 内部按逗号拆成属性列表（注意处理嵌套 {} [] 字符串 注释）。 */
-    internal fun splitTopLevelProperties(body: String): List<String> {
-        val parts = mutableListOf<String>()
-        var start = 0
-        var depth = 0   // {} [] 总层数
-        var inString: Char? = null
-        var escapeNext = false
-        var inLineComment = false
-        var inBlockComment = false
-        var i = 0
-        while (i < body.length) {
-            val c = body[i]
-            val next = body.getOrNull(i + 1)
-            when {
-                inLineComment -> {
-                    if (c == '\n') inLineComment = false
-                }
-                inBlockComment -> {
-                    if (c == '*' && next == '/') { inBlockComment = false; i++ }
-                }
-                escapeNext -> escapeNext = false
-                inString != null -> when (c) {
-                    '\\' -> escapeNext = true
-                    inString -> inString = null
-                }
-                else -> {
-                    if (c == '/' && next == '/') { inLineComment = true; i++ }
-                    else if (c == '/' && next == '*') { inBlockComment = true; i++ }
-                    else when (c) {
-                        '"', '\'', '`' -> inString = c
-                        '{', '[' -> depth++
-                        '}', ']' -> depth = (depth - 1).coerceAtLeast(0)
-                        ',' -> if (depth == 0) {
-                            parts += body.substring(start, i)
-                            start = i + 1
-                        }
-                    }
-                }
-            }
-            i++
-        }
-        if (start < body.length) parts += body.substring(start)
-        return parts.map { it.trim() }.filter { it.isNotEmpty() }
-    }
-
-    /** 解析单个属性，返回 (key, valueExpr)；若解析不了返回 null。 */
-    internal fun parseOneProperty(prop: String): Pair<String, String>? {
-        // 【Bug A6 修复】属性片段可能以注释开头（splitTopLevelProperties 只按顶层逗号切分，
-        // 注释行会和紧随其后的属性拼在一起）。先剥离前导注释，避免把注释当 key 解析失败。
-        val body = stripLeadingComments(prop)
-        var inString: Char? = null
-        var escapeNext = false
-        var depth = 0
-        var colonIdx = -1
-        var i = 0
-        while (i < body.length) {
-            val c = body[i]
-            when {
-                escapeNext -> escapeNext = false
-                inString != null -> when (c) {
-                    '\\' -> escapeNext = true
-                    inString -> inString = null
-                }
-                else -> when (c) {
-                    '"', '\'', '`' -> inString = c
-                    '{', '[' -> depth++
-                    '}', ']' -> depth--
-                    ':' -> if (depth == 0 && colonIdx == -1) {
-                        // 方法简写（如 foo() { }）中，: 可能不出现 → colonIdx 还是 -1，返回 null
-                        colonIdx = i
-                    }
-                }
-            }
-            i++
-        }
-        if (colonIdx < 0) return null  // shorthand property / 方法简写 → 跳过
-        val keyPart = body.substring(0, colonIdx).trim()
-        val valuePart = body.substring(colonIdx + 1).trim()
-        val key = parsePropertyKey(keyPart) ?: return null
-        return key to valuePart
-    }
-
-    /** 【Bug A6】剥离属性片段前导的 // 行注释或 /* */ 块注释（可含多行）。 */
-    private fun stripLeadingComments(s: String): String {
-        var text = s.trimStart()
-        var changed = true
-        while (changed && text.isNotEmpty()) {
-            changed = false
-            if (text.startsWith("//")) {
-                val nl = text.indexOf('\n')
-                text = if (nl < 0) "" else text.substring(nl + 1).trimStart()
-                changed = true
-            } else if (text.startsWith("/*")) {
-                val end = text.indexOf("*/")
-                text = if (end < 0) "" else text.substring(end + 2).trimStart()
-                changed = true
-            }
-        }
-        return text
-    }
-
-    private fun parsePropertyKey(keyPart: String): String? {
-        // 形如：foo / 'foo' / "foo" / `foo` / [123] / [foo]
-        if (keyPart.startsWith("[") && keyPart.endsWith("]")) {
-            val inner = keyPart.substring(1, keyPart.length - 1).trim()
-            // 仅支持字面量（字符串/数字）作为 computed key，其他（变量等）跳过
-            return when {
-                (inner.startsWith("\"") && inner.endsWith("\"")) ||
-                        (inner.startsWith("'") && inner.endsWith("'")) ||
-                        (inner.startsWith("`") && inner.endsWith("`")) ->
-                    unquoteString(inner)
-                inner.toIntOrNull() != null -> inner
-                inner.toDoubleOrNull() != null -> inner
-                else -> null
-            }
-        }
-        if ((keyPart.startsWith("\"") && keyPart.endsWith("\"")) ||
-            (keyPart.startsWith("'") && keyPart.endsWith("'")) ||
-            (keyPart.startsWith("`") && keyPart.endsWith("`"))) {
-            return unquoteString(keyPart)
-        }
-        // Identifier（支持任意语言字母裸 key：中文/日文/法语/德语等，如 `中文: '中文'`、`日本語: '日本語'`）
-        if (keyPart.matches(UNICODE_IDENTIFIER_RE)) return keyPart
-        return null
-    }
-
-    /**
-     * 允许任意 Unicode 字母开头的裸 key 标识符，续接可为字母/数字/组合变音符(_ 与 $ 均兼容)。
-     * 覆盖中日韩、法语 é/à、德语 ü、俄语、阿拉伯语等，并兼容"基础字母+组合变音"写法。
-     */
-    private val UNICODE_IDENTIFIER_RE = Regex("""[\p{L}_$][\p{L}\p{N}\p{M}_$]*""")
-
-    private fun unquoteString(s: String): String {
-        if (s.length < 2) return s
-        val inner = s.substring(1, s.length - 1)
-        val sb = StringBuilder(inner.length)
-        var i = 0
-        while (i < inner.length) {
-            val c = inner[i]
-            if (c == '\\' && i + 1 < inner.length) {
-                when (val nc = inner[i + 1]) {
-                    'n' -> sb.append('\n')
-                    't' -> sb.append('\t')
-                    'r' -> sb.append('\r')
-                    'b' -> sb.append('\b')
-                    'f' -> sb.append('\u000c')
-                    '0' -> sb.append('\u0000')
-                    '\\' -> sb.append('\\')
-                    '\'' -> sb.append('\'')
-                    '"' -> sb.append('"')
-                    '`' -> sb.append('`')
-                    else -> sb.append(nc)
-                }
-                i += 2
-            } else {
-                sb.append(c)
-                i++
-            }
-        }
-        return sb.toString()
-    }
-
-    /**
-     * 去掉值表达式尾部与静态判定无关的 TS 后缀，以便 `{ ... } as const`、`x satisfies Foo`
-     * 等常见写法也能落到对象/原始字面量解析。只剥除末尾的 ` as const` 与 ` satisfies <Type>`。
-     */
-    internal fun stripValueSuffixes(expr: String): String {
-        var t = expr.trim()
-        if (t.endsWith(" as const")) t = t.removeSuffix(" as const").trim()
-        t = t.replace(Regex("""\s+satisfies\s+[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$"""), "").trim()
-        return t
-    }
-
-    /** 尝试把一个表达式片段解析为静态值；非静态返回 null。 */
-    private fun tryParseStaticValue(expr: String): Any? {
-        val s = stripValueSuffixes(expr)
-        if (s.isEmpty()) return null
-        // 字面量：null / undefined / true / false
-        when (s) {
-            "null" -> return null
-            "undefined" -> return null  // 写回时用 null 占位
-            "true" -> return true
-            "false" -> return false
-        }
-        // 数字
-        s.toLongOrNull()?.let { return it }
-        s.toDoubleOrNull()?.let {
-            // 避免整数被解析成科学计数的小数
-            if (s.matches(Regex("""-?\d+"""))) return s.toLong()
-            return it
-        }
-        // 字符串：单/双/反引号（反引号中无插值）
-        if ((s.startsWith("\"") && s.endsWith("\"") && s.length >= 2) ||
-            (s.startsWith("'") && s.endsWith("'") && s.length >= 2)) {
-            return unquoteString(s)
-        }
-        if (s.startsWith("`") && s.endsWith("`") && s.length >= 2) {
-            if (Regex("""\$\{""").containsMatchIn(s.substring(1, s.length - 1))) return null
-            return unquoteString(s)
-        }
-        // 对象字面量
-        if (s.startsWith("{") && s.endsWith("}")) {
-            return parseObjectLiteralBody(s)
-        }
-        // 数组字面量
-        if (s.startsWith("[") && s.endsWith("]")) {
-            return parseArrayLiteralBody(s)
-        }
-        // 其他（引用、spread、函数调用、运算、三元、as const 等）→ 跳过
-        return null
-    }
-
-    private fun parseArrayLiteralBody(raw: String): List<Any?> {
-        val inner = raw.trim().let { if (it.startsWith("[") && it.endsWith("]")) it.substring(1, it.length - 1) else it }
-        val elements = splitTopLevelArrayElements(inner)
-        val result = mutableListOf<Any?>()
-        for (e in elements) {
-            if (e.isBlank()) continue  // 稀疏数组 [1,,2] 空元素跳过
-            // spread element [...arr] → 整条跳过
-            if (e.trimStart().startsWith("...")) continue
-            val v = tryParseStaticValue(e)
-            if (v != null) result.add(v)
-        }
-        return result
-    }
-
-    private fun splitTopLevelArrayElements(body: String): List<String> {
-        val parts = mutableListOf<String>()
-        var start = 0
-        var depth = 0
-        var inString: Char? = null
-        var escapeNext = false
-        var i = 0
-        while (i < body.length) {
-            val c = body[i]
-            when {
-                escapeNext -> escapeNext = false
-                inString != null -> when (c) {
-                    '\\' -> escapeNext = true
-                    inString -> inString = null
-                }
-                else -> when (c) {
-                    '"', '\'', '`' -> inString = c
-                    '{', '[' -> depth++
-                    '}', ']' -> depth = (depth - 1).coerceAtLeast(0)
-                    ',' -> if (depth == 0) {
-                        parts += body.substring(start, i)
-                        start = i + 1
-                    }
-                }
-            }
-            i++
-        }
-        if (start < body.length) parts += body.substring(start)
-        return parts
-    }
 
     // ==========================================================================
     // 合并：existingKV + 新 JSON（都是扁平 key） → 新的嵌套 Map
