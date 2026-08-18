@@ -725,22 +725,16 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * 与 react-i18next 的 `useTranslation()` API 形态完全不同（前者返回 `[t, { locale }]`，
      * 后者返回 `{ t }`），复用会注入错误的 import。Solid 走独立的 [injectSolid]。
      */
+    // 目标架构 Rewriter 层：when 编排已迁入 com.pan.extractor.rewriter.ImportRewriter，此处委托。
     fun injectForFramework(
         processor: I18nProcessor,
         psiFile: PsiElement,
         framework: I18nFramework,
         decision: InjectionDecision,
-    ) {
-        when (framework) {
-            is VueI18nStrategy -> injectVue(processor, psiFile, decision)
-            is ReactI18nextStrategy -> injectReact(processor, psiFile, decision)
-            is SolidI18nStrategy -> injectSolid(processor, psiFile, decision)
-            else -> { /* Generic 不注入 */ }
-        }
-    }
+    ) = com.pan.extractor.rewriter.ImportRewriter.injectForFramework(processor, psiFile, framework, decision)
 
     /** Vue 注入分支（从 I18nProcessor.run() 搬入，行为不变）。 */
-    private fun injectVue(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+    internal fun injectVueBranch(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
         val d = decision
         val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
             (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
@@ -780,7 +774,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     }
 
     /** React 注入分支（从 I18nProcessor.run() 搬入，行为不变）。 */
-    private fun injectReact(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+    internal fun injectReactBranch(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
         val d = decision
         if (d.reactI18nTFallbackToDollarT) {
             rewriteExistingI18nTCallsToDollarT(psiFile)
@@ -829,7 +823,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
      * - 自定义 hook 用 `findHookFunctions` 识别
      * - `detectGlobalDollarTNeeded` 复用 React 实现（无组件 + 无 hook 即视为纯工具）
      */
-    private fun injectSolid(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+    internal fun injectSolidBranch(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
         val d = decision
         if (!d.hasExtractedStrings && !d.hasExistingStrings) return
 

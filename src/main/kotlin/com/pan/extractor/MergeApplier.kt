@@ -221,65 +221,27 @@ object MergeApplier {
 
     // ─────────────────────────────────────────────────────────────
     // 骨架重写辅助（纯函数，供 AllI18n / I18n 两个动作共用）
+    // 目标架构 Planner 层：实现已迁入 com.pan.extractor.planner.SkeletonPlanner，此处委托。
     // ─────────────────────────────────────────────────────────────
 
-    /** 构建参数表达式里的占位符到 (占位, 参数 key) 映射 */
+    /** 构建参数表达式里的占位符到 (占位, 参数 key) 映射。 */
     internal fun buildPlaceholderRewrite(
         isVue: Boolean,
         isReact: Boolean,
         pairs: List<Pair<String, String>>,
-    ): Map<String, Pair<String, String>> {
-        val result = mutableMapOf<String, Pair<String, String>>()
-        // 纯函数：仅在存在 Application（插件运行上下文）时才读取设置里的前缀，
-        // 否则回退默认 "N"，保证纯单元测试（无平台）也能运行。
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        val vuePrefix = if (app != null) I18nSettings.getInstance().vuePlaceholderPrefix() else "N"
-        pairs.forEachIndexed { i, (key, _) ->
-            require(key.startsWith("N")) { "placeholder keys should be N0/N1 form" }
-            val rawIndex = key.substring(1).toIntOrNull() ?: i
-            when {
-                isVue -> {
-                    val k = "$vuePrefix$rawIndex"
-                    result[key] = "{$k}" to k
-                }
-                isReact -> {
-                    val k = rawIndex.toString()
-                    result[key] = "{{$k}}" to "\"$k\""
-                }
-                else -> {
-                    val k = rawIndex.toString()
-                    result[key] = "{$k}" to "\"$k\""
-                }
-            }
-        }
-        return result
-    }
+    ): Map<String, Pair<String, String>> =
+        com.pan.extractor.planner.SkeletonPlanner.buildPlaceholderRewrite(isVue, isReact, pairs)
 
-    internal fun buildParamsObjectString(isVue: Boolean, keyVals: List<Pair<String, String>>): String {
-        if (keyVals.isEmpty()) return "{}"
-        return keyVals.joinToString(prefix = "{ ", postfix = " }") { (k, vExpr) ->
-            "$k: $vExpr"
-        }
-    }
+    internal fun buildParamsObjectString(isVue: Boolean, keyVals: List<Pair<String, String>>): String =
+        com.pan.extractor.planner.SkeletonPlanner.buildParamsObjectString(isVue, keyVals)
 
-    /** 把一个纯字符串渲染成 JS 字面量（差异段非中文时用；字符串加引号，数字不加） */
-    internal fun renderLiteralValue(diff: String): String {
-        if (diff.matches(NUMBER_RE)) return diff
-        return quoteString(diff)
-    }
+    /** 把一个纯字符串渲染成 JS 字面量（差异段非中文时用；字符串加引号，数字不加）。 */
+    internal fun renderLiteralValue(diff: String): String =
+        com.pan.extractor.planner.SkeletonPlanner.renderLiteralValue(diff)
 
-    /** 数字抽取的占位值渲染：前导零（如 0755）会破坏 JS 字面量，必须加引号当字符串；纯数值保持数字 */
-    internal fun renderDigitLiteral(d: String): String {
-        val isPlainNumber = d.matches(NUMBER_RE)
-        val hasLeadingZero = d.length > 1 && d.startsWith("0") && !d.startsWith("0.")
-        if (!isPlainNumber || hasLeadingZero) return quoteString(d)
-        return d
-    }
-
-    private fun quoteString(s: String): String {
-        val quote = if ('\'' !in s) "'" else "\""
-        return "$quote${s.replace(quote, "\\$quote")}$quote"
-    }
+    /** 数字抽取的占位值渲染：前导零（如 0755）会破坏 JS 字面量，必须加引号当字符串；纯数值保持数字。 */
+    internal fun renderDigitLiteral(d: String): String =
+        com.pan.extractor.planner.SkeletonPlanner.renderDigitLiteral(d)
 
     /** 把某个 site 重写为 \$t('骨架{N0}', { N0: <diff> }) 并回填骨架 key 到翻译资源 */
     internal fun rewriteSiteToSkeleton(

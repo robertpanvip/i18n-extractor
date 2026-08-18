@@ -101,11 +101,39 @@ object JsRewriter : SourceRewriter {
     }
 }
 
-/** import 重写器：i18n import / hook / 全局 \$t 别名注入（TODO(迁移)：I18nImportInjector）。 */
+/** import 重写器：i18n import / hook / 全局 \$t 别名注入（迁移自 I18nImportInjector 的编排层）。 */
 object ImportRewriter : SourceRewriter {
 
     /** 为文件注入 i18n import 语句（TODO(迁移)：I18nImportInjector.ensureI18nInstanceImported 系）。 */
     fun ensureInstanceImported(file: PsiElement) {
         // TODO(迁移)
+    }
+
+    /**
+     * P2 统一注入入口：按 [framework] 分发到 Vue/React/Solid 注入逻辑。
+     * 迁移自 [com.pan.extractor.I18nImportInjector.injectForFramework] 的 when 编排（行为 1:1）。
+     *
+     * Solid 不再复用 React 分支——`@solid-primitives/i18n` 的 `useI18n(dict, () => locale)`
+     * 与 react-i18next 的 `useTranslation()` API 形态完全不同（前者返回 `[t, { locale }]`，
+     * 后者返回 `{ t }`），复用会注入错误的 import。Solid 走独立的 Solid 分支。
+     *
+     * 具体分支实现暂留在 [com.pan.extractor.I18nImportInjector]（internal 方法），
+     * 后续按模块继续内迁。
+     */
+    fun injectForFramework(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+        framework: com.pan.extractor.I18nFramework,
+        decision: com.pan.extractor.I18nImportInjector.InjectionDecision,
+    ) {
+        when (framework) {
+            is com.pan.extractor.VueI18nStrategy ->
+                processor.injector.injectVueBranch(processor, psiFile, decision)
+            is com.pan.extractor.ReactI18nextStrategy ->
+                processor.injector.injectReactBranch(processor, psiFile, decision)
+            is com.pan.extractor.SolidI18nStrategy ->
+                processor.injector.injectSolidBranch(processor, psiFile, decision)
+            else -> { /* Generic 不注入 */ }
+        }
     }
 }
