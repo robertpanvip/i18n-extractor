@@ -477,42 +477,13 @@ class I18nProcessor(
     }
 
     private fun collectTKeyFromCall(call: JSCallExpression) {
-        val method = call.methodExpression
         val firstArg = call.arguments.firstOrNull() ?: return
         val text = extractStringArgText(firstArg) ?: return
         val key = generateKey(text.trim(), call)
 
-        // 分支 A：简单引用名 $t / t / $tc / tc（useI18n 解构得到的局部 t 函数）
-        if (method is JSReferenceExpression) {
-            val name = method.referenceName
-            if (name == "\$t" || name == "\$tc") {
-                if (!isLocalFunctionNamedTCall(call)) {
-                    existingStrings.putIfAbsent(key, text.trim())
-                }
-                return
-            }
-            if (name == "t" || name == "tc") {
-                // 裸名 t/tc（无接收者）：useI18n/useTranslation 解构的本地翻译函数 → 已翻译
-                if (method.qualifier == null) {
-                    if (!isLocalFunctionNamedTCall(call)) {
-                        existingStrings.putIfAbsent(key, text.trim())
-                    }
-                    return
-                }
-                // 带接收者的 .t()：仅当确认为 i18n 全局实例才视为已翻译，否则交给下方兜底
-                // （obj.t('中文') 等普通方法调用不在此列为已翻译，中文正常进入提取）
-                if (I18nPsiTools.isConfirmedI18nGlobalChainCall(call)) {
-                    existingStrings.putIfAbsent(key, text.trim())
-                }
-                return
-            }
-            return
-        }
-        // 分支 B：链式调用 i18n.global.t / i18n.t / i18n.global.tc / i18n.tc
-        //        这里 method 是 JSPropertyReferenceExpression 或其他链表达式。
-        //        BUG_ANALYSIS 3.2：只收窄到**已确认的 i18n 全局实例**（接收者名为 i18n），
-        //        避免任意 obj.t('中文') / foo.bar.t('中文') 被误判为“已翻译”而漏提。
-        if (I18nPsiTools.isConfirmedI18nGlobalChainCall(call)) {
+        // PROJECT_ANALYSIS §2：统一语义判断（import alias / destructured hook / $t 规范名 /
+        // i18n.global 链式 / 本地同名函数排除）。命中 → 已翻译 key；不命中 → 中文字符按普通调用进入提取。
+        if (I18nPsiTools.isI18nTranslationCall(call)) {
             existingStrings.putIfAbsent(key, text.trim())
         }
     }

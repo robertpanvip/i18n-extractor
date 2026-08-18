@@ -76,8 +76,8 @@ TranslationCall
 
 - [x] 区分 local `t()` 与真实 i18n `t()`（`isLocalFunctionNamedTCall`：function 声明 + 本地 const/let 函数变量，如 `const t = fn`）
 - [x] 区分任意 `foo.t()` 与已确认的 i18n instance（`isConfirmedI18nGlobalChainCall` 收窄到 `i18n.t`/`i18n.global.t`/`i18n.tc`）
-- [ ] 支持 import alias reference resolve
-- [~] 支持 destructured translation function 的语义判断（裸 `t` 判定为 i18n；`const { t } = useI18n()` 反向保证测试）
+- [x] 支持 import alias reference resolve（`import { t as translate } from 'react-i18next'; translate('x')` 经 `importedFromI18nFramework` / `importLocalNameMatches` 语义解析；非 i18n 模块 import 保守提取，见 `I18nRegexFallbackBoundaryTest`）
+- [x] 支持 destructured translation function 的语义判断（`destructuredFromI18nHook` 解析 `const { t } = useI18n()/useTranslation()`；裸 `t` 判定为 i18n，非 i18n 来源→提取，见 `I18nRegexFallbackBoundaryTest`）
 - [x] 增加 symbol collision regression tests（const/let 函数变量 `t`/`tc` + `i18n.global` 等，见 `I18nRegexFallbackBoundaryTest`）
 - [x] 对无法确定语义的调用使用 conservative fallback，避免错误跳过真实文本（`obj.t()`/`ns.t()`/`const t=fn` 的中文一律进入提取）
 
@@ -254,11 +254,11 @@ zh.json
 
 ### TODO
 
-- [ ] 多文件 ChangePlan 原子 apply
-- [ ] 使用统一 IntelliJ command 组织修改
-- [ ] 失败时不留下部分修改
-- [ ] multi-file failure regression test
-- [ ] code + import + JSON simultaneous update test
+- [x] 多文件 ChangePlan 原子 apply（`MergeApplier.apply` 统一提交 code/import/skeleton 重写与资源写回）
+- [x] 使用统一 IntelliJ command 组织修改（`AllI18nExtractorAction.run` 单 `WriteCommandAction`，`\$t` 转义防插值）
+- [x] 失败时不留下部分修改（`validateAllModifiableSites` 应用前完整校验全部待改写 site，有失效即整体中止）
+- [x] multi-file failure regression test（`MergeApplierTest.testApplyThrowsBeforeAnyWriteWhenSiteInvalid`：破坏 site 后确认未受影响文件不被改写）
+- [x] code + import + JSON simultaneous update test（`MergeApplierTest.testSingleCommandMultiFileCodeAndResourceAtomicUndo`：单 command 改写两个文件代码 + 产出资源，一次 Undo 整体回滚；`testApplyThrowsBeforeAnyWriteWhenSiteInvalid` 锁定失败路径）
 
 ---
 
@@ -285,8 +285,8 @@ PSI reparse
 - [x] 多个 sibling pointer 连续 rewrite（`testSiblingConsecutiveRewritePointers`，3 个相邻字面量逐一替换）
 - [x] nested pointer 连续 rewrite（`testNestedAdjacentPointerSurvivesRewrite`）
 - [x] 删除节点后的 pointer 行为（`testSmartPointerRemovedNodeBecomesInvalid`，优雅失效不崩溃）
-- [ ] injected PSI pointer 生命周期
-- [ ] 文件 reparse 后 pointer 行为
+- [x] injected PSI pointer 生命周期（`testVueTemplateUndoRedoRoundTrip` 覆盖 Vue 模板 injected PSI 的 Undo/Redo 生命周期）
+- [x] 文件 reparse 后 pointer 行为（`testFileReparsePointerSurvivesForUntouchedAfterReparse`：reparse 后未动节点仍有效、被移除节点优雅失效）
 - [x] 多文件同时 rewrite（`testMultiFileUndoRedoRoundTrip` / `testSmartPointerUntouchedNodeStaysValid` 跨文件）
 
 ---
@@ -563,9 +563,9 @@ Performance       ★★★☆☆
 - [x] 区分 local `t()` / arbitrary `.t()` / real i18n call（`isLocalFunctionNamedTCall` + `isConfirmedI18nGlobalChainCall` + symbol collision 回归）
 - [x] ExtractionPlan / ChangePlan（`collect` 采集 pendingChanges / collectedSites + blockedSiteIds）
 - [x] SmartPsiElementPointer lifecycle（移除失效 / 未动有效 / sibling 连续 / nested 相邻）
-- [x] Multi-file atomic apply（`MergeApplier` + `AllI18nExtractorAction`）
+- [x] Multi-file atomic apply（`MergeApplier` + `AllI18nExtractorAction`，正向 + 失败回归）
 - [x] Undo / Redo integration test（单文件 / 多文件 / 连续两次 / Vue 模板）
-- [~] Vue injected PSI rewrite lifecycle（模板重写与 undo 已覆盖；reparse 后 pointer 待补）
+- [x] Vue injected PSI rewrite lifecycle + reparse 后 pointer（`testVueTemplateUndoRedoRoundTrip` + `testFileReparsePointerSurvivesForUntouchedAfterReparse`）
 
 ## 🟠 P1
 
@@ -573,9 +573,9 @@ Performance       ★★★☆☆
 - [ ] Generic fallback test
 - [ ] Shared package framework semantics
 - [ ] Resource Writer edge cases
-- [ ] Multi-file failure regression
+- [ ] Multi-file failure regression（已补正向/失败原子性回归，见 §5；剩余为更广场景）
 - [ ] Folding lifecycle
-- [ ] Reparse 后 PSI / pointer 测试
+- [x] Reparse 后 PSI / pointer 测试（`testFileReparsePointerSurvivesForUntouchedAfterReparse`）
 
 ## 🟡 P2
 

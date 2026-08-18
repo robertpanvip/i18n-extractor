@@ -322,7 +322,61 @@ class I18nIntegrationLifecycleTest : BasePlatformTestCase() {
         assertTrue("文件内应已发生 \$t 替换", after.contains("\$t("))
     }
 
-    // ── 7.3b 真实 Undo/Redo：extract 时注入 import + 覆盖 Vue 模板（injected PSI）──
+    // ── 6.2d 文件 reparse 后 pointer 行为：被编辑节点移除 → 失效；未动节点 → 仍有效 ──
+
+    fun testFileReparsePointerSurvivesForUntouchedAfterReparse() {
+        val file = configureFile(
+            "src/Reparse.vue",
+            """
+            <script setup lang="ts">
+            const untouched = "保留文案"
+            const doomed = "将被移除文案"
+            </script>
+            """.trimIndent()
+        )
+        val lits = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+            file, com.intellij.lang.javascript.psi.JSLiteralExpression::class.java
+        ).filter { it.stringValue in listOf("保留文案", "将被移除文案") }
+        val untouchLit = lits.first { it.stringValue == "保留文案" }
+        val doomedLit = lits.first { it.stringValue == "将被移除文案" }
+
+        val untouchPointer = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(untouchLit)
+        val doomedPointer = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(doomedLit)
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+
+        // 重新解析目标文本：删除 "将被移除文案" 声明、追加新声明，触发整文件 reparse。
+        val reparseText = """
+            <script setup lang="ts">
+            const untouched = "保留文案"
+            const extra = "新增文案"
+            </script>
+        """.trimIndent()
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            doc.replaceString(0, doc.textLength, reparseText)
+        }
+        PsiDocumentManager.getInstance(project).commitDocument(doc)
+
+        // 未动节点：reparse 后指针仍有效，且解析到同名同内容的节点
+        val untouchedAfter = untouchPointer.element
+        assertNotNull("reparse 后未动节点指针应仍有效", untouchedAfter)
+        assertEquals("reparse 后未动节点值应不变", "保留文案", literalValue(untouchedAfter))
+
+        // 被移除节点：reparse 后指针解析为 null（优雅失效）或不再指向原内容（不崩溃）
+        val doomedAfter = doomedPointer.element
+        if (doomedAfter != null) {
+            assertFalse("被移除节点不应再解析到原值，实际: ${literalValue(doomedAfter)}",
+                literalValue(doomedAfter) == "将被移除文案")
+        }
+
+        // 文件确实被重新解析到新内容
+        assertTrue("reparse 后应包含新增声明", file.text.contains("新增文案"))
+        assertFalse("reparse 后原被移除声明不应存在", file.text.contains("将被移除文案"))
+    }
+
+    /** 取 JS 字面量节点值；非字面量时退化为剥引号文本。 */
+    private fun literalValue(el: com.intellij.psi.PsiElement?): String =
+        (el as? com.intellij.lang.javascript.psi.JSLiteralExpression)?.stringValue
+            ?: el?.text?.trim('"', '`') ?: ""
 
     fun testVueTemplateUndoRedoRoundTrip() {
         val before = """

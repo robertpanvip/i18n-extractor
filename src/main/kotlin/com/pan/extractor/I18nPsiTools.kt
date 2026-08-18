@@ -9,6 +9,7 @@ import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVariable
+import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.javascript.psi.impl.JSPsiElementFactory
 import com.intellij.psi.PsiComment
@@ -341,6 +342,97 @@ internal object I18nPsiTools {
         return text != null && text.startsWith("i18n.") && (text.endsWith(".t") || text.endsWith(".tc"))
     }
 
+    // ── i18n 框架语义解析（PROJECT_ANALYSIS §2：import alias + destructured hook） ──
+
+    /** 提供翻译函数（t/tc/\$t）的 i18n 框架包名。命中说明该 import 是"真实 i18n 框架"。 */
+    private val I18N_FRAMEWORK_MODULES = setOf(
+        "react-i18next", "vue-i18n", "i18next",
+        "@solid-primitives/i18n", "@solid-hooks/i18n"
+    )
+
+    /** 通过解构/hook 生成的翻译函数来源标记（出现在 `const … = <hook>(` / `=` 语句里即视为已翻译）。 */
+    private val I18N_HOOK_DESTRUCTURE_MARKERS = listOf(
+        "useI18n(", "useTranslation(", "getI18n(", "createI18n(",
+        "createAppI18n(", "initReactI18next(", "i18n.global.t", "i18n.t"
+    )
+
+    /**
+     * 【PROJECT_ANALYSIS §2】统一判断一个 [call] 是否为「真实的 i18n 翻译调用」。
+     *
+     * 相比旧的「只看名字 t/tc/\$t/\$tc 或 i18n.* 链」的一刀切，这里增加语义解析：
+     *  - **import alias**：`import { t as translate } from 'react-i18next'; translate('key')`
+     *    → 名字虽不是 t，但解析/文件扫描到它来自 i18n 框架 import → 视为已翻译；
+     *    `import { t } from 'react-i18next'; t('x')` 同理。
+     *  - **destructured hook**：`const { t } = useI18n(); t('x')` / `useTranslation()` →
+     *    `t` 解析到解构/生成自已知 i18n hook 的变量 → 视为已翻译。
+     *  - 解析到**非 i18n 来源**（本地普通函数/函数变量、参数、其它模块的 import、
+     *    非 i18n 对象方法）→ 不是已翻译，参数中的中文按普通调用进入提取（conservative，宁可多提不漏提）。
+     *
+     * 行为排序：本地同名函数排除 → \$t/\$tc(插件注入规范名) → 带接收者链式(i18n.global) →
+     * 裸引用语义解析（框架 import / hook 解构）→ 无法解析时按规范名 t/tc 保守视为已翻译。
+     */
+    @JvmStatic
+    fun isI18nTranslationCall(call: JSCallExpression): Boolean {
+        val method = call.methodExpression as? JSReferenceExpression ?: return false
+        val name = method.referenceName ?: return false
+        // 本地同名普通函数/函数变量（function t / const t = fn / let tc = function(){}）不是 i18n
+        if (isLocalFunctionNamedTCall(call)) return false
+        // 插件自身注入的规范名 $t / $tc → 一律视为已翻译
+        if (name == "\$t" || name == "\$tc") return true
+        // 带接收者的链式调用：仅收窄到已确认的 i18n 全局实例（i18n.t / i18n.global.t / tc），
+        // 避免把 obj.t() / foo.bar.t() 误判为已翻译而漏提（BUG_ANALYSIS 3.2）。
+        if (method.qualifier != null) return isConfirmedI18nGlobalChainCall(call)
+        // 裸引用：名字本身可能被 import alias 重命名（translate 等），先做框架 import 语义解析。
+        if (importedFromI18nFramework(call)) return true
+        val resolved = method.resolve()
+        if (resolved != null && destructuredFromI18nHook(resolved)) return true
+        // 解析到了明确的非 i18n 来源（本地变量/参数/普通模块 import）→ 按普通调用，中文进提取
+        if (resolved != null) return false
+        // 裸引用且无法解析：名为 t/tc（React / useI18n 规范翻译名）时保守视为已翻译，避免误提取
+        return name == "t" || name == "tc"
+    }
+
+    /**
+     * 文件级扫描：若 [call] 的裸引用名（可能是 alias，如 `t as translate` 的 `translate`）
+     * 出现在任何"从 i18n 框架包 import"的声明里，则为真实 i18n 翻译调用。
+     * 不依赖 resolve()，因此即使用户项目里未真正安装该框架也能语义判定。
+     */
+    private fun importedFromI18nFramework(call: JSCallExpression): Boolean {
+        val file = call.containingFile ?: return false
+        val name = (call.methodExpression as? JSReferenceExpression)?.referenceName ?: return false
+        return PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java).any { decl ->
+            val text = decl.text
+            val src = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
+                ?.groupValues?.get(1)?.trim()?.lowercase() ?: return@any false
+            if (src !in I18N_FRAMEWORK_MODULES) return@any false
+            importLocalNameMatches(text, name)
+        }
+    }
+
+    /** 判断 [importText] 是否把某个 specifier 绑定成了本地名 [name]（含 `X as <name>` 别名与直接 `X`）。 */
+    private fun importLocalNameMatches(importText: String, name: String): Boolean {
+        if (Regex("""\bas\s+\Q$name\E\b""").containsMatchIn(importText)) return true
+        val curlyIdxS = importText.indexOf('{')
+        val curlyIdxE = importText.lastIndexOf('}')
+        if (curlyIdxS in 0 until curlyIdxE) {
+            val inner = importText.substring(curlyIdxS + 1, curlyIdxE)
+            if (Regex("""(^|[,\s])\Q$name\E(\s+as\b|$|[,\s])""").containsMatchIn(inner)) return true
+        }
+        return false
+    }
+
+    /**
+     * [PROJECT_ANALYSIS §2] 判断一个解析到的声明是否由已知的 i18n hook 解构/生成而来：
+     * `const { t } = useI18n(); const t = getI18n().t; const { t } = useTranslation();` 等。
+     * 若 [resolved] 是一个 JSVariable 且引入它的 var 语句里出现已知 i18n hook 调用 → 已翻译。
+     */
+    private fun destructuredFromI18nHook(resolved: PsiElement): Boolean {
+        if (resolved.containingFile == null) return false
+        val stmt = PsiTreeUtil.getParentOfType(resolved, JSVarStatement::class.java) ?: return false
+        val text = stmt.text.replace("\\s+".toRegex(), "")
+        return I18N_HOOK_DESTRUCTURE_MARKERS.any { text.contains(it) }
+    }
+
     fun detectTSemantic(stringExpr: JSLiteralExpression): I18nProcessor.TSem {
         // 1) 直接参数
         val parent = stringExpr.parent
@@ -349,27 +441,7 @@ internal object I18nPsiTools {
             parent.parent is JSCallExpression -> parent.parent as JSCallExpression
             else -> null
         }
-        fun isTCall(call: JSCallExpression): Boolean {
-            if (isLocalFunctionNamedTCall(call)) return false
-            val method = call.methodExpression
-            if (method is JSReferenceExpression) {
-                val name = method.referenceName
-                // 插件统一别名 $t / $tc：无论引用形态都是 i18n 翻译调用
-                if (name == "\$t" || name == "\$tc") return true
-                if (name == "t" || name == "tc") {
-                    // 裸名 t/tc（qualifier 为空）通常是 useI18n/useTranslation 解构的本地翻译函数 → i18n
-                    val qualifier = method.qualifier
-                    if (qualifier == null) return true
-                    // 带接收者的 .t() 链式：仅当接收者确认为 i18n 全局实例才算已翻译，
-                    // 否则 obj.t('中文') / foo.bar.t('中文') 视为普通方法调用，中文正常提取（3.2）。
-                    return isConfirmedI18nGlobalChainCall(call)
-                }
-                // 非 t/tc 命名的引用（如 foo.bar.t 之外的其它）→ 由下方链式判定兜底
-            }
-            // 链式调用：仅收窄到已确认的 i18n 全局实例（i18n.t / i18n.global.t / tc），
-            // 避免把 obj.t() / foo.bar.t() 误判为已翻译而漏提（BUG_ANALYSIS 3.2）。
-            return isConfirmedI18nGlobalChainCall(call)
-        }
+        fun isTCall(call: JSCallExpression): Boolean = isI18nTranslationCall(call)
         if (directCall != null && isTCall(directCall)) return I18nProcessor.TSem.DIRECT_ARG
 
         // 2) 外层祖先 $t 调用（参数不是字符串字面量 → 表达式形式）

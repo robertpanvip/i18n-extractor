@@ -263,31 +263,26 @@ class I18nExtractorAction : AnAction() {
                         val mergePlan = dialog.mergePlan
                         val hasMerge =
                             mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
-                        // 【问题 1】EDT 执行器：每次 PSI 写都经它拿写锁，进度条才有机会重绘
-                        val edtRunner: (() -> Unit) -> Unit = { r ->
-                            ApplicationManager.getApplication().invokeAndWait {
-                                WriteCommandAction.runWriteCommandAction(project, r)
-                            }
-                        }
-                        val finalJson: Map<String, String>
                         val dropExistingKeys = LinkedHashSet<String>()
-                        if (hasMerge) {
-                            // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                            finalJson = MergeApplier.apply(
-                                processors = listOf(processor),
-                                extracted = allStrings,
-                                mergePlan = mergePlan,
-                                indicator = indicator,
-                                edtRunner = edtRunner,
-                                dropExistingKeysOut = dropExistingKeys,
-                            )
-                        } else {
-                            processor.run()
-                            finalJson = allStrings
-                        }
+                        // 【P0 多文件修改原子性】与 AllI18nExtractorAction 对齐：处理器写入 /
+                        // 骨架重写 / 最终资源写回统一放进【单个】WriteCommandAction，失败整体回滚。
                         ApplicationManager.getApplication().invokeAndWait {
                             WriteCommandAction.runWriteCommandAction(project) {
-                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson), dropExistingKeys)
+                                val computedFinalJson: Map<String, String> = if (hasMerge) {
+                                    MergeApplier.apply(
+                                        processors = listOf(processor),
+                                        extracted = allStrings,
+                                        mergePlan = mergePlan,
+                                        indicator = indicator,
+                                        // edtRunner = null → 在当前 command 内同步执行（单 command 原子）
+                                        edtRunner = null,
+                                        dropExistingKeysOut = dropExistingKeys,
+                                    )
+                                } else {
+                                    processor.run()
+                                    allStrings
+                                }
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(computedFinalJson), dropExistingKeys)
                             }
                         }
                         indicator.fraction = 1.0
@@ -392,44 +387,29 @@ class I18nExtractorAction : AnAction() {
                         indicator.text = "批量写入中：处理 $processors.size 个文件"
                         indicator.fraction = 0.0
                         // —— 阶段 1：逐文件写入 + 应用合并计划 ——
-                        // 【问题 1】EDT 执行器：每个文件 / 每个重写任务都经它拿写锁，
-                        // 背景线程在两次写之间更新 indicator，EDT 得以重绘进度条。
-                        val edtRunner: (() -> Unit) -> Unit = { r ->
-                            ApplicationManager.getApplication().invokeAndWait {
-                                WriteCommandAction.runWriteCommandAction(project, r)
-                            }
-                        }
+                        // 【P0 多文件修改原子性】多文件批量写入 + 骨架重写 + 资源写回全部放进
+                        // 【单个】WriteCommandAction，任一步失败整体回滚，不留“部分文件已改”半状态。
                         val mergePlan = dialog.mergePlan
                         val hasMerge =
                             mergePlan.selectedAffix.isNotEmpty() || mergePlan.selectedDigit.isNotEmpty()
-                        val finalJson: Map<String, String>
-                            val dropExistingKeys = LinkedHashSet<String>()
-                            if (hasMerge) {
-                                // 应用合并计划：常规写入(跳过被合并句) + 骨架重写为带 {N0} 的 $t
-                                finalJson = MergeApplier.apply(
-                                    processors = processors,
-                                    extracted = extracted,
-                                    mergePlan = mergePlan,
-                                    indicator = indicator,
-                                    edtRunner = edtRunner,
-                                    dropExistingKeysOut = dropExistingKeys,
-                                )
-                            } else {
-                                for ((idx, processor) in processors.withIndex()) {
-                                    indicator.fraction = idx.toDouble() / processors.size.coerceAtLeast(1) * 0.85
-                                    val pf = (processor.targetPsiFile as? PsiFile)
-                                    indicator.text2 = pf?.name
-                                        ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
-                                    if (indicator.isCanceled) break
-                                    edtRunner { processor.run() }
-                                }
-                                finalJson = extracted
-                            }
-                        indicator.fraction = 0.9
-                        // —— 阶段 2：覆盖入口 / 复制 JSON（需要写锁） ——
+                        val dropExistingKeys = LinkedHashSet<String>()
                         ApplicationManager.getApplication().invokeAndWait {
                             WriteCommandAction.runWriteCommandAction(project) {
-                                output = applyFinalOutput(project, dialog, LinkedHashMap(finalJson), dropExistingKeys)
+                                val computedFinalJson: Map<String, String> = if (hasMerge) {
+                                    MergeApplier.apply(
+                                        processors = processors,
+                                        extracted = extracted,
+                                        mergePlan = mergePlan,
+                                        indicator = indicator,
+                                        // edtRunner = null → 在当前 command 内同步执行（单 command 原子）
+                                        edtRunner = null,
+                                        dropExistingKeysOut = dropExistingKeys,
+                                    )
+                                } else {
+                                    for (processor in processors) processor.run()
+                                    extracted
+                                }
+                                output = applyFinalOutput(project, dialog, LinkedHashMap(computedFinalJson), dropExistingKeys)
                             }
                         }
                         indicator.fraction = 1.0

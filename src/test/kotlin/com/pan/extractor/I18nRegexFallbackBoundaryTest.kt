@@ -195,4 +195,95 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
         assertTrue("useI18n 解构的裸 t('nav.about') 应仍是 i18n 调用", p.existingStrings.containsKey("nav.about"))
         assertFalse("解构裸 t 的 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.about"))
     }
+
+    // ── §2：import alias reference resolve ────────────────────────────
+    // 见 PROJECT_ANALYSIS §2「支持 import alias reference resolve」：
+    // `import { t as translate } from 'react-i18next'; translate('key')` 中名字被 alias 改成
+    // translate，但其来源是 i18n 框架 → 仍应识别为已翻译 key（不重提取、不进 extracted）。
+
+    fun testImportAliasRenameStillExisting() {
+        val p = collectFs(
+            "src/alias.ts",
+            """
+            import { t as translate } from 'react-i18next';
+            const msg = translate('nav.home');
+            """.trimIndent()
+        )
+        assertTrue("import { t as translate } from 'react-i18next'; translate('nav.home') 应识别为 i18n",
+            p.existingStrings.containsKey("nav.home"))
+        assertFalse("别名 i18n key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.home"))
+    }
+
+    fun testImportFrameworkNameStillExisting() {
+        val p = collectFs(
+            "src/tfromi18next.ts",
+            """
+            import { t } from 'i18next';
+            const msg = t('greeting');
+            """.trimIndent()
+        )
+        assertTrue("import { t } from 'i18next'; t('greeting') 应识别为 i18n",
+            p.existingStrings.containsKey("greeting"))
+        assertFalse("i18next 的 t key 不得进 extractedStrings", p.extractedStrings.containsKey("greeting"))
+    }
+
+    fun testUseTranslationDestructuredBareTStillExisting() {
+        val p = collectFs(
+            "src/reactbare.ts",
+            """
+            import { useTranslation } from 'react-i18next';
+            const { t } = useTranslation();
+            const msg = t('react.welcome');
+            """.trimIndent()
+        )
+        assertTrue("useTranslation 解构的裸 t('react.welcome') 应识别为 i18n",
+            p.existingStrings.containsKey("react.welcome"))
+        assertFalse("解构裸 t 的 react key 不得进 extractedStrings", p.extractedStrings.containsKey("react.welcome"))
+    }
+
+    // ── §2：destructured translation function 语义判断（非 i18n 来源不得漏提） ──
+    // 旧实现里"裸名 t 一律视为已翻译"会把工具模块/普通 hook 解构的 t 也误判为 i18n，导致漏提。
+    // 现在只有解析到"i18n 框架 import 或已知 i18n hook 解构"才算已翻译，否则中文字符正常提取。
+
+    fun testNonI18nImportedTBareNameExtracted() {
+        val p = collectFs(
+            "src/utilimport.ts",
+            """
+            import { t } from './utils';
+            const r = t('工具函数中文');
+            """.trimIndent()
+        )
+        assertTrue("import { t } from './utils'; t('工具函数中文') 是非 i18n 普通函数，中文应被提取（§2 修漏提）",
+            p.extractedStrings.containsValue("工具函数中文"))
+        assertFalse("非 i18n 工具 import 的 t 不应视为已翻译 key",
+            p.existingStrings.containsKey("工具函数中文"))
+    }
+
+    fun testNonI18nHookDestructuredTBareNameExtracted() {
+        val p = collectFs(
+            "src/otherhook.ts",
+            """
+            const { t } = someOtherHook();
+            const r = t('其它hook中文');
+            """.trimIndent()
+        )
+        assertTrue("const { t } = someOtherHook(); t('其它hook中文') 非 i18n hook，中文应被提取（§2 修漏提）",
+            p.extractedStrings.containsValue("其它hook中文"))
+        assertFalse("非 i18n hook 解构的 t 不应视为已翻译 key",
+            p.existingStrings.containsKey("其它hook中文"))
+    }
+
+    fun testImportAliasFromNonI18nModuleExtracted() {
+        val p = collectFs(
+            "src/aliasutil.ts",
+            """
+            import { t as translate } from './helper';
+            const r = translate('别名工具函数中文');
+            """.trimIndent()
+        )
+        assertTrue("import { t as translate } from './helper'; translate('别名工具函数中文') 非 i18n，中文应被提取",
+            p.extractedStrings.containsValue("别名工具函数中文"))
+        assertFalse("非 i18n 别名不应视为已翻译 key",
+            p.existingStrings.containsKey("别名工具函数中文"))
+    }
 }

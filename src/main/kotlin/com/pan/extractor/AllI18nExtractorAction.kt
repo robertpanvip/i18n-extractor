@@ -310,41 +310,33 @@ class AllI18nExtractorAction : AnAction() {
                     indicator.fraction = 0.0
                     indicator.text2 = ""
 
-                    // 【问题 1】给 MergeApplier 注入 EDT 执行器：apply 内部逐文件 / 逐重写任务
-                    // 经它拿写锁，期间背景线程更新 indicator、EDT 有机会重绘进度条。
-                    val edtRunner: (() -> Unit) -> Unit = { r ->
-                        ApplicationManager.getApplication().invokeAndWait {
-                            WriteCommandAction.runWriteCommandAction(project, r)
-                        }
-                    }
-
-                    // ── ①~⑤ 应用合并计划 ──
-                    //   填 blockedSiteIds → 逐文件常规写入 → 骨架重写 → 清理冗余 key
+                    // 【P0 多文件修改原子性】重构点：
+                    //   旧实现给每个文件 / 每个骨架重写任务分别开独立的 WriteCommandAction，
+                    //   多文件写入非原子（中途失败会留下“部分文件已改”）。
+                    //   现在把“所有文件的 import 注入 + $t 替换 + 骨架重写 + 资源写回”全部
+                    //   塞进【单个】WriteCommandAction：任一步抛异常，IntelliJ 撤销整个
+                    //   command，做到不留半完成状态（失败即整体回滚）。
+                    indicator.text = "原子写入 ${processors.size} 个文件（import + \$t 替换 + 骨架 + 资源写回）"
+                    indicator.text2 = "单 command 统一提交，失败将整体回滚"
                     val dropExistingKeys = LinkedHashSet<String>()
-                    val finalExtracted = MergeApplier.apply(
-                        processors = processors,
-                        extracted = extracted,
-                        mergePlan = mergePlan,
-                        indicator = indicator,
-                        edtRunner = edtRunner,
-                        dropExistingKeysOut = dropExistingKeys,
-                    )
-                    extracted.clear()
-                    extracted.putAll(finalExtracted)
-
-                    // ── ⑥ 最终输出：覆盖入口文件 or 复制 JSON（写入口文件同样需要写锁） ──
-                    indicator.text = when (dialog.outputMode) {
-                        OutputDestination.FILE -> "合并写回中文多语言入口文件"
-                        else -> "复制翻译 JSON 到剪贴板"
-                    }
-                    indicator.text2 = ""
-                    indicator.fraction = 0.95
-                    val finalMap = LinkedHashMap(extracted)
                     ApplicationManager.getApplication().invokeAndWait {
                         WriteCommandAction.runWriteCommandAction(project) {
-                            output = applyFinalOutput(project, dialog, finalMap, dropExistingKeys)
+                            val merged = MergeApplier.apply(
+                                processors = processors,
+                                extracted = extracted,
+                                mergePlan = mergePlan,
+                                indicator = indicator,
+                                // edtRunner = null → apply 内所有 processor.run()/骨架重写
+                                // 都在当前这个 command 内同步执行，保证单 command 原子提交
+                                edtRunner = null,
+                                dropExistingKeysOut = dropExistingKeys,
+                            )
+                            extracted.clear()
+                            extracted.putAll(merged)
+                            output = applyFinalOutput(project, dialog, LinkedHashMap(merged), dropExistingKeys)
                         }
                     }
+                    indicator.text = "已完成单 command 原子写入（入口 / 剪贴板）"
                     indicator.fraction = 1.0
                 }
 

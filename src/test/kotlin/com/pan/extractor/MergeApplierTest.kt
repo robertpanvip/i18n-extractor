@@ -4,6 +4,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -11,8 +12,23 @@ import org.junit.Assert.assertTrue
  */
 class MergeApplierTest : BasePlatformTestCase() {
 
+    private lateinit var undoDisposable: com.intellij.openapi.Disposable
+
+    override fun tearDown() {
+        if (::undoDisposable.isInitialized) {
+            com.intellij.openapi.util.Disposer.dispose(undoDisposable)
+        }
+        super.tearDown()
+    }
+
     override fun setUp() {
         super.setUp()
+        // 跨文档 Undo 会弹“Undo …?”确认对话框，headless 下需自动确认（TestDialog.OK）
+        undoDisposable = com.intellij.openapi.util.Disposer.newDisposable()
+        com.intellij.openapi.ui.TestDialogManager.setTestDialog(
+            com.intellij.openapi.ui.TestDialog.OK,
+            undoDisposable
+        )
         myFixture.addFileToProject(
             "package.json",
             """
@@ -427,5 +443,104 @@ class MergeApplierTest : BasePlatformTestCase() {
         // 骨架重写的两个 span 保持各自一行（换行缩进未被折叠）
         val spanCount = Regex("<span>").findAll(resultText).count()
         assertEquals("两个 <span> 元素应保留，实际:\n$resultText", 2, spanCount)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // P0 多文件修改原子性：任何待改写 site 失效时，apply 必须在
+    // 写入任何文件之前整体中止（validateAllModifiableSites），不留半完成状态。
+    // ─────────────────────────────────────────────────────────
+    fun testApplyThrowsBeforeAnyWriteWhenSiteInvalid() {
+        // 两个文件各贡献一个 site，用于交叉改写的两个文件都应保持原样
+        val processors = crossFileProcessors(
+            "src/A.vue" to "<template><div><span>完成A</span></div></template>",
+            "src/B.vue" to "<template><div><span>完成B</span></div></template>",
+        )
+        val (affix, _) = MergeApplier.factorizeSites(processors)
+        val skeletonGroup = affix.firstOrNull { it.skeleton == "完成{N0}" }
+        assertNotNull("跨文件应生成 完成{N0} 骨架组", skeletonGroup)
+        val plan = ExtractedStringsDialog.MergePlan(listOf(skeletonGroup!!), emptyList())
+
+        // 破坏其中一处 site 的替换目标，使其引用失效（选 B.vue 的站点，确保"未受影响"的 A.vue 全程不被触碰）。
+        // 为避免"选中站点恰好属于待断言完整性的文件"导致该文件被误删，确定性地取 processorIndex==1（B.vue）的 site。
+        val targetSite = skeletonGroup!!.variants.flatMap { it.sites }
+            .first { it.processorIndex == 1 }
+        assertTrue("应能定位到 B.vue 的待改写站点", targetSite.processorIndex == 1)
+        val targetProc = processors[targetSite.processorIndex]
+        val targetCollected = targetProc.collectedSites.first { it.id == targetSite.siteId }
+        val targetElement = targetCollected.replaceRootPointer.element!!
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            targetElement.delete()
+        }
+
+        val extracted = LinkedHashMap<String, String>()
+        var caught: IllegalStateException? = null
+        try {
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                MergeApplier.apply(processors, extracted, plan)
+            }
+        } catch (t: IllegalStateException) {
+            caught = t
+        }
+        assertNotNull("apply 应因站点失效抛出 IllegalStateException", caught)
+        assertTrue("异常说明应包含奇异化站点描述，实际: ${caught?.message}",
+            (caught?.message ?: "").contains("已失效"))
+
+        // 另一文件不得被改动（原子：验证失败在写入任何文件之前）
+        val intactText = myFixture.findFileInTempDir("src/A.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        assertTrue("未受影响文件不得被重写，实际:\n$intactText",
+            intactText.contains("完成A") && !intactText.contains("完成{N0}"))
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // P0 多文件原子性（正向）：单命令一次改写多个文件代码 + 产出翻译资源，
+    // 同批修改只需一次 Undo 即可整体回滚（共享同一 command → 单次回退原子组）。
+    // 与 testMultiFileUndoRedoRoundTrip（两次独立命令各回退一次）形成互补。
+    // ─────────────────────────────────────────────────────────
+    fun testSingleCommandMultiFileCodeAndResourceAtomicUndo() {
+        val beforeA = "<template><div><span>完成A</span></div></template>"
+        val beforeB = "<template><div><span>完成B</span></div></template>"
+        val processors = crossFileProcessors(
+            "src/AtomA.vue" to beforeA,
+            "src/AtomB.vue" to beforeB,
+        )
+        val (affix, _) = MergeApplier.factorizeSites(processors)
+        val skeletonGroup = affix.firstOrNull { it.skeleton == "完成{N0}" }
+        assertNotNull("跨文件应生成 完成{N0} 骨架组", skeletonGroup)
+        val plan = ExtractedStringsDialog.MergePlan(listOf(skeletonGroup!!), emptyList())
+
+        val extracted = LinkedHashMap<String, String>()
+        val holder = arrayOfNulls<MutableMap<String, String>>(1)
+        // 单 command 内同时改写两个代码文件，并产出最终翻译资源（JSON 内容来源）。
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            holder[0] = MergeApplier.apply(processors, extracted, plan)
+        }
+        val finalRes = holder[0] ?: emptyMap()
+        assertTrue("单命令内两文件代码 + 资源应一并产出：资源需含骨架 key，keys=${finalRes.keys}",
+            finalRes.containsKey("完成{N0}"))
+
+        val textA = myFixture.findFileInTempDir("src/AtomA.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        val textB = myFixture.findFileInTempDir("src/AtomB.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        assertTrue("A 代码应被改写，实际:\n$textA", textA.contains("完成{N0}"))
+        assertTrue("B 代码应被改写，实际:\n$textB", textB.contains("完成{N0}"))
+
+        // 同一 command 的跨文件改动，只需一次 Undo 即整体回滚（不留 A 已改/B 未改）。
+        com.intellij.openapi.command.CommandProcessor.getInstance().runUndoTransparentAction {
+            myFixture.performEditorAction(com.intellij.openapi.actionSystem.IdeActions.ACTION_UNDO)
+        }
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val textAUndo = myFixture.findFileInTempDir("src/AtomA.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        val textBUndo = myFixture.findFileInTempDir("src/AtomB.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        assertTrue("一次 Undo 后 A 应整体回滚，实际:\n$textAUndo", textAUndo.contains("完成A") && !textAUndo.contains("完成{N0}"))
+        assertTrue("一次 Undo 后 B 应整体回滚，实际:\n$textBUndo", textBUndo.contains("完成B") && !textBUndo.contains("完成{N0}"))
     }
 }
