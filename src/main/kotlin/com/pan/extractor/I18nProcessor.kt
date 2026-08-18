@@ -471,7 +471,10 @@ class I18nProcessor(
         // 使用反向引用确保引号配对（如开闭都是反引号）
         T_CALL_PATTERN.findAll(text).forEach { match ->
             val content = match.groupValues[2]
-            val key = generateKey(content.trim(), psiFile)
+            // 现有调用的 key 是用户已写定的资源键（可含 `.` 嵌套路径，如 'nav.home'），
+            // 必须原样保留，不能走 generateKey 的保留字符消毒——否则 'nav.home' 会被拆成 'nav home'，
+            // 与真实资源键失配、漏判"已翻译"。（#37 消毒只作用于新提取生成的 site key，见 collectExtractedStrings）
+            val key = content.trim()
             existingStrings.putIfAbsent(key, content.trim())
         }
     }
@@ -479,7 +482,10 @@ class I18nProcessor(
     private fun collectTKeyFromCall(call: JSCallExpression) {
         val firstArg = call.arguments.firstOrNull() ?: return
         val text = extractStringArgText(firstArg) ?: return
-        val key = generateKey(text.trim(), call)
+        // 现有调用的 key 是用户已写定的资源键（可含 `.` 嵌套路径，如 'nav.home' / 'dir.title'），
+        // 必须原样保留，不能走 generateKey 的保留字符消毒——否则 'nav.home' 会被拆成 'nav home'，
+        // 与真实资源键失配、漏判"已翻译"。（#37 消毒只作用于新提取生成的 site key，见 collectExtractedStrings）
+        val key = text.trim()
 
         // PROJECT_ANALYSIS §2：统一语义判断（import alias / destructured hook / $t 规范名 /
         // i18n.global 链式 / 本地同名函数排除）。命中 → 已翻译 key；不命中 → 中文字符按普通调用进入提取。
@@ -877,7 +883,16 @@ class I18nProcessor(
             // 指令的字符串字面量值（如 :title="'中文'"）去掉内层引号后再提取
             val literal = stripSurroundingQuotes(originalText)
             val extracted = collectExtractedStrings(literal, attrValue)
-            if (extracted != null) newText = "${tFunctionName}('$extracted')"
+            if (extracted != null) {
+                // BUG #36：属性路径此前零转义裸拼，含撇号文案（It's ok / Don't）会生成 $t('It's ok')
+                // → 语法破坏。与 buildTFunctionExpr 保持一致：含换行走模板字符串/转义反引号，否则转义单引号。
+                val escaped = if (extracted.contains("\n")) {
+                    extracted.replace("`", "\\`")
+                } else {
+                    extracted.replace("'", "\\'")
+                }
+                newText = "${tFunctionName}('$escaped')"
+            }
         }
 
         if (newText == originalText) return

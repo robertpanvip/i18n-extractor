@@ -142,6 +142,9 @@ object EnglishExtractor : LanguageExtractor {
 
     override fun judge(text: CharSequence): Boolean = isLatinAlphabetSentence(text)
 
+    /** 拉丁语系文案靠 ASCII 句子启发式判定，`class/id/style` 等 ATTRIBUTE 上下文极易含空格而误判，需要拒绝。 */
+    override fun accepts(site: SiteKind): Boolean = site != SiteKind.ATTRIBUTE
+
     override fun localeNameCandidates(): List<String> = listOf("en", "en-US", "en_US", "enUS", "us")
     override val langTagPrefix = "en"
     override val regionCodes: Set<String> = setOf("us", "gb", "au", "ca", "in", "sg", "ie", "nz")
@@ -152,7 +155,7 @@ object EnglishExtractor : LanguageExtractor {
  *
  * 属于拉丁字母语系：除专属重音符外，还共享英文 26 字母的句子判定，
  * 因此纯 ASCII 法语（如 "Bonjour tout le monde"）也能被识别提取。
- * 重音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文（与 CJK 一致）。
+ * 重音符文本在 ATTRIBUTE 里多为真实文案（title/aria-label 等），故仍接受所有上下文（与 CJK 一致）。
  */
 object FrenchExtractor : LanguageExtractor {
     override val id = "fr"
@@ -185,7 +188,7 @@ object RussianExtractor : LanguageExtractor {
  *
  * 属于拉丁字母语系：除专属变音外，还共享英文 26 字母的句子判定，
  * 因此纯 ASCII 德语（如 "Hallo Welt"）也能被识别提取。
- * 变音符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ * 变音文本在 ATTRIBUTE 里多为真实文案，故仍接受所有上下文。
  */
 object GermanExtractor : LanguageExtractor {
     override val id = "de"
@@ -204,7 +207,7 @@ object GermanExtractor : LanguageExtractor {
  *
  * 属于拉丁字母语系：除西语专属字符外，还共享英文 26 字母的句子判定，
  * 因此纯 ASCII 西语（如 "Hola mundo"）也能被识别提取。
- * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ * 专属字符文本在 ATTRIBUTE 里多为真实文案，故仍接受所有上下文。
  */
 object SpanishExtractor : LanguageExtractor {
     override val id = "es"
@@ -224,7 +227,7 @@ object SpanishExtractor : LanguageExtractor {
  * 属于拉丁字母语系：除意语专属重音外，还共享英文 26 字母的句子判定，
  * 因此纯 ASCII 意语（如 "Ciao mondo"）也能被识别提取。
  * 注意 à/è/é/ù 与法语重叠（如 "città" 也会被法语判中），属确定性方案的固有取舍。
- * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ * 专属字符文本在 ATTRIBUTE 里多为真实文案，故仍接受所有上下文。
  */
 object ItalianExtractor : LanguageExtractor {
     override val id = "it"
@@ -244,7 +247,7 @@ object ItalianExtractor : LanguageExtractor {
  * 属于拉丁字母语系：除葡语专属字符外，还共享英文 26 字母的句子判定，
  * 因此纯 ASCII 葡语（如 "Ola mundo"）也能被识别提取。
  * ã/õ 为葡语（及加利西亚语）特有，可稳定把葡语与西/法/意区分开。
- * 这些字符几乎不会出现在 class/id/style 等非文案属性里，故接受所有上下文。
+ * 专属字符文本在 ATTRIBUTE 里多为真实文案，故仍接受所有上下文。
  */
 object PortugueseExtractor : LanguageExtractor {
     override val id = "pt"

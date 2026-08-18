@@ -4,6 +4,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import java.nio.charset.StandardCharsets
 
 /**
  * 针对「真正写盘入口」TsFileEditor.regenerateTsFileWithNewJson / TsFileEditor.regenerateJsonFileWithNewJson
@@ -121,6 +122,98 @@ class UtilWriteBackEntryFileTest : BasePlatformTestCase() {
         val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("首页" to "首页"))
         assertNotNull("非法 JSON 应兜底返回格式化后的新 JSON", newText)
         assertTrue("兜底结果应包含新 key '首页'，result:\n$newText", newText!!.contains("首页"))
+    }
+
+    // ── P1 §11 Resource Writer 边界：BOM / CRLF / Unicode / 写回──────
+
+    /** 以精确字节写盘（绕过 PsiFile/文档对换行与 BOM 的规范化），保证格式断言真实。 */
+    private fun createRawEntry(relPath: String, raw: String): com.intellij.openapi.vfs.VirtualFile {
+        val psiFile = myFixture.addFileToProject(relPath, " ")
+        val vf = psiFile.virtualFile
+        com.intellij.openapi.application.ApplicationManager.getApplication().runWriteAction {
+            vf.setBinaryContent(raw.toByteArray(StandardCharsets.UTF_8))
+        }
+        return vf
+    }
+
+    fun testJsonWriteBackPreservesBomAndUnicode() {
+        val entry = createRawEntry("src/zh-bom.json", "\uFEFF{\n  \"你好\": \"😀 你好\"\n}\n")
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("好" to "好"))
+        assertNotNull(newText)
+        val result = newText!!
+        assertTrue("应保留起始 UTF-8 BOM，result 首个字符码点=${result.firstOrNull()?.code}", result.startsWith("\uFEFF"))
+        assertTrue("中文/emoji 不应被转义为 \\uXXXX，result:\n$result", !result.contains("\\u"))
+        assertTrue("中文应原样保留，result:\n$result", result.contains("😀") && result.contains("你好"))
+    }
+
+    fun testJsonWriteBackPreservesCrlf() {
+        val entry = createRawEntry("src/zh-crlf.json", "{\r\n  \"a\": \"1\"\r\n}\r\n")
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("b" to "2"))
+        assertNotNull(newText)
+        val result = newText!!
+        assertTrue("应保留 CRLF 换行风格，result:\n$result", result.contains("\r\n"))
+        val bareLf = Regex("(?<!\r)\n")
+        assertTrue("除 CRLF 外不应出现裸 LF，result:\n$result", !bareLf.containsMatchIn(result))
+    }
+
+    fun testJsonWriteBackPreservesLfWhenInputIsLf() {
+        val entry = createRawEntry("src/zh-lf.json", "{\n  \"a\": \"1\"\n}")
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("b" to "2"))
+        assertNotNull(newText)
+        assertTrue("LF 输入应保持 LF、不引入 CR，result:\n$newText", !newText!!.contains("\r"))
+    }
+
+    fun testJsonWriteBackMergesDuplicateKeyNotDuplicated() {
+        // 已存在的 key 由新 flat 再次写入时，应整体覆盖而不是追加第 2 份
+        val entry = createRawEntry("src/zh-dup.json", "{\n  \"退出\": \"旧值\"\n}\n")
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, linkedMapOf("退出" to "退出", "首页" to "首页"))
+        assertNotNull(newText)
+        val result = newText!!
+        assertTrue("重复 key 应被新值覆盖，result:\n$result", result.contains("\"退出\": \"退出\""))
+        // 该 entry map 只有 2 个 key，序列化后 key/value 各出现一次 → "退出" 恰出现 2 次，无重复追加
+        assertEquals("重复 key 不应被追加为两份，result:\n$result", 2, result.split("\"退出\"").size - 1)
+        assertTrue("应一并新增 '首页'，result:\n$result", result.contains("首页"))
+    }
+
+    fun testJsonWriteBackLargeFileRoundTrip() {
+        // 大批量 key（含嵌套 + 中文 + 新增覆盖）写回不应丢项、不应破坏格式
+        val existing = (1..300).joinToString(",\n") { """  "key$it": "值$it"""" }
+        val entry = createRawEntry("src/zh-large.json", "{\n$existing\n}\n")
+        val newFlat = linkedMapOf<String, String>().apply {
+            put("key1", "值1")            // 覆盖已有
+            put("新增项", "新增项")        // 新增
+            put("组合.子键", "组合子值")   // 新增嵌套，语义为点式路径
+        }
+        val newText = TsFileEditor.regenerateJsonFileWithNewJson(entry, newFlat)
+        assertNotNull("大 JSON 应能正常解析合并", newText)
+        val result = newText!!
+        assertTrue("应保留末尾 key300，result 前 200 字:\n${result.take(200)}", result.contains("\"key300\""))
+        assertTrue("覆盖 key1 仍存在，result:\n${result.take(200)}", result.contains("key1"))
+        assertTrue("应新增 '新增项'", result.contains("新增项"))
+        assertTrue("点式 key 应展开为嵌套 '组合'->'子键'", result.contains("子键"))
+        assertTrue("大 JSON 写回后仍应是可解析的 JSON", runCatching { com.google.gson.JsonParser.parseString(result) }.isSuccess)
+    }
+
+    fun testWriteVirtualFileTextReturnsTrueAndPersists() {
+        val entry = createRawEntry("src/zh-w.json", "{}")
+        val ok = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .runWriteAction<Boolean> { TsFileEditor.writeVirtualFileText(entry, "{\n  \"hi\": \"你好\"\n}\n") }
+        assertTrue("写盘应成功返回 true", ok)
+        val read = String(entry.contentsToByteArray(), StandardCharsets.UTF_8)
+        assertTrue("写回内容应持久化新增 key，read:\n$read", read.contains("你好"))
+    }
+
+    fun testWriteVirtualFileTextReturnsFalseOnWriteFailure() {
+        // 先造一个"目录" VirtualFile：addFileToProject 会自动建立中间目录，父节点即目录
+        myFixture.addFileToProject("writefail/placeholder.txt", "")
+        val dir = myFixture.findFileInTempDir("writefail")
+        assertNotNull("应能找到目录节点 writefail", dir)
+        val ok = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .runWriteAction<Boolean> {
+                runCatching { TsFileEditor.writeVirtualFileText(dir!!, "{\n  \"hi\": \"你好\"\n}\n") }
+                    .getOrDefault(true)
+            }
+        assertTrue("向目录写二进制内容应失败并返回 false（而非抛出或返回 true）", !ok)
     }
 
     // ─────────────────────────────────────────

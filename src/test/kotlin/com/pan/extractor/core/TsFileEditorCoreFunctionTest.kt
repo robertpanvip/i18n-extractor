@@ -214,6 +214,39 @@ class TsFileEditorCoreFunctionTest {
         assertTrue("应追加新 key bbb", out.contains("bbb"))
     }
 
+    // ── JSON 写回格式边界（P1 §11 Resource Writer）────────────────
+    // 检测原文件的 UTF-8 BOM 与换行风格，写回时格式不漂移。
+
+    @Test
+    fun detectFormatPlainLf() {
+        val fmt = TsFileEditor.detectJsonWriteFormat("{\n  \"a\": 1\n}\n")
+        assertEquals(false, fmt.bom)
+        assertEquals(false, fmt.crlf)
+        assertEquals("\n", fmt.newline)
+    }
+
+    @Test
+    fun detectFormatCrlf() {
+        val fmt = TsFileEditor.detectJsonWriteFormat("{\r\n  \"a\": 1\r\n}\r\n")
+        assertEquals(false, fmt.bom)
+        assertEquals(true, fmt.crlf)
+        assertEquals("\r\n", fmt.newline)
+    }
+
+    @Test
+    fun detectFormatBomLf() {
+        val fmt = TsFileEditor.detectJsonWriteFormat("\uFEFF{\n  \"a\": 1\n}\n")
+        assertEquals(true, fmt.bom)
+        assertEquals(false, fmt.crlf)
+    }
+
+    @Test
+    fun detectFormatBomCrlf() {
+        val fmt = TsFileEditor.detectJsonWriteFormat("\uFEFF{\r\n  \"a\": 1\r\n}\r\n")
+        assertEquals(true, fmt.bom)
+        assertEquals(true, fmt.crlf)
+    }
+
     // ── stripValueSuffixes ─────────────────────────────────────
 
     @Test

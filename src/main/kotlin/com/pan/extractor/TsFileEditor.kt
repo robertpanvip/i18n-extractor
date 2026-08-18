@@ -952,7 +952,29 @@ object TsFileEditor {
 
     // ==========================================================================
     // JSON 文件：直接解析 + 合并扁平 JSON（点式 key 尝试展开嵌套，冲突以新为准）+ 重新生成
+    //
+    // 边界（P1 §11 Resource Writer）：写回时保持原文件的 UTF-8 BOM 与换行风格（LF / CRLF），
+    // 并用 disableHtmlEscaping 保证非 ASCII（中文/emoji）以原文写出而非被转义。
     // ==========================================================================
+    /** 记录原 JSON 文件的编码/换行特征，供写回时保持格式。 */
+    data class JsonWriteFormat(
+        val bom: Boolean,
+        val crlf: Boolean,
+    ) {
+        val newline: String get() = if (crlf) "\r\n" else "\n"
+    }
+
+    internal fun detectJsonWriteFormat(content: String): JsonWriteFormat {
+        val body = if (content.startsWith("\uFEFF")) content.removePrefix("\uFEFF") else content
+        return JsonWriteFormat(bom = content != body, crlf = body.contains("\r\n"))
+    }
+
+    /** 依据格式特征补回换行风格与 UTF-8 BOM。 */
+    private fun applyJsonWriteFormat(jsonText: String, fmt: JsonWriteFormat): String {
+        val nlJson = if (fmt.crlf) jsonText.replace("\n", "\r\n") else jsonText
+        return if (fmt.bom) "\uFEFF$nlJson" else nlJson
+    }
+
     fun regenerateJsonFileWithNewJson(
         entryVf: VirtualFile,
         newFlatJson: Map<String, String>,
@@ -961,17 +983,19 @@ object TsFileEditor {
         val content = try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (_: Exception) { return null }
+        val fmt = detectJsonWriteFormat(content)
+        val body = if (fmt.bom) content.removePrefix("\uFEFF") else content
         val rootJson: JsonElement = try {
-            JsonParser.parseString(content)
+            JsonParser.parseString(body)
         } catch (_: Exception) {
             // JSON 解析失败 → 兜底：把新 JSON 格式化返回（整个文件被新值覆盖）
-            val g = GsonBuilder().setPrettyPrinting().create()
-            return g.toJson(newFlatJson)
+            val g = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
+            return applyJsonWriteFormat(g.toJson(newFlatJson), fmt)
         }
         val existingMap = jsonElementToNestedMap(rootJson)
         val merged = mergeFlatIntoNested(existingMap, newFlatJson, dropExistingKeys)
         val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-        return gson.toJson(merged)
+        return applyJsonWriteFormat(gson.toJson(merged), fmt)
     }
 
     private fun jsonElementToNestedMap(el: JsonElement): Map<String, Any?> {
@@ -1299,10 +1323,16 @@ object TsFileEditor {
     // ==========================================================================
     // 把 VirtualFile 内容替换为新文本（Write 安全封装）。
     // 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
+    // 返回是否写入成功；newText 若以 \uFEFF 开头则以 UTF-8 BOM 写盘（跨平台保留）。
     // ==========================================================================
-    fun writeVirtualFileText(entryVf: VirtualFile, newText: String) {
-        val bytes = newText.toByteArray(StandardCharsets.UTF_8)
-        entryVf.setBinaryContent(bytes, 0L, bytes.size.toLong(), null)
+    fun writeVirtualFileText(entryVf: VirtualFile, newText: String): Boolean {
+        return try {
+            val bytes = newText.toByteArray(StandardCharsets.UTF_8)
+            entryVf.setBinaryContent(bytes, 0L, bytes.size.toLong(), null)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** 把虚拟文件路径作为"候选"持久化，供下次优先命中。 */

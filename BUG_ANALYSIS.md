@@ -344,13 +344,13 @@ const t = xxx
 
 ## TODO
 
-- [ ] P1：import name collision
-- [ ] P1：local function collision
-- [ ] P1：local variable collision
+- [x] P1：import name collision
+- [x] P1：local function collision
+- [x] P1：local variable collision
 - [ ] P1：parameter collision
-- [ ] P1：scope shadowing
-- [ ] P1：自动 alias 生成
-- [ ] P1：保持现有 alias 语义不变
+- [x] P1：scope shadowing
+- [x] P1：自动 alias 生成
+- [x] P1：保持现有 alias 语义不变
 
 ---
 
@@ -435,14 +435,14 @@ JSON / translation resource 写回属于最终用户可见的数据修改，需�
 
 ## TODO
 
-- [ ] P1：nested key
-- [ ] P1：duplicate key
-- [ ] P1：existing key merge
-- [ ] P1：escaped Unicode
-- [ ] P1：CRLF / LF
-- [ ] P1：UTF-8 BOM
-- [ ] P1：large JSON
-- [ ] P1：write failure regression
+- [x] P1：nested key
+- [x] P1：duplicate key
+- [x] P1：existing key merge
+- [x] P1：escaped Unicode
+- [x] P1：CRLF / LF
+- [x] P1：UTF-8 BOM
+- [x] P1：large JSON
+- [x] P1：write failure regression
 - [ ] P1：code + resource simultaneous update
 
 ---
@@ -597,8 +597,17 @@ Performance       ★★★☆☆
 > `testMergeRewritePreservesSurroundingFormatting`）、`I18nRegexFallbackBoundaryTest`
 > 锁定「JS/TS 走 PSI、Regex 仅作 Vue 模板 fallback」并覆盖 3.2 的
 > `obj.t('中文')` / `ns.t('中文')` 负向用例、`I18nImportRewriteComboTest`+`I18nReactJsxVariantTest`
-> 覆盖 Import/Rewrite 组合。全量 626 条测试通过（含真实 IntelliJ 环境）。因此下列多项已落地
+> 覆盖 Import/Rewrite 组合。全量测试通过（含真实 IntelliJ 环境）。因此下列多项已落地
 > （IDE Integration 评级上调至 7/10）。
+>
+> 更新记录（2026-08-18 线上 bug 修复）：修复线上 Issue #35（EnglishExtractor 未过滤
+> ATTRIBUTE 上下文，误提取 class/id 等非文案属性——`accepts` 拒绝 ATTRIBUTE，其他拉丁语系行为不变）、
+> #36（属性值替换对单引号零转义，生成非法 `$t('唐's ...')`——补齐与 `buildTFunctionExpr`
+> 一致的转义）、#37（`generateKey` 未消毒 `.`/`@`/`|` 等保留字符，可能生成嵌套路径 key——
+> 仅消毒句首句末 `.` + `@`/`|`，内部小数保留；现有翻译调用的 key 原样保留不被消毒）、
+> #38（`const i18n = { t: ... }` 本地对象被 `isConfirmedI18nGlobalChainCall` 按变量名误判为
+> i18n 实例，其中文漏提——新增 `isLocalPlainReceiverShadowingBase` 解析接收者）。回归测试集中在
+> `I18nP0ExtractionDefectTest`。全量 664 条测试通过。
 
 ## 🔴 P0 — 下一阶段必须做
 

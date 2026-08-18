@@ -1,9 +1,14 @@
 package com.pan.extractor.core
 
 import com.pan.extractor.EnglishExtractor
+import com.pan.extractor.FrenchExtractor
+import com.pan.extractor.GermanExtractor
+import com.pan.extractor.ItalianExtractor
 import com.pan.extractor.LanguageRegistry
 import com.pan.extractor.LanguageExtractor
+import com.pan.extractor.PortugueseExtractor
 import com.pan.extractor.SiteKind
+import com.pan.extractor.SpanishExtractor
 import com.pan.extractor.Util
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -110,10 +115,18 @@ class LanguageExtractorCoreFunctionTest {
     }
 
     @Test
-    fun englishAcceptsAllSitesByDefault() {
-        // EnglishExtractor 未 override accepts → 默认全接受（与代码当前实现一致）
-        assertTrue(EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
-        assertTrue(EnglishExtractor.accepts(SiteKind.TEXT))
+    fun englishRejectsAttribute() {
+        // 英文靠纯 ASCII 句子启发式判定，`class="main container"` 等非文案属性极易被误判，
+        // 故须拒绝 ATTRIBUTE（线上 bug #35）；其余带重音/变音的拉丁语系仍接受 ATTRIBUTE（真实属性文案）。
+        assertFalse("en 应拒绝 ATTRIBUTE", EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
+        assertTrue("en 应接受 TEXT", EnglishExtractor.accepts(SiteKind.TEXT))
+        assertTrue("en 应接受 JS_STRING", EnglishExtractor.accepts(SiteKind.JS_STRING))
+        // 其它拉丁语系保持接受 ATTRIBUTE：不破坏 test*JudgmentFollowsSettings 的既有语义
+        val stillAcceptsAttribute = listOf(FrenchExtractor, GermanExtractor,
+            SpanishExtractor, ItalianExtractor, PortugueseExtractor)
+        stillAcceptsAttribute.forEach { ex ->
+            assertTrue("${ex.id} 仍应接受 ATTRIBUTE", ex.accepts(SiteKind.ATTRIBUTE))
+        }
     }
 
     // ── LanguageRegistry ───────────────────────────────────────

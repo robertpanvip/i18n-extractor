@@ -175,7 +175,8 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
 
     fun testEnglishAcceptsContext() {
         assertTrue(EnglishExtractor.accepts(SiteKind.TEXT))
-        assertTrue(EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
+        // 拉丁语系拒绝 ATTRIBUTE：避免 class="main container" 等非文案属性被误提取（线上 bug #35）
+        assertFalse(EnglishExtractor.accepts(SiteKind.ATTRIBUTE))
         assertTrue(EnglishExtractor.accepts(SiteKind.JS_STRING))
         assertTrue(EnglishExtractor.accepts(SiteKind.JS_TEMPLATE))
         assertTrue(EnglishExtractor.accepts(SiteKind.OTHER))
@@ -185,8 +186,8 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         I18nSettings.getInstance().setLanguageIds(listOf("en"))
         // TEXT 上下文：英文整句命中
         assertTrue(Util.containsTargetLanguage("Hello world", SiteKind.TEXT))
-        // ATTRIBUTE 上下文：取 = 后面的值，整句同样命中（英文接受所有上下文）
-        assertTrue(Util.containsTargetLanguage("main container", SiteKind.ATTRIBUTE))
+        // ATTRIBUTE 上下文：拉丁语系拒绝（class="main container" 不应被误提取改写）
+        assertFalse(Util.containsTargetLanguage("main container", SiteKind.ATTRIBUTE))
         // 单 token 不命中
         assertFalse(Util.containsTargetLanguage("Save", SiteKind.TEXT))
     }

@@ -2,7 +2,7 @@
 
 > 评审时间：2026-08-18  
 > 评审对象：`robertpanvip/i18n-extractor` 当前 `main`  
-> 综合评分：**7.8 / 10**（2026-08-18 复检：Translation Call 语义已补 symbol collision 回归 + 本地函数变量 t/tc 漏提修复；生命周期新增 sibling/nested pointer 与 Vue 模板 undo 用例，全量 632 测试通过）
+> 综合评分：**7.8 / 10**（2026-08-18 复检：Translation Call 语义已补 symbol collision 回归 + 本地函数变量 t/tc 漏提修复；生命周期新增 sibling/nested pointer 与 Vue 模板 undo 用例；2026-08-18 再检：修复线上 Issue #35-#38（`I18nP0ExtractionDefectTest`）+ Resource Writer 边界 + Import/Symbol collision，全量 664 测试通过）
 
 ## 1. 总结
 
@@ -349,13 +349,13 @@ const t = xxx
 
 ### TODO
 
-- [ ] import name collision
-- [ ] local function collision
-- [ ] local variable collision
+- [x] import name collision（`hasImportedSpecifier` 语义化判断；`I18nImportInjectorHardenTest`）
+- [x] local function collision（本地函数名冲突检测）
+- [x] local variable collision（本地变量冲突检测）
 - [ ] parameter collision
-- [ ] scope shadowing
-- [ ] 自动 alias 生成
-- [ ] 保持现有 alias 语义
+- [x] scope shadowing（`hasImportedSpecifier` / 模板域遮蔽）
+- [x] 自动 alias 生成（冲突时自动生成别名）
+- [x] 保持现有 alias 语义（`scopeHasDestructuredCall` 收窄到目标别名 `$t` 绑定，避免 `const { t } = useI18n()` 被误判已处理导致 `$t` 未定义）
 
 ---
 
@@ -442,14 +442,14 @@ Reparse
 
 ### TODO
 
-- [ ] nested key
-- [ ] duplicate key
-- [ ] existing key merge
-- [ ] escaped Unicode
-- [ ] CRLF / LF
-- [ ] UTF-8 BOM
-- [ ] large JSON
-- [ ] write failure regression
+- [x] nested key
+- [x] duplicate key
+- [x] existing key merge
+- [x] escaped Unicode
+- [x] CRLF / LF
+- [x] UTF-8 BOM
+- [x] large JSON
+- [x] write failure regression
 - [ ] code + resource simultaneous update
 
 ---
@@ -569,10 +569,11 @@ Performance       ★★★☆☆
 
 ## 🟠 P1
 
-- [ ] Import / symbol collision
-- [ ] Generic fallback test
+- [x] Import / symbol collision（`hasImportedSpecifier` / `scopeHasDestructuredCall` 收窄到目标别名；`I18nImportInjectorHardenTest` / `I18nImportInjectorMoreTest` / `I18nImportRewriteComboTest`）
+- [x] Generic fallback test
 - [ ] Shared package framework semantics
-- [ ] Resource Writer edge cases
+- [x] Resource Writer edge cases（`TsFileEditorCoreFunctionTest` / `UtilWriteBackTest` / `UtilWriteBackEntryFileTest` / `MergeApplierTest`：nested/duplicate/merge/Unicode/CRLF-LF/BOM/large JSON/write-failure）
+- [x] 线上 Issue #35-#38 回归（`I18nP0ExtractionDefectTest`：ATTRIBUTE 过滤 / 属性单引号转义 / generateKey 消毒保留字符 / 本地对象 shadow 判定）
 - [ ] Multi-file failure regression（已补正向/失败原子性回归，见 §5；剩余为更广场景）
 - [ ] Folding lifecycle
 - [x] Reparse 后 PSI / pointer 测试（`testFileReparsePointerSurvivesForUntouchedAfterReparse`）

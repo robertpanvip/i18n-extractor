@@ -6,7 +6,9 @@ import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSFunction
 import com.intellij.lang.javascript.psi.JSIndexedPropertyAccessExpression
+import com.intellij.lang.javascript.psi.JSExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.JSVarStatement
@@ -104,8 +106,13 @@ internal object I18nPsiTools {
     }
 
     /**
-     * 判断 [scope] 范围内是否已经存在"[callee]() 函数调用 + 指定解构"。
+     * 判断 [scope] 范围内是否已经存在"[callee]() 函数调用 + 把 [destructureAlias] 绑定到解构"。
      * 文本级宽松匹配（见 I18nProcessor 内原注释）。
+     *
+     * 【Import/Symbol Collision 修复】旧实现的"近似形式"只要解构里出现 [destructureNameFrom]（如 `t`）
+     * 就认为已处理，导致用户手写 `const { t } = useI18n()`（只绑定 `t`）时，插件以为 `$t` 别名已存在、
+     * 跳过注入 `const { t: $t } = useI18n()`，而生成的 key 用的是 `$t(...)` → 运行时 `$t` 未定义。
+     * 这里收窄到：只有当解构**确实绑定了目标别名 [destructureAlias]（`$t`）**时才算已处理。
      */
     fun scopeHasDestructuredCall(
         scope: PsiElement,
@@ -116,15 +123,19 @@ internal object I18nPsiTools {
         val text = scope.text.replace("\\s+".toRegex(), " ")
         if (!text.contains("$callee(")) return false
 
-        // 精确形式（我们注入的代码）
+        // 插件注入的规范形式：const { t: $t } = useI18n()（用户手写同款也算）
         val canonical = "{$destructureNameFrom: $destructureAlias}"
         if (text.contains(canonical)) return true
 
-        // 近似形式（用户自己手写 const { t } = useI18n() 等）
-        val re = Regex("""\{\s*[^\}]*\b\Q$destructureNameFrom\E\b[^\}]*\}\s*=\s*[A-Za-z_][\w\$]*\s*\.\s*\Q$callee\E\(""")
-        if (re.containsMatchIn(text)) return true
-        val re2 = Regex("""\{\s*[^\}]*\b\Q$destructureNameFrom\E\b[^\}]*\}\s*=\s*\Q$callee\E\(""")
-        if (re2.containsMatchIn(text)) return true
+        // 近似形式：`const { ... } = [ns.]callee(` 的整条解构里**确实绑定了 destructureAlias（$t）** 才算。
+        // （例如 const { $t } = useI18n()、const { t: $t, n } = useI18n() —— 都能让 $t 可用）
+        val reChain = Regex("""\{\s*([^}]*)\}\s*=\s*[A-Za-z_$][\w$]*\s*\.\s*\Q$callee\E\(""")
+        val reDirect = Regex("""\{\s*([^}]*)\}\s*=\s*\Q$callee\E\(""")
+        for (re in listOf(reChain, reDirect)) {
+            val m = re.find(text) ?: continue
+            val inner = m.groupValues[1]
+            if (inner.contains(destructureAlias)) return true
+        }
 
         return false
     }
@@ -336,10 +347,36 @@ internal object I18nPsiTools {
         val name = method.referenceName
         if (name != "t" && name != "tc") return false
         // 简单引用 t / tc 不算链式；只有带接收者的链式才会走到这里校验实例名
+        // #38：若接收者解析成本地普通对象/函数（`const i18n = { t: … }` / `const i18n = () => …`），
+        // 它并非真实 i18n 实例 → 视为普通调用，参数中的中文正常进入提取（宁可多提不漏提）。
+        if (isLocalPlainReceiverShadowingBase(method)) return false
         // 多行链式（如 i18n\n.global\n.t）的 text 会含空白，需剥除后再匹配。
         val text = method.text?.replace("\\s".toRegex(), "")
         // 接收者必须是 i18n（支持 i18n.t / i18n.global.t / i18n.tc / i18n.global.tc 等）
         return text != null && text.startsWith("i18n.") && (text.endsWith(".t") || text.endsWith(".tc"))
+    }
+
+    /**
+     * #38：沿 qualifier 链下钻到最底层的接收者标识符（i18n.global.t → i18n.global → i18n），
+     * 解析该标识符；若它是本地普通对象 / 函数变量（不是真实 i18n 实例），返回 true。
+     * 用于判定 `X.t('中文')` 是否应被当作「已翻译」而跳过——本地 shadow 时不应跳过。
+     */
+    private fun isLocalPlainReceiverShadowingBase(method: JSReferenceExpression): Boolean {
+        var qualifier: JSExpression? = method.qualifier
+        var base: JSReferenceExpression? = null
+        while (qualifier is JSReferenceExpression) {
+            base = qualifier
+            qualifier = qualifier.qualifier
+        }
+        if (base == null) return false
+        val resolved = base.resolve() ?: return false
+        if (resolved !is JSVariable) return false
+        val init = resolved.initializer ?: return false
+        // 本地对象字面量：const i18n = { t: … }（issue #38 根因场景）
+        if (init is JSObjectLiteralExpression) return true
+        // 本地普通函数：const i18n = function / const i18n = () => …
+        if (init is JSFunction) return true
+        return false
     }
 
     // ── i18n 框架语义解析（PROJECT_ANALYSIS §2：import alias + destructured hook） ──
@@ -600,8 +637,24 @@ internal object I18nPsiTools {
         return sb.toString()
     }
 
+    /**
+     * BUG #37：生成 key 前对 vue-i18n / i18next 视为「路径/语法分隔符」的保留字符消毒。
+     *   - `@` → vue-i18n 指令 / i18next 命名空间语法
+     *   - `|` → vue-i18n 复数分隔符
+     *   - 句首/句末的 `.` → 造成空路径分段，去掉（但**内部**的点是合法内容：编号列表
+     *     "1. 隔离库存"、小数 "CD≥0.8" 必须保留，不能像处理路径分隔符那样整体替换，
+     *     否则会损坏真实用户文案生成的新 key）
+     * 一律缩成单个空格并 trim。generateKey 是所有 site key 的唯一入口，调用侧 $t(key)
+     * 与写回资源文件的 key 天然同源，故此处消毒保证两侧一致、运行时可查。
+     */
     internal fun generateKey(value: String, element: PsiElement): String {
-        return value.trim();
+        return value.trim()
+            .replace("@", " ")
+            .replace("|", " ")
+            .trim()
+            .trimStart('.')
+            .trimEnd('.')
+            .trim()
     }
 
     fun isInComment(element: PsiElement): Boolean {

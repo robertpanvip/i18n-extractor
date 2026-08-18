@@ -159,4 +159,51 @@ class I18nImportInjectorHardenTest : BasePlatformTestCase() {
 
     private fun hasSpec(decl: ES6ImportDeclaration, module: String, wanted: String): Boolean =
         I18nPsiTools.hasImportedSpecifier(decl, module, wanted)
+
+    // ── Import/Symbol Collision（P1 §8）：$t 别名语义锁定 ──────────────
+    // BUG：#35 修复后用户手写 `const { t } = useI18n()`（只绑定 t，未绑定 $t）时，
+    // 若插件误以为 $t 已存在而跳过注入，生成的 key 会运行时 $t 未定义。
+    // scopeHasDestructuredCall 必须只在解构确实绑定了 $t 时才判定已处理。
+
+    private fun scopeHasDollarT(source: String): Boolean =
+        I18nPsiTools.scopeHasDestructuredCall(
+            myFixture.addFileToProject("src/hook.ts", source.trimIndent()),
+            callee = "useI18n",
+            destructureNameFrom = "t",
+            destructureAlias = "\$t"
+        )
+
+    fun testScopeUserDestructuresOnlyTShouldStillInjectDollarT() {
+        // 用户手写 const { t } = useI18n()：只绑定 t → $t 未定义 → 必须判定为"未处理"（继续注入 $t）
+        assertFalse("仅绑定 t 时不应视为 \$t 已存在", scopeHasDollarT("const { t } = useI18n()"))
+    }
+
+    fun testScopeUserDestructuresTcOnlyNotDollarT() {
+        assertFalse("仅绑定 tc 时不应视为 \$t 已存在", scopeHasDollarT("const { tc } = useI18n()"))
+    }
+
+    fun testScopeCanonicalFormRecognized() {
+        assertTrue("插件规范形式 const { t: \$t } 应判定为已处理", scopeHasDollarT("const { t: \$t } = useI18n()"))
+    }
+
+    fun testScopeAliasAmongOthersRecognized() {
+        assertTrue("const { t: \$t, n } 中 \$t 已绑定应判定为已处理", scopeHasDollarT("const { t: \$t, n } = useI18n()"))
+    }
+
+    fun testScopeShortDollarTFormRecognized() {
+        assertTrue("const { \$t } = useI18n() 直接绑定 \$t 应判定为已处理", scopeHasDollarT("const { \$t } = useI18n()"))
+    }
+
+    fun testScopeChainedReceiverRecognized() {
+        assertTrue("链式接收者 i18n.useI18n() 中绑定 \$t 应判定为已处理", scopeHasDollarT("const { t: \$t } = i18n.useI18n()"))
+    }
+
+    fun testScopeChainedReceiverNotBindingDollarT() {
+        assertFalse("链式接收者仅绑定 t（无 \$t）不应判定为已处理", scopeHasDollarT("const { t } = i18n.useI18n()"))
+    }
+
+    // 非 useI18n 调用即使解构相同也不该命中（callee 必须匹配）
+    fun testScopeDifferentCalleeIgnored() {
+        assertFalse("非 useI18n 调用不应命中", scopeHasDollarT("const { t: \$t } = other()"))
+    }
 }
