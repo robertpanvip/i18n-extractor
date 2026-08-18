@@ -30,6 +30,19 @@ interface I18nFramework {
     /** 策略唯一标识，如 "vue-i18n" / "react-i18next" / "generic"。 */
     val id: String
 
+    // ── 耦合点 8：框架检测（[I18nFrameworkRegistry.detect] 遍历注册表用） ──────
+
+    /**
+     * 判断 [element] 是否命中本框架（决定检测顺序、参与注册表遍历）。
+     *
+     * 历史行为由 [I18nFrameworkRegistry.detect] 的固定 if-else 链（`Util.isVue` /
+     * `Util.isSolid` / `Util.isReact`）固化。为了将"注册表"与"检测"真正连接
+     * （BUG_ANALYSIS 3.1），把判定下沉为策略自身的 `matches`，`detect` 按注册顺序
+     * 首个命中即返回。各内置策略的 `matches` 直接委托给原 `Util.isXxx`，保证行为完全不变；
+     * 注册顺序即优先级顺序（Vue > Solid > React），最后一个 [GenericStrategy] 恒为 true 兜底。
+     */
+    fun matches(element: PsiElement): Boolean
+
     // ── 耦合点 3：占位符语法（第 1 步已接入） ──────────────────────────
 
     /** 资源文件中的占位符写法，如 Vue `{N0}`、React `{{0}}`、Generic `{0}`。 */
@@ -214,19 +227,18 @@ object I18nFrameworkRegistry {
     }
 
     /**
-     * 按 [element] 所在文件检测框架策略：
-     *  - .vue 文件 / 依赖 vue → VueI18nStrategy
-     *  - 依赖 solid-js 且不依赖 vue → SolidI18nStrategy
-     *  - 依赖 react 且不依赖 vue/solid-js → ReactI18nextStrategy
-     *  - 无 package.json 时 isVue 兜底为 true → VueI18nStrategy（历史行为）
-     *  - 有 package.json 但无 react/vue/solid-js 依赖 → GenericStrategy
+     * 按 [element] 所在文件检测框架策略，遍历注册表按序首个命中即返回；无命中回退 [GenericStrategy]。
+     *
+     * 注册顺序即优先级顺序，等价于历史固定 if-else 链：
+     *  - `Util.isVue` → [VueI18nStrategy]（.vue 文件 / 依赖 vue）
+     *  - `Util.isSolid` → [SolidI18nStrategy]（依赖 solid-js 且不依赖 vue）
+     *  - `Util.isReact` → [ReactI18nextStrategy]（依赖 react 且不依赖 vue/solid-js）
+     *  - 其余 → [GenericStrategy]（含"无 package.json 时 isVue 兜底为 true"的 Vue 历史行为）
+     *
+     * 由于 `register` 在此生效，第三方框架可通过 `register` 注册 + `matches` 自定义参与检测。
      */
-    fun detect(element: PsiElement): I18nFramework {
-        if (Util.isVue(element)) return VueI18nStrategy
-        if (Util.isSolid(element)) return SolidI18nStrategy
-        if (Util.isReact(element)) return ReactI18nextStrategy
-        return GenericStrategy
-    }
+    fun detect(element: PsiElement): I18nFramework =
+        strategies.firstOrNull { it.matches(element) } ?: GenericStrategy
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -240,6 +252,7 @@ object VueI18nStrategy : I18nFramework {
     override val hookImport = "import { useI18n } from 'vue-i18n';"
     override val bootstrapDeps = listOf("vue-i18n")
     override val paramKeyNeedsQuote = false
+    override fun matches(element: PsiElement): Boolean = Util.isVue(element)
 
     /** Vue 占位符前缀（默认 `N`）来自 [I18nSettings]，运行时读取以反映用户配置。 */
     private fun prefix(): String = I18nSettings.getInstance().vuePlaceholderPrefix()
@@ -358,6 +371,7 @@ object ReactI18nextStrategy : I18nFramework {
     override val hookImport = "import { useTranslation } from 'react-i18next';"
     override val bootstrapDeps = listOf("i18next", "react-i18next")
     override val paramKeyNeedsQuote = true
+    override fun matches(element: PsiElement): Boolean = Util.isReact(element)
 
     override fun placeholderFor(index: Int): String = "{{$index}}"
     override fun paramKey(index: Int): String = index.toString()
@@ -427,6 +441,9 @@ object GenericStrategy : I18nFramework {
     override val bootstrapDeps = emptyList<String>()
     override val paramKeyNeedsQuote = true
 
+    /** Generic 恒为兜底：排在 [I18nFrameworkRegistry] 末尾，任何元素都命中。 */
+    override fun matches(element: PsiElement): Boolean = true
+
     override fun placeholderFor(index: Int): String = "{$index}"
     override fun paramKey(index: Int): String = index.toString()
 
@@ -450,6 +467,7 @@ object SolidI18nStrategy : I18nFramework {
     override val hookImport = "import { useI18n } from '@solid-primitives/i18n';"
     override val bootstrapDeps = listOf("@solid-primitives/i18n")
     override val paramKeyNeedsQuote = true
+    override fun matches(element: PsiElement): Boolean = Util.isSolid(element)
 
     override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)
     override fun paramKey(index: Int): String = ReactI18nextStrategy.paramKey(index)

@@ -67,7 +67,23 @@ object I18nInstanceLocator {
     }
 
     /**
-     * 读取 VirtualFile 内容并检测是否包含 createI18n( 调用。
+     * 去掉 JS/TS 行注释（//）与块注释（/* ... */），避免把注释里的
+     * createI18n / i18n.init / initReactI18next 等字样误判为真实初始化调用
+     * （BUG_ANALYSIS 3.3 的文本搜索误判问题）。纯文本变换，不影响可执行代码。
+     *
+     * 先剥块注释再剥行注释，保证 /* ... // ... */ 这类块注释里夹行注释的结构也能正确剥离；
+     * 未处理字符串字面量里的字样（如 `const t = "createI18n()"`），留待后续 PSI 化步骤。
+     */
+    internal fun stripJsComments(text: String): String {
+        val noBlock = BLOCK_COMMENT_RE.replace(text, " ")
+        return LINE_COMMENT_RE.replace(noBlock, " ")
+    }
+
+    private val BLOCK_COMMENT_RE = Regex("""/\*[\s\S]*?\*/""")
+    private val LINE_COMMENT_RE = Regex("""//[^\n]*""")
+
+    /**
+     * 读取 VirtualFile 内容并检测是否包含 createI18n( 调用（忽略注释中的字样）。
      */
     private fun vfContainsCreateI18n(vf: VirtualFile): Boolean {
         val text = try {
@@ -75,17 +91,19 @@ object I18nInstanceLocator {
         } catch (_: Exception) {
             return false
         }
-        return text.contains("createI18n(") || text.contains("createI18n (")
+        val code = stripJsComments(text)
+        return code.contains("createI18n(") || code.contains("createI18n (")
     }
 
-    /** 判断文本是否是一个 i18n 初始化文件（Vue createI18n / React i18n.init / Solid useI18n 顶层调用）。 */
-    private fun isI18nInitText(text: String): Boolean {
-        if (text.contains("createI18n(") || text.contains("createI18n (")) return true              // Vue
-        if (text.contains("initReactI18next")) return true                                          // React (react-i18next)
-        if (Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)) return true     // React / CJS
+    /** 判断文本是否是一个 i18n 初始化文件（Vue createI18n / React i18n.init / Solid useI18n 顶层调用），忽略注释中的字样。 */
+    internal fun isI18nInitText(text: String): Boolean {
+        val code = stripJsComments(text)
+        if (code.contains("createI18n(") || code.contains("createI18n (")) return true             // Vue
+        if (code.contains("initReactI18next")) return true                                          // React (react-i18next)
+        if (Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(code)) return true    // React / CJS
         // Solid: 顶层 useI18n( 调用 + 导出 createAppI18n / useI18n 的工厂函数（@solid-primitives/i18n）
-        if (text.contains("useI18n(") &&
-            (text.contains("createAppI18n") || Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""").containsMatchIn(text))
+        if (code.contains("useI18n(") &&
+            (code.contains("createAppI18n") || Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""").containsMatchIn(code))
         ) return true
         return false
     }
@@ -149,10 +167,11 @@ object I18nInstanceLocator {
         }
     }
 
-    /** 判断文本是否是一个"React 初始化且导出了 i18n"的文件。 */
+    /** 判断文本是否是一个"React 初始化且导出了 i18n"的文件（忽略注释；导出的判定不做注释剥离，因为 export 必在可执行层）。 */
     private fun isReactI18nInitWithExport(text: String): Boolean {
-        val isReactInit = text.contains("initReactI18next") ||
-            Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)
+        val code = stripJsComments(text)
+        val isReactInit = code.contains("initReactI18next") ||
+            Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(code)
         if (!isReactInit) return false
         return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(text) ||
             Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(text) ||
@@ -191,17 +210,18 @@ object I18nInstanceLocator {
         }
     }
 
-    /** 判断文本是否是一个 "Solid @solid-primitives/i18n 初始化且导出了工厂" 的文件。 */
+    /** 判断文本是否是一个 "Solid @solid-primitives/i18n 初始化且导出了工厂" 的文件（忽略注释中的字样；import/export 判定保留原文文本）。 */
     private fun isSolidI18nInitWithExport(text: String): Boolean {
+        val code = stripJsComments(text)
         // 必须 import 自 @solid-primitives/i18n，且包含 useI18n( 调用
-        if (!text.contains("@solid-primitives/i18n")) return false
-        if (!text.contains("useI18n(")) return false
+        if (!code.contains("@solid-primitives/i18n")) return false
+        if (!code.contains("useI18n(")) return false
         // 必须导出 i18n 工厂：createAppI18n / 含 I18n 的命名导出 / 默认导出
-        return text.contains("createAppI18n") ||
-            Regex("""export\s+(const|let|var)\s+\w*[Ii]18n\w*""").containsMatchIn(text) ||
-            Regex("""export\s+function\s+\w*[Ii]18n\w*""").containsMatchIn(text) ||
-            Regex("""export\s*\{[^}]*\b\w*[Ii]18n\w*[^}]*\}""").containsMatchIn(text) ||
-            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(text)
+        return code.contains("createAppI18n") ||
+            Regex("""export\s+(const|let|var)\s+\w*[Ii]18n\w*""").containsMatchIn(code) ||
+            Regex("""export\s+function\s+\w*[Ii]18n\w*""").containsMatchIn(code) ||
+            Regex("""export\s*\{[^}]*\b\w*[Ii]18n\w*[^}]*\}""").containsMatchIn(code) ||
+            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(code)
     }
 
     /**
@@ -254,12 +274,13 @@ object I18nInstanceLocator {
         } catch (_: Exception) {
             return false
         }
+        val code = stripJsComments(content)
         val hasNamedExport =
-            content.contains(Regex("export\\s+(const|let|var)\\s+i18n\\b")) ||
-                content.contains(Regex("export\\s*\\{[^}]*\\bi18n\\b[^}]*\\}"))
+            code.contains(Regex("export\\s+(const|let|var)\\s+i18n\\b")) ||
+                code.contains(Regex("export\\s*\\{[^}]*\\bi18n\\b[^}]*\\}"))
         val hasDefaultExport =
-            content.contains(Regex("export\\s+default\\s+i18n\\b")) ||
-                content.contains(Regex("export\\s+default\\s+createI18n\\s*\\("))
+            code.contains(Regex("export\\s+default\\s+i18n\\b")) ||
+                code.contains(Regex("export\\s+default\\s+createI18n\\s*\\("))
         return hasDefaultExport && !hasNamedExport
     }
 
