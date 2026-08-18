@@ -114,20 +114,17 @@ interface PlaceholderStrategy {
 interface TranslationCallStrategy {
     /**
      * 判断 [call] 是否为翻译调用（`$t` / `t` / `$tc` / `tc`，含链式 `xxx.t`）。
-     * 默认实现与现有 [I18nFoldingBuilder.isTranslationCall] 完全一致，Vue/React 通用；
-     * React Intl 等参数形态不同的框架可重写。
+     *
+     * 【新判定模型】「t 是弱特征，不是语义证明」：默认实现委托
+     * [com.pan.extractor.analyzer.TranslationAnalyzer]——CallExpression → callee →
+     * Reference Resolution → 来源证明（i18n 框架 import / hook 或工厂产物 / 插件 \$t）。
+     * 只有「已证明」是翻译调用才返回 true；本地 shadow / 非 i18n import / 无法解析（UNKNOWN）
+     * 一律返回 false（折叠 / 图标等展示层不再把「名字像 t」的普通调用当翻译调用）。
+     *
+     * React Intl 等参数形态不同的框架可重写以扩展。
      */
-    fun isTranslationCall(call: JSCallExpression): Boolean {
-        val method = call.methodExpression
-        if (method is JSReferenceExpression) {
-            val name = method.referenceName
-            if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
-            return false
-        }
-        val calleeText = method?.text ?: return false
-        val last = calleeText.substringAfterLast('.')
-        return last == "t" || last == "\$t" || last == "tc" || last == "\$tc"
-    }
+    fun isTranslationCall(call: JSCallExpression): Boolean =
+        com.pan.extractor.analyzer.TranslationAnalyzer.isTranslationCall(call)
 
     /**
      * 从翻译调用中提取 key；非翻译调用或 key 不可确定时返回 null。

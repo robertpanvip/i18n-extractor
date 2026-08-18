@@ -487,10 +487,13 @@ class I18nProcessor(
         // 与真实资源键失配、漏判"已翻译"。（#37 消毒只作用于新提取生成的 site key，见 collectExtractedStrings）
         val key = text.trim()
 
-        // PROJECT_ANALYSIS §2：统一语义判断（import alias / destructured hook / $t 规范名 /
-        // i18n.global 链式 / 本地同名函数排除）。命中 → 已翻译 key；不命中 → 中文字符按普通调用进入提取。
-        if (I18nPsiTools.isI18nTranslationCall(call)) {
-            existingStrings.putIfAbsent(key, text.trim())
+        // 【新判定模型】三态：只有「已证明」是翻译调用（来源 = 框架 import / hook 或工厂产物 / 插件 $t）
+        // 才把 key 计入 existingStrings；UNKNOWN（无法证明）不声称它是已翻译 key——名字不是语义证明。
+        when (com.pan.extractor.analyzer.TranslationAnalyzer.statusOf(call)) {
+            com.pan.extractor.analyzer.TranslationCallStatus.TRANSLATION -> existingStrings.putIfAbsent(key, text.trim())
+            com.pan.extractor.analyzer.TranslationCallStatus.NON_TRANSLATION,
+            com.pan.extractor.analyzer.TranslationCallStatus.UNKNOWN,
+            -> { /* 交给提取 / 保守跳过 */ }
         }
     }
 
@@ -976,7 +979,7 @@ class I18nProcessor(
     /**
      * 检查字符串字面量是否已经处于某一层 i18n 翻译调用的作用域内。
      *
-     * 返回分三档，收集/替换阶段走不同策略：
+     * 返回分档，收集/替换阶段走不同策略：
      *   - NONE             : 完全不在任何 t/$t/i18n.global.t 调用里 → 正常：加 key + 替换为 $t('key')
      *   - DIRECT_ARG       : 字符串字面量直接就是某条 t/$t(...) 的第一个参数 → 完全跳过（已有完整 $t('x')，不需再处理）
      *   - OUTER_T_EXPRESSION: 外层祖先有 t/$t/... 调用，但本字符串不是其**直接单字符串参数**，
@@ -985,8 +988,10 @@ class I18nProcessor(
      *                        此时仍要提取到 extractedStrings（国际化字典要有「取消置顶 / 置顶」两条），
      *                        但替换时只替换字符串字面量为 'key'，不再包一层 $t('key')，
      *                        避免出现双重 $t：$t(isPinned ? $t(...) : $t(...))。
+     *   - INSIDE_UNKNOWN   : 字面量位于**无法证明来源**的调用（三态 UNKNOWN）参数内部 → 保守跳过，
+     *                        既不提取也不改写（零误改；「t 是弱特征，不是语义证明」的兜底行为）。
      */
-    enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION }
+    enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION, INSIDE_UNKNOWN }
 
     /**
      * 【Bug A10】排除「同名本地普通函数」的 t/tc 调用。
