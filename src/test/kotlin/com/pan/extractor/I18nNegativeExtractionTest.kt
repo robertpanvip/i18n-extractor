@@ -79,11 +79,11 @@ class I18nNegativeExtractionTest : BasePlatformTestCase() {
             """
             <template>
                 <!-- ${'$'}t('hello') -->
-                <div>普通</div>
+                <div>plain</div>
             </template>
             """.trimIndent()
         )
-        assertZeroExtractions(p, "Vue 模板注释里的 \$t('hello') —— 普通中文也应被提取但 \$t 在注释中")
+        assertZeroExtractions(p, "Vue 模板注释里的 \$t('hello') 不应被当作真调用，正文为英文亦不提取")
     }
 
     // ── 模板字符串：${…} 内的伪调用 ──────────────────────────────
@@ -118,8 +118,8 @@ class I18nNegativeExtractionTest : BasePlatformTestCase() {
     // ── 普通变量 / 非翻译标识符 ──────────────────────────────────
 
     fun testPlainVariableAssignment() {
-        val p = makeProcessor("src/neg13.ts", """const title = '只是标题';""")
-        assertZeroExtractions(p, "普通英文字符串变量不提取")
+        val p = makeProcessor("src/neg13.ts", """const title = 'Just a title';""")
+        assertZeroExtractions(p, "纯英文普通字符串变量不提取（非中文且非翻译调用）")
     }
 
     fun testNonTranslationIdentifier() {
