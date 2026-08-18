@@ -196,6 +196,70 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         assertTrue("应含最后字符串", processor.extractedStrings.containsValue("批量字符串${count - 1}"))
     }
 
+    // ── P1-3: Runtime Fixture 语义等价 ────────────────────────────
+
+    /**
+     * P1-3（BUG_ANALYSIS section 7）：真实运行时形态的语义等价。
+     * React 项目中已存在 `getI18n().t('中文')` 调用时，参数应被识别为
+     * “已翻译 key”进 existingStrings，而**不得**作为硬编码文案进 extractedStrings。
+     */
+    fun testRuntimeReactGetI18nTArgNotExtracted() {
+        myFixture.addFileToProject(
+            "packages/react-app/package.json",
+            """{ "react": "^18", "react-i18next": "^13" }"""
+        )
+        val file = configureFile(
+            "packages/react-app/useI18nCall.ts",
+            """
+            import { getI18n } from 'react-i18next';
+            const ${'$'}t = getI18n().t;
+            export const msg = ${'$'}t('已经国际化的中文');
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "getI18n().t 的参数应被视为已翻译（进 existingStrings）",
+            processor.existingStrings.containsValue("已经国际化的中文")
+        )
+        assertFalse(
+            "getI18n().t 的参数不得再被当作待提取硬编码文案",
+            processor.extractedStrings.containsValue("已经国际化的中文")
+        )
+    }
+
+    /**
+     * P1-3（BUG_ANALYSIS section 7）：Vue 中 `const $t = i18n.global.t; $t('中文')`
+     * 别名绑定后的调用，参数同为已翻译 key，不得再被提取，且不得被二次改写。
+     */
+    fun testRuntimeVueGlobalAliasArgNotExtracted() {
+        val file = configureFile(
+            "src/globalAlias.vue",
+            """
+            <template>
+              <div>{{ ${'$'}t('别名中文') }}</div>
+            </template>
+            <script setup lang="ts">
+            import { i18n } from './locales/index';
+            const ${'$'}t = i18n.global.t;
+            const label = ${'$'}t('脚本别名中文');
+            </script>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        assertTrue(
+            "别名 \${'$'}t('中文') 的中文应进 existingStrings",
+            processor.existingStrings.containsValue("别名中文") &&
+                processor.existingStrings.containsValue("脚本别名中文")
+        )
+        assertFalse(
+            "别名 \${'$'}t 调用内中文不得被当作待提取硬编码",
+            processor.extractedStrings.containsValue("别名中文") ||
+                processor.extractedStrings.containsValue("脚本别名中文")
+        )
+    }
+
     // ── P0.6: TSX / JSX 场景 ─────────────────────────────────────
 
     fun testTSXAttributeChinese() {
