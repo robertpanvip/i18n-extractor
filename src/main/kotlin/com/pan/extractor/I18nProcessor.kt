@@ -314,42 +314,46 @@ class I18nProcessor(
     }
 
     fun collectFromPsi(psiFile: PsiElement): MutableList<CollectedChange> {
-        val changes = mutableListOf<CollectedChange>();
-        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
-            override fun visitElement(element: PsiElement) {
-                //println("${element.text},${element.javaClass.simpleName}")
-                when (element) {
-                    is XmlText -> if (!isInStyleOrComment(element)) {
-                        if (isMustache(element.text)) {
-                            // 只用 collectXmlText 统一处理，避免 visitMustache 重复提取单个表达式
-                            collectXmlText(element, changes)
-                        } else {
-                            // 合并相邻、仅被空白分隔的文本节点（JSX 会把 "Hello world" 拆成两个单 token 节点）
-                            val run = collectTextRun(element)
-                            if (run.first() === element) {
-                                collectTemplateTextChange(run, changes)
-                            }
+        val changes = mutableListOf<CollectedChange>()
+
+        // 目标架构 Scanner 层：遍历发现候选节点（迁移自本方法原 PsiRecursiveElementWalkingVisitor）。
+        // 节点类型过滤（style/注释）已在 scanner 内完成，sink 只做收集分发。
+        fun handle(element: PsiElement) {
+            when (element) {
+                is XmlText -> {
+                    if (isMustache(element.text)) {
+                        // 只用 collectXmlText 统一处理，避免 visitMustache 重复提取单个表达式
+                        collectXmlText(element, changes)
+                    } else {
+                        // 合并相邻、仅被空白分隔的文本节点（JSX 会把 "Hello world" 拆成两个单 token 节点）
+                        val run = collectTextRun(element)
+                        if (run.first() === element) {
+                            collectTemplateTextChange(run, changes)
                         }
                     }
-
-                    is XmlAttributeValue -> if (!isInStyleOrComment(element)) {
-                        //println("XmlAttributeValue${element.text}")
-                        collectXmlAttributeValueChange(element, changes)
-                    }
-
-                    is JSLiteralExpression -> if (!isInComment(element)) {
-                        //println("JSString${element.text}")
-                        collectJSStringChange(element, changes)
-                    }
-
-                    is JSBinaryExpression -> if (!isInComment(element)) {
-                        //println("JSBinaryExpression${element.text}")
-                        collectJSBinaryExpressionChange(element, changes)
-                    }
                 }
-                super.visitElement(element)
+
+                is XmlAttributeValue -> {
+                    collectXmlAttributeValueChange(element, changes)
+                }
+
+                is JSLiteralExpression -> {
+                    collectJSStringChange(element, changes)
+                }
+
+                is JSBinaryExpression -> {
+                    collectJSBinaryExpressionChange(element, changes)
+                }
             }
-        })
+        }
+
+        val scanner = when {
+            framework is VueI18nStrategy -> com.pan.extractor.scanner.VueScanner
+            framework is ReactI18nextStrategy -> com.pan.extractor.scanner.ReactScanner
+            framework is SolidI18nStrategy -> com.pan.extractor.scanner.SolidScanner
+            else -> com.pan.extractor.scanner.JsScanner
+        }
+        scanner.scan(psiFile) { handle(it) }
         return changes
     }
 
@@ -797,26 +801,10 @@ class I18nProcessor(
             anchor = first,
             changes = changes
         ) {
-            // 只处理“同一个父节点”下的 XmlText（合并后的整段节点）
+            // 目标架构 Rewriter 层：VueRewriter 统一替换整段文本节点（行为与原闭包 1:1）
             val newContent =
                 if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
-
-            var firstToken = true
-            for (node in nodes) {
-                if (!node.isValid) continue
-                val textChild = getCharactersText(node)
-                val tokens = textChild.ifEmpty { listOf(node) }
-                for (token in tokens) {
-                    if (!token.isValid) continue
-                    if (firstToken) {
-                        val newElement = createStringExpressionNode(newContent, token)
-                        token.replace(newElement)
-                        firstToken = false
-                    } else {
-                        token.delete()
-                    }
-                }
-            }
+            com.pan.extractor.rewriter.VueRewriter.rewriteXmlTextNodes(nodes, newContent)
         }
     }
 
@@ -906,15 +894,13 @@ class I18nProcessor(
             anchor = attrValue,
             changes = changes
         ) {
-            var quote = if (attrValue.text.startsWith('"')) "" else "'"
-            val prefix = if (isJSX || isVueDirective(attr.name)) "" else ":";
-            var endQuote = quote;
-            if (isJSX) {
-                quote = "{"
-                endQuote = "}"
-            }
-            attr.setValue("${quote}${newText}${endQuote}")
-            attr.name = "${prefix}${attr.name}"
+            // 目标架构 Rewriter 层：VueRewriter 统一改写属性（行为与原闭包 1:1）
+            com.pan.extractor.rewriter.VueRewriter.rewriteAttribute(
+                attrValue = attrValue,
+                newText = newText,
+                isJSX = isJSX,
+                isDirective = isVueDirective(attr.name),
+            )
         }
     }
 
