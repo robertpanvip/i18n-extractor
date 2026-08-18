@@ -22,11 +22,20 @@ import org.junit.Assert.assertTrue
 class I18nIntegrationLifecycleTest : BasePlatformTestCase() {
 
     private lateinit var originalFoldLang: String
+    private lateinit var disposable: com.intellij.openapi.Disposable
 
     override fun setUp() {
         super.setUp()
         originalFoldLang = I18nSettings.getInstance().foldDisplayLanguage()
         I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        // 跨文档 Undo（如多文件 Extract 各自独立命令后，一个个回退）会弹出
+        // “Undo Vue i18n Extract?” 确认对话框；headless 环境下该对话框会抛异常，
+        // 因此注册一个自动确认（OK）的 TestDialog，让 undo/redo 的真实流程被完整走通。
+        disposable = com.intellij.openapi.util.Disposer.newDisposable()
+        com.intellij.openapi.ui.TestDialogManager.setTestDialog(
+            com.intellij.openapi.ui.TestDialog.OK,
+            disposable
+        )
         myFixture.addFileToProject(
             "package.json",
             """{"name":"root","dependencies":{"vue":"^3","vue-i18n":"^9"}}"""
@@ -43,7 +52,10 @@ class I18nIntegrationLifecycleTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        if (this::originalFoldLang.isInitialized) {
+        if (::disposable.isInitialized) {
+            com.intellij.openapi.util.Disposer.dispose(disposable)
+        }
+        if (::originalFoldLang.isInitialized) {
             I18nSettings.getInstance().setFoldDisplayLanguage(originalFoldLang)
         }
         super.tearDown()
@@ -88,6 +100,72 @@ class I18nIntegrationLifecycleTest : BasePlatformTestCase() {
         myFixture.performEditorAction(IdeActions.ACTION_REDO)
         PsiDocumentManager.getInstance(project).commitAllDocuments()
         assertEquals("Redo 后应回到 After", after, file.text)
+    }
+
+    // ── 6.4 多文件 Extract → Undo → Redo ───────────────────────────
+
+    fun testMultiFileUndoRedoRoundTrip() {
+        val beforeA = """
+            <script setup lang="ts">
+            const msg1 = "文件A中文"
+            </script>
+        """.trimIndent()
+        val beforeB = """
+            <script setup lang="ts">
+            const msg2 = "文件B中文"
+            </script>
+        """.trimIndent()
+
+        val fileA = configureFile("src/MultiA.vue", beforeA)
+        val fileB = configureFile("src/MultiB.vue", beforeB)
+        // 两个文件各提取一次（各自独立 Undo 命令）
+        extract(fileA)
+        extract(fileB)
+        val afterA = fileA.text
+        val afterB = fileB.text
+        assertTrue("A 提取后应变 t 调用", afterA.contains("t("))
+        assertTrue("B 提取后应变 t 调用", afterB.contains("t("))
+
+        // 分别 Undo：各自还原到原样（跨文档 undo 的确认对话框已由 setUp 中的
+        // TestDialog.OK 自动确认，真实走通 UndoManager 的跨文档回退逻辑）。
+        myFixture.performEditorAction(IdeActions.ACTION_UNDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        myFixture.performEditorAction(IdeActions.ACTION_UNDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("多文件 Undo 后 A 应还原", beforeA, fileA.text)
+        assertEquals("多文件 Undo 后 B 应还原", beforeB, fileB.text)
+
+        // 分别 Redo：各自回到 After
+        myFixture.performEditorAction(IdeActions.ACTION_REDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        myFixture.performEditorAction(IdeActions.ACTION_REDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("多文件 Redo 后 A 应回到 After", afterA, fileA.text)
+        assertEquals("多文件 Redo 后 B 应回到 After", afterB, fileB.text)
+    }
+
+    // ── 6.5 连续两次 Extract → Undo → Redo（幂等 + 可回退）─────────
+
+    fun testDoubleExtractUndoRedoRoundTrip() {
+        val before = """
+            <script setup lang="ts">
+            const msg = "连续提取中文"
+            </script>
+        """.trimIndent()
+
+        val file = configureFile("src/Double.vue", before)
+        // 第一次提取
+        extract(file)
+        val after1 = file.text
+        assertTrue("第一次提取后应变 t 调用", after1.contains("t("))
+        // 第二次提取（已国际化，应保持幂等，不改变文本）
+        extract(file)
+        assertEquals("第二次提取应幂等（文本不再改变）", after1, file.text)
+
+        // Undo → 应回到 Before（即便执行了两次 extract，最后一次 Undo 栈应还原到初始态）
+        myFixture.performEditorAction(IdeActions.ACTION_UNDO)
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("连续提取 + 一次 Undo 后应还原", before, file.text)
     }
 
     // ── 6.2 SmartPsiElementPointer 生命周期 ─────────────────────────

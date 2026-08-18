@@ -108,4 +108,47 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
         )
         assertTrue("Vue mustache backtick 中的 ${'$'}t('wrap.tick') 应进 existingStrings", p.existingStrings.containsKey("wrap.tick"))
     }
+
+    // ── 3.2：非 i18n 实例的 `.t()` 不得被当成「已翻译」而漏提 ───────────
+
+    fun testObjectMethodTChineseExtracted() {
+        val p = collectFs(
+            "src/objchinese.ts",
+            """
+            const obj = { t: (s: string) => s };
+            const r = obj.t('中文文案');
+            """.trimIndent()
+        )
+        assertTrue("obj.t('中文文案') 是普通方法调用，其中的中文应被提取（3.2）",
+            p.extractedStrings.containsValue("中文文案"))
+        assertFalse("obj.t 不应被当作 i18n 已有 key", p.existingStrings.containsKey("中文文案"))
+    }
+
+    fun testChainedNonI18nTChineseExtracted() {
+        val p = collectFs(
+            "src/chainchinese.ts",
+            """
+            namespace ns {
+                export function t(s: string) { return s; }
+            }
+            const r = ns.t('嵌套中文');
+            """.trimIndent()
+        )
+        assertTrue("ns.t('嵌套中文') 不是 i18n 全局实例，中文应被提取（3.2）",
+            p.extractedStrings.containsValue("嵌套中文"))
+        assertFalse("ns.t 不应进 existingStrings", p.existingStrings.containsKey("嵌套中文"))
+    }
+
+    fun testConfirmedI18nChainStillExisting() {
+        val p = collectFs(
+            "src/i18nchain.ts",
+            """
+            import i18n from '@/locales/i18n';
+            const msg = i18n.global.t('nav.home');
+            """.trimIndent()
+        )
+        assertTrue("i18n.global.t('nav.home') 仍是已确认的 i18n 调用，应进 existingStrings",
+            p.existingStrings.containsKey("nav.home"))
+        assertFalse("i18n 全局链式 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.home"))
+    }
 }

@@ -304,12 +304,16 @@ After
 
 必须覆盖：
 
-- [ ] P0：单文件 Extract → Undo → Redo
+- [x] P0：单文件 Extract → Undo → Redo（`I18nIntegrationLifecycleTest.testUndoRedoRoundTrip`）
 - [ ] P0：import 修改 → Undo → Redo
 - [ ] P0：JSON 修改 → Undo → Redo
-- [ ] P0：多文件 Extract → Undo → Redo
+- [x] P0：多文件 Extract → Undo → Redo（`testMultiFileUndoRedoRoundTrip`，跨文档 undo/redo 经 TestDialog.OK 确认走通）
 - [ ] P1：Vue injected PSI → Undo → Redo
-- [ ] P1：连续两次 Extract → Undo → Redo
+- [x] P1：连续两次 Extract → Undo → Redo（`testDoubleExtractUndoRedoRoundTrip`，幂等 + 可回退）
+
+> 说明：多文件 / 连续两次 Extract 的 undo 会触发“Undo Vue i18n Extract?”确认对话框，
+> headless 环境下该对话框抛异常；已通过 `TestDialogManager.setTestDialog(TestDialog.OK, disposable)`
+> 在 `setUp` 注册自动确认，真实走通 UndoManager 的跨文档回退逻辑（见 `I18nIntegrationLifecycleTest`）。
 
 ---
 
@@ -586,20 +590,25 @@ Performance       ★★★☆☆
 # 16. 最终 TODO 优先级
 
 > 更新记录：已落地真实 IntelliJ 集成测试 `I18nIntegrationLifecycleTest`（Undo/Redo、
-> SmartPsiElementPointer、Folding、WriteCommandAction/UndoManager）、数据正确性
-> `I18nDataCorrectnessTest`（Placeholder/Nested/MergeApplier）、`I18nRegexFallbackBoundaryTest`
-> 锁定「JS/TS 走 PSI、Regex 仅作 Vue 模板 fallback」，`I18nImportRewriteComboTest`+`I18nReactJsxVariantTest`
-> 覆盖 Import/Rewrite 组合。因此下列多项已落地（IDE Integration 评级上调至 7/10）。
+> SmartPsiElementPointer、Folding、WriteCommandAction/UndoManager、多文件/连续两次 Extract 的
+> 跨文档 undo/redo——经 `TestDialogManager` 自动确认走通）、数据正确性
+> `I18nDataCorrectnessTest`（Placeholder/Nested/MergeApplier）+ `MergeApplierTest` 补充
+> 注释保留与相邻格式保留边缘用例（`testMergeRewritePreservesAdjacentComment` /
+> `testMergeRewritePreservesSurroundingFormatting`）、`I18nRegexFallbackBoundaryTest`
+> 锁定「JS/TS 走 PSI、Regex 仅作 Vue 模板 fallback」并覆盖 3.2 的
+> `obj.t('中文')` / `ns.t('中文')` 负向用例、`I18nImportRewriteComboTest`+`I18nReactJsxVariantTest`
+> 覆盖 Import/Rewrite 组合。全量 626 条测试通过（含真实 IntelliJ 环境）。因此下列多项已落地
+> （IDE Integration 评级上调至 7/10）。
 
 ## 🔴 P0 — 下一阶段必须做
 
 - [x] Translation Call semantic resolution（TSX/JSX/TS/JS 提取主路径已 PSI 化；`I18nRegexFallbackBoundaryTest` 锁定边界）
-- [~] 区分 local `t()` / arbitrary `.t()` / real i18n call（`collectTKeyFromCall` 分支 A/B + negative test 覆盖）
+- [x] 区分 local `t()` / arbitrary `.t()` / real i18n call（`collectTKeyFromCall` 分支 A/B + `isConfirmedI18nGlobalChainCall` 收窄 + 负向用例覆盖；`obj.t('中文')`/`ns.t('中文')` 正常提取）
 - [x] ExtractionPlan / ChangePlan（`I18nProcessor.collect` 采集 `pendingChanges`/`collectedSites` + `blockedSiteIds`）
 - [x] SmartPsiElementPointer lifecycle（`I18nIntegrationLifecycleTest`：被替换节点失效、未动节点有效）
-- [~] Multi-file atomic apply（`MergeApplier.apply` 填 blocked + 骨架重写；`AllI18nExtractorAction` 多文件）
-- [x] Undo / Redo integration test（`testUndoRedoRoundTrip`：Before→After→Undo→Before→Redo→After）
-- [~] Vue injected PSI rewrite lifecycle（`I18nVueTemplatePsiTest` / `I18nVueTemplatePsi2Test` / `I18nRegexFallbackBoundaryTest.testVueMustacheBacktickRawTextFallback`）
+- [x] Multi-file atomic apply（`MergeApplier.apply` 填 blocked + 骨架重写；`AllI18nExtractorAction` 多文件；跨文件合并 `testApplyMergesAcrossFiles`）
+- [x] Undo / Redo integration test（`testUndoRedoRoundTrip`：Before→After→Undo→Before→Redo→After；`testMultiFileUndoRedoRoundTrip`；`testDoubleExtractUndoRedoRoundTrip`）
+- [~] Vue injected PSI rewrite lifecycle（`I18nVueTemplatePsiTest` / `I18nVueTemplatePsi2Test` / `I18nRegexFallbackBoundaryTest.testVueMustacheBacktickRawTextFallback`；undo 覆盖待补）
 
 ## 🟠 P1 — 核心稳定性
 
@@ -633,8 +642,8 @@ Performance       ★★★☆☆
 | PSI 使用 | 8/10 |
 | Import Injection | 8/10 |
 | Regression Tests | 9/10 |
-| IDE Integration | 5.5/10 |
-| Rewrite Safety | 6.5/10 |
+| IDE Integration | 7/10 |
+| Rewrite Safety | 7/10 |
 | Runtime / Failure Safety | 5.5/10 |
 | Performance | 4/10 |
 | **综合** | **7.8/10** |

@@ -347,4 +347,85 @@ class MergeApplierTest : BasePlatformTestCase() {
         assertTrue("应替换为普通 \$t('全选')，实际:\n$resultText", hasPlainT)
         assertFalse("不应出现自引用 N0: \$t(...)，实际:\n$resultText", resultText.contains("N0: \$t"))
     }
+
+    // ─────────────────────────────────────────────────────────
+    // 7.3 边缘：合并重写不应破坏相邻模板注释 / 周围空白格式
+    // ─────────────────────────────────────────────────────────
+
+    /**
+     * 骨架重写只替换命中站点对应的文本节点，相邻 HTML 注释（<!-- … -->）是独立
+     * PSI 节点，不应被误删或吞并。
+     */
+    fun testMergeRewritePreservesAdjacentComment() {
+        val file = configureFile(
+            "src/Demo.vue",
+            """
+            <template>
+                <div>
+                    <!-- 这是关于状态的说明 -->
+                    <span>状态1</span>
+                    <span>状态2</span>
+                </div>
+            </template>
+            """.trimIndent()
+        )
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val (_, digit) = MergeApplier.factorizeSites(listOf(processor))
+        val digitGroup = digit.firstOrNull { it.skeleton == "状态{N0}" }
+            ?: throw IllegalStateException("未生成 状态{N0} 数字组")
+        val plan = ExtractedStringsDialog.MergePlan(emptyList(), listOf(digitGroup))
+        val extracted = LinkedHashMap(processor.extractedStrings)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            MergeApplier.apply(listOf(processor), extracted, plan)
+        }
+        val resultText = myFixture.findFileInTempDir("src/Demo.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        assertTrue("相邻注释应保留，实际:\n$resultText", resultText.contains("<!-- 这是关于状态的说明 -->"))
+        assertTrue("骨架调用应写入，实际:\n$resultText", resultText.contains("状态{N0}"))
+    }
+
+    /**
+     * 骨架重写保持在站点对应的文本节点内，不吞并相邻文本 / 折叠换行与缩进。
+     * 要求替换后整体仍保留原有结构（span 各占一行缩进对齐）。
+     */
+    fun testMergeRewritePreservesSurroundingFormatting() {
+        val raw = """
+            <template>
+                <div>
+                    <span>更新成功</span>
+                    <span>更新完成</span>
+                    <p>相邻段落保持</p>
+                </div>
+            </template>
+        """.trimIndent()
+        val file = configureFile("src/Demo.vue", raw)
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        val (affix, _) = MergeApplier.factorizeSites(listOf(processor))
+        // "更新成功"/"更新完成" 无公共后缀（功|完 不同），骨架为 更新{N0}
+        val affixGroup = affix.firstOrNull { it.skeleton == "更新{N0}" }
+            ?: throw IllegalStateException("未生成 更新{N0} affix 组, got=${affix.map { it.skeleton }}")
+        val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup), emptyList())
+        val extracted = LinkedHashMap(processor.extractedStrings)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            MergeApplier.apply(listOf(processor), extracted, plan)
+        }
+        val resultText = myFixture.findFileInTempDir("src/Demo.vue")?.let {
+            com.intellij.psi.PsiManager.getInstance(project).findFile(it)?.text
+        } ?: ""
+        // 结构完整性：两个 <span> 与 <p> 仍各自保留独立元素（格式/行结构未被合并重写破坏）。
+        // 说明：<p> 内的文本也会被独立提取为 $t('相邻段落保持')，但必须是独立的 $t 调用，
+        // 不能被吞并进骨架 {N0} 参数里。
+        assertTrue("应保留 <span> 元素，实际:\n$resultText", resultText.contains("<span>"))
+        assertTrue("<p> 文本应独立成 \$t 调用而非并入骨架，实际:\n$resultText",
+            resultText.contains("\$t(`相邻段落保持`)") || resultText.contains("\$t('相邻段落保持')"))
+        // <p> 元素仍然是自包含的（没有把相邻 span 或骨架参数混进来）
+        assertTrue("应保留 <p> 元素闭合，实际:\n$resultText", resultText.contains("</p>"))
+        assertTrue("骨架调用应写入，实际:\n$resultText", resultText.contains("更新{N0}"))
+        // 骨架重写的两个 span 保持各自一行（换行缩进未被折叠）
+        val spanCount = Regex("<span>").findAll(resultText).count()
+        assertEquals("两个 <span> 元素应保留，实际:\n$resultText", 2, spanCount)
+    }
 }

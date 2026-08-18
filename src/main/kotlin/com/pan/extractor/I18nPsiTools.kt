@@ -303,6 +303,28 @@ internal object I18nPsiTools {
         return resolved is JSFunction && resolved.containingFile == call.containingFile
     }
 
+    /**
+     * BUG_ANALYSIS 3.2 — 确认链式调用 `X.t()/X.tc()` 是否为**已确认的 i18n 全局实例**。
+     *
+     * 之前的实现用文本 `callee.endsWith(".t")` / `endsWith(".tc")` 一刀切，会把任意普通对象的
+     * `obj.t('中文')`、`foo.bar.t('中文')` 误判为「已翻译」调用，导致其中的中文被错误跳过（漏提）。
+     * 这里收窄到已确认的 i18n 实例接收者：接收者标识符须为 `i18n`（内部可再 `.global`）。
+     * 这样 `i18n.t()` / `i18n.global.t()` 照常命中，而 `obj.t()` / `foo.bar.t()` 视为普通方法调用，
+     * 其参数中的中文会正常进入提取（宁可多提，也不漏提）。
+     */
+    @JvmStatic
+    fun isConfirmedI18nGlobalChainCall(call: JSCallExpression): Boolean {
+        val method = call.methodExpression
+        if (method !is JSReferenceExpression) return false
+        val name = method.referenceName
+        if (name != "t" && name != "tc") return false
+        // 简单引用 t / tc 不算链式；只有带接收者的链式才会走到这里校验实例名
+        // 多行链式（如 i18n\n.global\n.t）的 text 会含空白，需剥除后再匹配。
+        val text = method.text?.replace("\\s".toRegex(), "")
+        // 接收者必须是 i18n（支持 i18n.t / i18n.global.t / i18n.tc / i18n.global.tc 等）
+        return text != null && text.startsWith("i18n.") && (text.endsWith(".t") || text.endsWith(".tc"))
+    }
+
     fun detectTSemantic(stringExpr: JSLiteralExpression): I18nProcessor.TSem {
         // 1) 直接参数
         val parent = stringExpr.parent
@@ -316,11 +338,21 @@ internal object I18nPsiTools {
             val method = call.methodExpression
             if (method is JSReferenceExpression) {
                 val name = method.referenceName
-                if (name == "\$t" || name == "t" || name == "\$tc" || name == "tc") return true
+                // 插件统一别名 $t / $tc：无论引用形态都是 i18n 翻译调用
+                if (name == "\$t" || name == "\$tc") return true
+                if (name == "t" || name == "tc") {
+                    // 裸名 t/tc（qualifier 为空）通常是 useI18n/useTranslation 解构的本地翻译函数 → i18n
+                    val qualifier = method.qualifier
+                    if (qualifier == null) return true
+                    // 带接收者的 .t() 链式：仅当接收者确认为 i18n 全局实例才算已翻译，
+                    // 否则 obj.t('中文') / foo.bar.t('中文') 视为普通方法调用，中文正常提取（3.2）。
+                    return isConfirmedI18nGlobalChainCall(call)
+                }
+                // 非 t/tc 命名的引用（如 foo.bar.t 之外的其它）→ 由下方链式判定兜底
             }
-            val calleeText = method?.text
-            if (calleeText != null && (calleeText.endsWith(".t") || calleeText.endsWith(".tc"))) return true
-            return false
+            // 链式调用：仅收窄到已确认的 i18n 全局实例（i18n.t / i18n.global.t / tc），
+            // 避免把 obj.t() / foo.bar.t() 误判为已翻译而漏提（BUG_ANALYSIS 3.2）。
+            return isConfirmedI18nGlobalChainCall(call)
         }
         if (directCall != null && isTCall(directCall)) return I18nProcessor.TSem.DIRECT_ARG
 
