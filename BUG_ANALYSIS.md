@@ -648,7 +648,57 @@ CI Green
 
 # 11. 推荐执行顺序
 
+<<<<<<< HEAD
 不要继续无脑增加 framework 功能，建议按照下面顺序推进：
+=======
+### P0
+
+1. 修复 `I18nFrameworkRegistry` 注册与检测脱节问题。 ✅（`I18nFramework.matches()` + `detect()` 遍历）
+2. 增加 Framework Detection 测试矩阵。 ✅（`I18nFrameworkDetectionTest`，15 用例）
+3. 增加 Monorepo 测试。 ✅（root+package、混合、workspace）
+4. 降低 i18n Instance Locator 对文本搜索的依赖。 ✅（注释剥离 + PSI 调用检测，`I18nInstanceLocatorCoreTest`）
+5. 加强 Import Injection / PSI Rewrite / WriteBack 的组合测试。 ✅（`I18nComprehensiveTest`）
+6. 增加 multiline / nested expression / TSX / JSX 场景。 ✅（`I18nComprehensiveTest`）
+
+### P1
+
+1. 增加真实 IDE Integration Test。 ⏳ 未覆盖（需真实 IntelliJ 集成环境）
+2. 增加 Vue injected language 测试。 ⏳ 部分（`I18nFoldingBuilderTest` 有 injected 断言，未全覆盖）
+3. 增加 Runtime Fixture。 ✅（React `t = getI18n().t` / Vue `$t = i18n.global.t` 语义等价，`I18nComprehensiveTest.testRuntime*`）
+4. 完善 import / export / alias 测试。 ✅（relative + `@/locales` alias，`I18nComprehensiveTest`）
+5. 增加 Plugin Descriptor / startup 验证。 ⏳ 未覆盖
+
+### P2
+
+1. 性能测试。 ⏳ 仅批量提取正确性（`testLargeBatchExtraction`），无耗时/内存基准
+2. 大文件测试。 ✅（1000 字符串批量提取）
+3. 多文件 Merge 测试。 ✅（`MergeApplierTest.testApplyMergesAcrossFiles`）
+4. Unicode / emoji / CRLF 测试。 ✅（`I18nComprehensiveTest`）
+5. Flaky Test 监控。 ✅（CI retry warning + Gradle 版本统一）
+
+---
+
+### 对齐总结（2026-08-18）
+
+| 分组 | 已完成 | 未覆盖 |
+|---|---|---|
+| P0 | 6/6 | - |
+| P1 | 2/5 | IDE Integration、Vue injected language 全量、Plugin Descriptor 验证 |
+| P2 | 4/5 | 性能基准（耗时/内存） |
+
+全量测试：**29 个套件、全部通过、0 失败**（本地 `intellijIdeaUltimate` 平台）。
+
+## 11. 最终评价
+
+当前项目的优势是：
+
+- Vue / React 核心逻辑测试比较扎实；
+- Regression Test 建设得很好；
+- 最近的 Bug 修复能够及时转化为测试；
+- PSI / Merge / WriteBack 已经有较多基础测试。
+
+当前项目的主要风险是：
+>>>>>>> fa4eb40 (feat: 评估项目架构)
 
 ```text
 ① Processor state / idempotency
