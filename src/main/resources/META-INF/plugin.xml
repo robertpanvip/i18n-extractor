@@ -29,8 +29,10 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
     <!-- Product and plugin compatibility requirements.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
-    <depends>org.jetbrains.plugins.vue</depends>
     <depends>JavaScript</depends>
+    <!-- Vue 插件设为可选依赖：纯 React / Solid 用户无需安装 Vue 插件即可使用本插件。
+         当 Vue 插件存在时，.vue SFC 的注入语言 / 模板解析能力自动激活。 -->
+    <depends optional="true" config-file="vue-support.xml">org.jetbrains.plugins.vue</depends>
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
@@ -63,14 +65,7 @@ Significantly improves i18n workflow in Vue projects and reduces manual work.
         <lang.foldingBuilder
                 language="JSX"
                 implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
-        <lang.foldingBuilder
-                language="VueJS"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
-        <!-- .vue 文件根语言 ID 为 "Vue"；属性绑定与模板表达式（如 :placeholder="$t('x')"）位于此语言，
-             需在此注册才能在真正折叠属性内调用而不是折叠整个标签。 -->
-        <lang.foldingBuilder
-                language="Vue"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <!-- Vue 语言的 foldingBuilder 移至 vue-support.xml（可选依赖） -->
         <editorFactoryListener
                 implementation="com.pan.extractor.I18nFoldToggleInlayProvider"/>
     </extensions>

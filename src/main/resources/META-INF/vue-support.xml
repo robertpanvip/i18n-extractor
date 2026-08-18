@@ -1,0 +1,14 @@
+<!-- Vue 可选支持：仅当 org.jetbrains.plugins.vue 存在时加载。
+     将 Vue 专属的 foldingBuilder 注册从主 plugin.xml 移入此处，
+     使得纯 React / Solid 用户无需安装 Vue 插件。 -->
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Vue 模板注入 JS 的 folding（mustache {{ $t('x') }} 等） -->
+        <lang.foldingBuilder
+                language="VueJS"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+        <lang.foldingBuilder
+                language="Vue"
+                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+    </extensions>
+</idea-plugin>

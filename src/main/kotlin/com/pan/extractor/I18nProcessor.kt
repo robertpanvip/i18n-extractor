@@ -37,9 +37,12 @@ class I18nProcessor(
     internal val project: Project,
     private var psiFile: PsiElement,
 ) {
-    /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。 */
+    /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。
+     *  BUG_ANALYSIS 3.4：去掉 [^
+"'] 中的 \n 排除，支持跨行调用如
+     *  $t(\n  'hello'\n) 和 i18n\n  .global\n  .t('hello') */
     private val T_CALL_PATTERN =
-        Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"'\\n]+)\\1\\s*[,)]")
+        Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*([`\"'])([^`\"']+)\\1\\s*[,)]")
 
     // ─────────────────────────────────────────────────────────────
     // 结构化 site（供跨文件公共前后缀合并 + 差异段嵌套 $t 重写使用）

@@ -4,6 +4,7 @@ import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
@@ -95,7 +96,18 @@ interface I18nFramework {
         (firstArg as? JSLiteralExpression)?.let { lit ->
             return lit.stringValue?.takeIf { it.isNotBlank() }
         }
-        // 回退：模板字符串（反引号），文本级解析，排除含 ${} 插值的情况
+        // BUG_ANALYSIS 3.5：使用 PSI JSStringTemplateExpression 判断模板字符串，
+        // 替代文本级 value.contains("${") 检查。
+        // JSStringTemplateExpression 的 text 含完整反引号；通过检查是否含 ${ 子串
+        // 判断有无插值（与原文本级判断等价，但由 PSI 保证只作用于真正的模板字面量）。
+        (firstArg as? JSStringTemplateExpression)?.let { tpl ->
+            val text = tpl.text
+            if (text.length < 2 || text[0] != '`') return@let null
+            val value = text.substring(1, text.length - 1)
+            if (value.contains("\${")) return@let null
+            return value.takeIf { it.isNotBlank() }
+        }
+        // 回退：非 PSI 模板字面量时的文本级解析
         val text = firstArg.text
         if (text.length < 2 || text[0] != '`') return null
         val value = text.substring(1, text.length - 1)

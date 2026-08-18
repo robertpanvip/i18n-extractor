@@ -1,7 +1,11 @@
 package com.pan.extractor
 
+import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiRecursiveElementWalkingVisitor
+import com.intellij.psi.util.PsiTreeUtil
 import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlin.io.path.relativeToOrNull
@@ -81,6 +85,92 @@ object I18nInstanceLocator {
 
     private val BLOCK_COMMENT_RE = Regex("""/\*[\s\S]*?\*/""")
     private val LINE_COMMENT_RE = Regex("""//[^\n]*""")
+
+    // ── PSI 级初始化调用检测（BUG_ANALYSIS 3.3 第二步） ──────────────
+
+    /**
+     * 遍历 [psiFile] 的 PSI 树，检测是否包含真实的 i18n 初始化调用：
+     * - Vue: `createI18n(...)` — callee 名为 `createI18n`
+     * - React: `i18n.init(...)` / `i18n.use(initReactI18next)` — callee 为 `.init` 或 `.use`
+     * - React: `initReactI18next` 引用出现（import 或调用）
+     * - Solid: `useI18n(...)` 或 `createAppI18n(...)` 调用
+     *
+     * 与 `isI18nInitText` 的文本匹配不同，PSI 遍历只在**可执行节点**（JSCallExpression /
+     * JSReferenceExpression）上判断，天然排除注释和字符串字面量中的字样，
+     * 消除 `const s = "createI18n()"` 这类文本级误判。
+     *
+     * @return 是否检测到真实的初始化调用
+     */
+    internal fun containsI18nInitCall(psiFile: PsiFile): Boolean {
+        var found = false
+        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: com.intellij.psi.PsiElement) {
+                if (found) return  // 短路：已找到，不再深入
+                // JSCallExpression: createI18n() / i18n.init() / i18n.use() / useI18n() / createAppI18n()
+                if (element is JSCallExpression) {
+                    val method = element.methodExpression
+                    if (method is JSReferenceExpression) {
+                        val refName = method.referenceName
+                        // Vue: createI18n(...)
+                        if (refName == "createI18n") { found = true; return }
+                        // React: i18n.init(...) / i18n.use(...)
+                        if (refName == "init" || refName == "use") {
+                            // 确认 qualifier 含 i18n/i18next（排除 foo.init() 误命中）
+                            val qualText = method.qualifier?.text
+                            if (qualText != null && (qualText.contains("i18n") || qualText.contains("i18next"))) {
+                                found = true; return
+                            }
+                        }
+                        // Solid: useI18n(...) / createAppI18n(...)
+                        if (refName == "useI18n" || refName == "createAppI18n") { found = true; return }
+                    }
+                }
+                // JSReferenceExpression: initReactI18next 引用（import 或参数传递）
+                if (element is JSReferenceExpression && element.referenceName == "initReactI18next") {
+                    found = true; return
+                }
+                super.visitElement(element)
+            }
+        })
+        return found
+    }
+
+    /**
+     * 检测 [psiFile] 是否为"React 初始化且导出了 i18n"的文件（PSI 版本）。
+     * 与 [containsI18nInitCall] 配合，在确认有 React 初始化调用的基础上，
+     * 检查文件是否包含 `export const i18n` / `export { i18n }` / `export default i18n`。
+     */
+    internal fun containsReactI18nInitWithExport(psiFile: PsiFile): Boolean {
+        // 先确认含 React 初始化调用
+        var hasReactInit = false
+        psiFile.accept(object : PsiRecursiveElementWalkingVisitor() {
+            override fun visitElement(element: com.intellij.psi.PsiElement) {
+                if (hasReactInit) return
+                if (element is JSCallExpression) {
+                    val method = element.methodExpression
+                    if (method is JSReferenceExpression) {
+                        val refName = method.referenceName
+                        if (refName == "init" || refName == "use") {
+                            val qualText = method.qualifier?.text
+                            if (qualText != null && (qualText.contains("i18n") || qualText.contains("i18next"))) {
+                                hasReactInit = true; return
+                            }
+                        }
+                    }
+                }
+                if (element is JSReferenceExpression && element.referenceName == "initReactI18next") {
+                    hasReactInit = true; return
+                }
+                super.visitElement(element)
+            }
+        })
+        if (!hasReactInit) return false
+        // 检查导出语句（文本级，因为 export 解析不需要 PSI 精确度）
+        val code = stripJsComments(psiFile.text)
+        return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(code) ||
+            Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(code) ||
+            Regex("""export\s+default\s+i18n\b""").containsMatchIn(code)
+    }
 
     /**
      * 读取 VirtualFile 内容并检测是否包含 createI18n( 调用（忽略注释中的字样）。

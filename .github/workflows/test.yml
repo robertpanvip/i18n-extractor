@@ -40,13 +40,15 @@ jobs:
 
 
       - name: Run tests
-        run: gradle test --no-daemon --no-configuration-cache
+        run: gradle test --no-daemon --no-configuration-cache --warn
         continue-on-error: true
         id: test_first
 
-      - name: Retry tests on failure
+      - name: Retry tests on failure with warning
         if: steps.test_first.outcome == 'failure'
-        run: gradle test --no-daemon --no-configuration-cache
+        run: |
+          echo "::warning::First test run failed, retrying. This may indicate flaky tests."
+          gradle test --no-daemon --no-configuration-cache --warn
 
 
       - name: Upload test report

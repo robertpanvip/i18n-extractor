@@ -56,6 +56,10 @@ intellijPlatform {
              1.2.0 fix: optimize comment extraction logic
     """.trimIndent()
     }
+
+    // 禁用测试代码 instrumentation（IDEA Ultimate EAP + useInstaller=false 时
+    // instrumentTestCode 会因 nested element 报错），纯 JUnit 测试不需要。
+    instrumentCode = false
 }
 
 java {
