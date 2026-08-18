@@ -130,6 +130,15 @@ class I18nProcessor(
     private var needInjectReactGlobalDollarT: Boolean = false
 
     /**
+     * Solid 纯工具 TS（无组件无 Hook）全局 `$t` 别名注入标记。
+     *
+     * 与 [needInjectReactGlobalDollarT] 对称，但走独立的 [I18nImportInjector.injectSolid]
+     * 分支：注入 `import { createAppI18n } from '@solid-primitives/i18n'` + `const { t: $t } = createAppI18n()`。
+     * 命中后 collect 阶段锁死 tFunctionName=$t，新提取写 `$t('xxx')`。
+     */
+    private var needInjectSolidGlobalDollarT: Boolean = false
+
+    /**
      * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 \$t 别名：
      * 顶部注入 `import { getI18n } from 'react-i18next'` + `const \$t = getI18n().t;`，
      * 并把文件里已有的 i18n.t('...') 调用改写为 \$t('...')（否则 i18n 标识符会悬空）。
@@ -364,9 +373,15 @@ class I18nProcessor(
             //        在文件顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t`。
             // Vue:   保持默认 $t；打 needInjectGlobalDollarT=true，由 ensureI18nInstanceImported
             //        在文件顶部注入 `import { i18n } from '@/locales/xxx'` + `const $t = i18n.global.t`。
-            // Solid/Generic: detectGlobalDollarTNeeded 返回 false，不会进入此分支。
+            // Solid: 与 Vue 一致用 $t；打 needInjectSolidGlobalDollarT=true，由 injectSolid
+            //        在文件顶部注入 `import { createAppI18n } from '@/i18n'` + `const { t: $t } = createAppI18n()`。
+            // Generic: detectGlobalDollarTNeeded 返回 false，不会进入此分支。
             when (framework) {
-                is ReactI18nextStrategy, is SolidI18nStrategy -> needInjectReactGlobalDollarT = true
+                is ReactI18nextStrategy -> needInjectReactGlobalDollarT = true
+                is SolidI18nStrategy -> {
+                    needInjectSolidGlobalDollarT = true
+                    tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
+                }
                 is VueI18nStrategy -> needInjectGlobalDollarT = true
             }
         }
@@ -471,8 +486,8 @@ class I18nProcessor(
      * 老调用只作"兼容保留"，**新提取一律写短 $t('xxx')**。
      */
     private fun detectTFunctionName(call: JSCallExpression) {
-        // 纯工具别名模式：锁死短调用名（Vue $t / React t），老长调用只兼容不影响新提取
-        if (needInjectGlobalDollarT || needInjectReactGlobalDollarT) {
+        // 纯工具别名模式：锁死短调用名（Vue $t / React t / Solid $t），老长调用只兼容不影响新提取
+        if (needInjectGlobalDollarT || needInjectReactGlobalDollarT || needInjectSolidGlobalDollarT) {
             tFunctionName = if (needInjectReactGlobalDollarT) "t" else "\$t"
             return
         }
@@ -482,8 +497,13 @@ class I18nProcessor(
             "i18n.global.t" -> tFunctionName = "i18n.global.t"  // 与原代码一致：无条件切换
             "i18n.t" -> {
                 if (tFunctionName != "\$t") return  // 与原代码 if (tFunctionName == "\$t") 等价
-                if (framework is ReactI18nextStrategy) {
-                    // React 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
+                // 框架默认短调用名（React=t / Solid=t / Generic=$t / Vue=$t）：
+                // 命中 i18n.t 长调用时，新提取用框架默认短名（与各策略 tFunctionName 一致）。
+                // 原硬编码 `framework is ReactI18nextStrategy` 改为读 framework.tFunctionName，
+                // 这样 SolidI18nStrategy（tFunctionName="t"）也走短 t 分支，无需新增 is 判定。
+                val defaultShort = framework.tFunctionName
+                if (defaultShort == "t") {
+                    // React / Solid 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
                     tFunctionName = "t"
                 } else if (reactFallsBackToGetI18n()) {
                     // 非 React 场景且 i18n.t 语义 + locale 不可用 → 回退 getI18n 的 $t 别名
@@ -514,6 +534,7 @@ class I18nProcessor(
             decision = I18nImportInjector.InjectionDecision(
                 needInjectGlobalDollarT = needInjectGlobalDollarT,
                 needInjectReactGlobalDollarT = needInjectReactGlobalDollarT,
+                needInjectSolidGlobalDollarT = needInjectSolidGlobalDollarT,
                 reactI18nTFallbackToDollarT = reactI18nTFallbackToDollarT,
                 tFunctionName = tFunctionName,
                 hasExtractedStrings = extractedStrings.isNotEmpty(),

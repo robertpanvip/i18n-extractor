@@ -78,11 +78,16 @@ object I18nInstanceLocator {
         return text.contains("createI18n(") || text.contains("createI18n (")
     }
 
-    /** 判断文本是否是一个 i18n 初始化文件（Vue 的 createI18n 或 React 的 i18n/i18next.init）。 */
+    /** 判断文本是否是一个 i18n 初始化文件（Vue createI18n / React i18n.init / Solid useI18n 顶层调用）。 */
     private fun isI18nInitText(text: String): Boolean {
         if (text.contains("createI18n(") || text.contains("createI18n (")) return true              // Vue
         if (text.contains("initReactI18next")) return true                                          // React (react-i18next)
-        return Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)                 // React / CJS
+        if (Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(text)) return true     // React / CJS
+        // Solid: 顶层 useI18n( 调用 + 导出 createAppI18n / useI18n 的工厂函数（@solid-primitives/i18n）
+        if (text.contains("useI18n(") &&
+            (text.contains("createAppI18n") || Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""").containsMatchIn(text))
+        ) return true
+        return false
     }
 
     /** 给定项目根，查找初始化了 i18n 的文件（createI18n 或 i18n/i18next.init），Vue 与 React 通用。 */
@@ -152,6 +157,51 @@ object I18nInstanceLocator {
         return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(text) ||
             Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(text) ||
             Regex("""export\s+default\s+i18n\b""").containsMatchIn(text)
+    }
+
+    /**
+     * Solid 专用：查找 `@solid-primitives/i18n` 的 useI18n 工厂文件（通常导出 createAppI18n）。
+     *
+     * 与 [findReactI18nInstanceFileInRoot] 对称：只匹配包含 `useI18n(` 调用且导出了
+     * i18n 工厂（`createAppI18n` / `export const useI18n` / `export function ...I18n`）的文件，
+     * 避免误命中 Vue 的 createI18n 或 React 的 i18n.init。
+     */
+    fun findSolidI18nInstanceFileInRoot(projectRoot: VirtualFile): VirtualFile? {
+        val commonDirs = listOf(
+            "src/locales", "locales", "src/i18n", "i18n",
+            "src/locale", "locale", "src/lang", "lang"
+        )
+        for (relPath in commonDirs) {
+            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                    val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                    if (isSolidI18nInitWithExport(t)) vf else null
+                } else null
+            }
+            if (result != null) return result
+        }
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
+        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
+            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                val t = try { String(vf.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return@walkVirtualFile null }
+                if (isSolidI18nInitWithExport(t)) vf else null
+            } else null
+        }
+    }
+
+    /** 判断文本是否是一个 "Solid @solid-primitives/i18n 初始化且导出了工厂" 的文件。 */
+    private fun isSolidI18nInitWithExport(text: String): Boolean {
+        // 必须 import 自 @solid-primitives/i18n，且包含 useI18n( 调用
+        if (!text.contains("@solid-primitives/i18n")) return false
+        if (!text.contains("useI18n(")) return false
+        // 必须导出 i18n 工厂：createAppI18n / 含 I18n 的命名导出 / 默认导出
+        return text.contains("createAppI18n") ||
+            Regex("""export\s+(const|let|var)\s+\w*[Ii]18n\w*""").containsMatchIn(text) ||
+            Regex("""export\s+function\s+\w*[Ii]18n\w*""").containsMatchIn(text) ||
+            Regex("""export\s*\{[^}]*\b\w*[Ii]18n\w*[^}]*\}""").containsMatchIn(text) ||
+            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(text)
     }
 
     /**

@@ -478,6 +478,17 @@ object SolidI18nStrategy : I18nFramework {
     }
 
     /**
+     * Solid 纯工具 TS 判定：与 React 对称——既无 Solid 组件（PascalCase + return JSX）
+     * 也无自定义 Hook 时，视为纯工具文件，需要全局 `$t` 别名注入。
+     *
+     * Solid 组件语法形态与 React 一致（都是 PascalCase 函数返回 JSX），
+     * 故复用 [ProjectStructure.findReactComponentFunctions] 与 [ProjectStructure.findHookFunctions]。
+     */
+    override fun detectGlobalDollarTNeeded(file: PsiFile): Boolean =
+        ProjectStructure.findReactComponentFunctions(file).isEmpty() &&
+            ProjectStructure.findHookFunctions(file).isEmpty()
+
+    /**
      * P7：Solid 站点形态。
      *
      * 原行为：[ProjectStructure.isReact] 对 Solid 项目返回 false（`!hasSolid` 排除），

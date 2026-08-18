@@ -707,10 +707,11 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         }
     }
 
-    /** run() 注入决策的参数包，把 I18nProcessor 的 5 个布尔/字符串状态收敛成一个对象。 */
+    /** run() 注入决策的参数包，把 I18nProcessor 的布尔/字符串状态收敛成一个对象。 */
     data class InjectionDecision(
         val needInjectGlobalDollarT: Boolean,
         val needInjectReactGlobalDollarT: Boolean,
+        val needInjectSolidGlobalDollarT: Boolean,
         val reactI18nTFallbackToDollarT: Boolean,
         val tFunctionName: String,
         val hasExtractedStrings: Boolean,
@@ -718,9 +719,11 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     )
 
     /**
-     * P2 统一注入入口：按 [framework] 分发到 Vue/React 注入逻辑。
-     * 行为与原 I18nProcessor.run() 的注入分支 1:1 等价，只是按框架拆分。
-     * Solid 复用 React 注入（@solid-primitives/i18n 的 useI18n 与 react-i18next 的 useTranslation 注入形态一致）。
+     * P2 统一注入入口：按 [framework] 分发到 Vue/React/Solid 注入逻辑。
+     *
+     * Solid 不再复用 React 分支——`@solid-primitives/i18n` 的 `useI18n(dict, () => locale)`
+     * 与 react-i18next 的 `useTranslation()` API 形态完全不同（前者返回 `[t, { locale }]`，
+     * 后者返回 `{ t }`），复用会注入错误的 import。Solid 走独立的 [injectSolid]。
      */
     fun injectForFramework(
         processor: I18nProcessor,
@@ -730,7 +733,8 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     ) {
         when (framework) {
             is VueI18nStrategy -> injectVue(processor, psiFile, decision)
-            is ReactI18nextStrategy, is SolidI18nStrategy -> injectReact(processor, psiFile, decision)
+            is ReactI18nextStrategy -> injectReact(processor, psiFile, decision)
+            is SolidI18nStrategy -> injectSolid(processor, psiFile, decision)
             else -> { /* Generic 不注入 */ }
         }
     }
@@ -775,7 +779,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         }
     }
 
-    /** React 注入分支（从 I18nProcessor.run() 搬入，行为不变；含 Solid 复用）。 */
+    /** React 注入分支（从 I18nProcessor.run() 搬入，行为不变）。 */
     private fun injectReact(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
         val d = decision
         if (d.reactI18nTFallbackToDollarT) {
@@ -807,6 +811,179 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         if (d.hasExtractedStrings) {
             if (d.tFunctionName != "i18n.t" && !d.needInjectReactGlobalDollarT) {
                 processor.ensureReactI18nImported(psiFile)
+            }
+        }
+    }
+
+    /**
+     * Solid 注入分支：注入 `@solid-primitives/i18n` 的 `useI18n`。
+     *
+     * 与 React 的差异：
+     * - 模块路径不同（`@solid-primitives/i18n` vs `react-i18next`）
+     * - API 不同：`useI18n(dict, () => locale)` 返回 `[t, { locale }]`，
+     *   需用 `const [t] = useI18n(...)` 解构（数组解构，不是对象解构）
+     * - Solid 没有"全局 i18n 实例"概念，纯工具 TS 用 `$t` 时需要从 i18n 工厂文件导入
+     *
+     * 与 React 的共同点：
+     * - 组件函数（PascalCase + return JSX）用 `findReactComponentFunctions` 识别（语法形态一致）
+     * - 自定义 hook 用 `findHookFunctions` 识别
+     * - `detectGlobalDollarTNeeded` 复用 React 实现（无组件 + 无 hook 即视为纯工具）
+     */
+    private fun injectSolid(processor: I18nProcessor, psiFile: PsiElement, decision: InjectionDecision) {
+        val d = decision
+        if (!d.hasExtractedStrings && !d.hasExistingStrings) return
+
+        val containingFile = psiFile.containingFile ?: return
+        val isSfc = containingFile.name.endsWith(".vue", ignoreCase = true)
+        if (isSfc) return // Solid 不应出现在 .vue 文件
+
+        // 纯工具 TS（collect 阶段已通过 detectGlobalDollarTNeeded 判定并打标志）：
+        // 从 i18n 工厂文件导入 createAppI18n，注入 const { t: $t } = createAppI18n();
+        if (d.needInjectSolidGlobalDollarT) {
+            ensureSolidGlobalDollarTImported(processor, psiFile)
+            return
+        }
+
+        val componentFuncs = ProjectStructure.findReactComponentFunctions(containingFile)
+        val hookFuncs = ProjectStructure.findHookFunctions(containingFile)
+
+        if (componentFuncs.isEmpty() && hookFuncs.isEmpty()) {
+            // 兜底：collect 阶段未打标志但运行时判定为纯工具（极少见，避免悬空 t）
+            ensureSolidGlobalDollarTImported(processor, psiFile)
+            return
+        }
+
+        // 组件/Hook 文件：注入 `import { useI18n } from '@solid-primitives/i18n'`
+        // + `const [t, { locale }] = useI18n();`（数组解构，与 useTranslation 的对象解构不同）
+        ensureSolidUseI18nImported(processor, containingFile)
+
+        val allTargets = (componentFuncs.asSequence() + hookFuncs.asSequence())
+            .distinct()
+            .toList()
+        for (func in allTargets.asReversed()) {
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.any { it.text.contains("useI18n") }) continue
+            val hookStmt = processor.createJSStatementFromText(
+                "\n    const [t, { locale }] = useI18n();",
+                func
+            )
+            val openingBrace = body.firstChild
+            if (openingBrace != null) {
+                body.addAfter(hookStmt, openingBrace)
+            }
+        }
+    }
+
+    /**
+     * Solid 组件/Hook 文件：在文件顶部注入 `import { useI18n } from '@solid-primitives/i18n';`
+     * 仅当文件中已存在组件或 Hook（调用方已判定）才注入，避免给纯工具/常量文件注入无意义 import。
+     */
+    private fun ensureSolidUseI18nImported(processor: I18nProcessor, containingFile: PsiElement) {
+        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+        // 去重：已存在从 @solid-primitives/i18n 导入 useI18n 则跳过
+        if (imports.any { it.text.contains("@solid-primitives/i18n") && it.text.contains("useI18n") }) return
+
+        val importText = "import { useI18n } from '@solid-primitives/i18n';\n"
+        val importStmt = processor.createJSStatementFromText(importText, containingFile)
+        if (imports.isNotEmpty()) {
+            val firstImport = imports.first()
+            firstImport.parent.addBefore(importStmt, firstImport)
+        } else {
+            val firstStatement = findFirstNonWhitespaceChild(containingFile)
+            if (firstStatement != null) {
+                containingFile.addBefore(importStmt, firstStatement)
+            } else {
+                containingFile.add(importStmt)
+            }
+        }
+    }
+
+    /**
+     * Solid 纯工具 TS（无组件无 Hook）：从 i18n 工厂文件导入 i18n 实例 + 注入 `const $t = ...`。
+     *
+     * 流程：
+     * 1. 通过 [I18nInstanceLocator.findSolidI18nInstanceFileInRoot] 查找 useI18n 工厂文件
+     * 2. 通过 [I18nInstanceLocator.resolveVueI18nImportPath] 推断别名/相对路径（与 Vue/React 共用）
+     * 3. 注入 `import { createAppI18n } from '...'` + `const { t: $t } = createAppI18n();`
+     *    （createAppI18n 返回 { t, locale }，与 useI18n 的返回值形态一致）
+     * 4. 找不到工厂文件时回退到 `import { useI18n } from '@solid-primitives/i18n'` + 顶层调用
+     *    （极少见场景，提示用户先运行 bootstrap）
+     */
+    private fun ensureSolidGlobalDollarTImported(processor: I18nProcessor, psiFile: PsiElement) {
+        val containingFile = psiFile.containingFile ?: return
+        val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+
+        // 已存在任意 @solid-primitives/i18n 导入或 i18n 工厂导入 → 视为已具备全局能力
+        val alreadyHasSolidImport = imports.any { it.text.contains("@solid-primitives/i18n") }
+        if (alreadyHasSolidImport) {
+            // 已导入但可能未注入 const $t 别名 —— 检查是否已存在 $t 或 t 别名
+            val vars = PsiTreeUtil.findChildrenOfType(containingFile, JSVarStatement::class.java)
+            val hasDollarTAlias = vars.any {
+                it.text.contains("= useI18n(") || it.text.contains("= createAppI18n(") ||
+                    it.text.replace(Regex("\\s"), "").contains("const\$t=")
+            }
+            if (hasDollarTAlias) return
+        }
+
+        // 尝试从 i18n 工厂文件导入
+        val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return
+        val initFile = I18nInstanceLocator.findSolidI18nInstanceFileInRoot(projectRoot)
+        val importText: String = if (initFile != null) {
+            val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return
+            // 优先导入 createAppI18n（如果工厂文件导出了它），否则导入默认导出
+            val initText = try { String(initFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { "" }
+            val exportName = when {
+                initText.contains("createAppI18n") -> "createAppI18n"
+                Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(initText) -> "default"
+                else -> "useI18n"
+            }
+            when (exportName) {
+                "default" -> "import i18n from '$importPath';\n"
+                "createAppI18n" -> "import { createAppI18n } from '$importPath';\n"
+                else -> "import { useI18n } from '$importPath';\n"
+            }
+        } else {
+            // 无工厂文件：直接从 @solid-primitives/i18n 包导入 useI18n
+            // （需要用户在调用处提供 dict —— 此场景下 $t 调用会失败，提示用户先 bootstrap）
+            "import { useI18n } from '@solid-primitives/i18n';\n"
+        }
+
+        // const 别名文本（对应不同 import 形态）
+        val dollarTText: String = when {
+            importText.contains("createAppI18n") -> "const { t: \$t } = createAppI18n();\n"
+            importText.startsWith("import i18n ") -> "const \$t = i18n.t;\n"
+            else -> "const [\$t] = useI18n();\n"
+        }
+
+        // 注入 import
+        if (!alreadyHasSolidImport) {
+            val importStmt = processor.createJSStatementFromText(importText, containingFile)
+            if (imports.isNotEmpty()) {
+                val firstImport = imports.first()
+                firstImport.parent.addBefore(importStmt, firstImport)
+            } else {
+                val firstStatement = findFirstNonWhitespaceChild(containingFile)
+                if (firstStatement != null) {
+                    containingFile.addBefore(importStmt, firstStatement)
+                } else {
+                    containingFile.add(importStmt)
+                }
+            }
+        }
+
+        // 注入 const $t 别名（去重）
+        val latestImports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
+        val aliasStmt = processor.createStringExpressionNode(dollarTText, containingFile)
+        if (latestImports.isNotEmpty()) {
+            val lastImport = latestImports.last()
+            lastImport.parent.addAfter(aliasStmt, lastImport)
+        } else {
+            val firstStatement = findFirstNonWhitespaceChild(containingFile)
+            if (firstStatement != null) {
+                containingFile.addBefore(aliasStmt, firstStatement)
+            } else {
+                containingFile.add(aliasStmt)
             }
         }
     }
