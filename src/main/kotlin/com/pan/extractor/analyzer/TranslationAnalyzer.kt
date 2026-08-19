@@ -49,6 +49,18 @@ enum class StringContext {
  */
 object TranslationAnalyzer {
 
+    /**
+     * 对单个调用做产出 [com.pan.extractor.model.TranslationCall] 的完整语义分析：
+     * 三态 + 字符串实参上下文，一次解析两种信息，供上层直接消费。
+     */
+    fun analyzeCall(call: JSCallExpression): com.pan.extractor.model.TranslationCall {
+        val status = statusOf(call)
+        // 找第一个字符串实参，计算其在调用内的上下文（NONE=不在翻译上下文）
+        val stringArg = call.arguments.firstOrNull() as? JSLiteralExpression
+        val stringContext = if (stringArg != null) contextOf(stringArg) else StringContext.NONE
+        return com.pan.extractor.model.TranslationCall(call, status, stringContext)
+    }
+
     /** 判定一个调用的三态。 */
     fun statusOf(call: JSCallExpression): TranslationCallStatus {
         val analysis = SymbolAnalyzer.analyze(call)

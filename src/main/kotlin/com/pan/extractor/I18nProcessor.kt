@@ -496,7 +496,9 @@ class I18nProcessor(
 
         // 【新判定模型】三态：只有「已证明」是翻译调用（来源 = 框架 import / hook 或工厂产物 / 插件 $t）
         // 才把 key 计入 existingStrings；UNKNOWN（无法证明）不声称它是已翻译 key——名字不是语义证明。
-        when (com.pan.extractor.analyzer.TranslationAnalyzer.statusOf(call)) {
+        // 通过目标架构模型 TranslationCall 消费判定结果（status 等价于 statusOf，见 TranslationAnalyzer.analyzeCall）。
+        val analyzed = com.pan.extractor.analyzer.TranslationAnalyzer.analyzeCall(call)
+        when (analyzed.status) {
             com.pan.extractor.analyzer.TranslationCallStatus.TRANSLATION -> existingStrings.putIfAbsent(key, text.trim())
             com.pan.extractor.analyzer.TranslationCallStatus.NON_TRANSLATION,
             com.pan.extractor.analyzer.TranslationCallStatus.UNKNOWN,
