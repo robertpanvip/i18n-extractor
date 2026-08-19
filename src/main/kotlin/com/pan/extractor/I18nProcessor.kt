@@ -77,8 +77,14 @@ class I18nProcessor(
     /** 公开只读访问器，供进度条 UI 显示文件名（progress 线程里调用） */
     val targetPsiFile: PsiElement get() = psiFile
 
-    /** 待应用的重写动作（collect 阶段收集，execute/run 阶段逐个执行）。 */
-    var pendingChanges = mutableListOf<CollectedChange>()
+    /** 待应用的重写动作（collect 阶段收集，execute/run 阶段逐个执行，代理到 [collectedPlan]）。 */
+    var pendingChanges: MutableList<CollectedChange>
+        get() = collectedPlan.pendingChanges
+        set(value) {
+            // 外部（collect/open）会重新赋值整个列表；同步回容器，避免分叉。
+            collectedPlan.pendingChanges.clear()
+            collectedPlan.pendingChanges.addAll(value)
+        }
 
     /**
      * 收集期产物容器（目标架构 Phase 1）：集中收敛 collectedSites / blockedSiteIds /
@@ -112,11 +118,15 @@ class I18nProcessor(
     /** 「JS 字符串收集 与 $t 表达式生成」辅助类 */
     internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
 
-    /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t */
-    internal var tFunctionName: String = "\$t"
+    /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t（代理到 [collectedPlan]）。 */
+    internal var tFunctionName: String
+        get() = collectedPlan.tFunctionName
+        set(value) { collectedPlan.tFunctionName = value }
 
-    /** 当前文件检测到的框架策略，在 collect() 入口初始化。 */
-    internal var framework: I18nFramework = GenericStrategy
+    /** 当前文件检测到的框架策略，在 collect() 入口初始化（代理到 [collectedPlan]）。 */
+    internal var framework: I18nFramework
+        get() = collectedPlan.framework ?: GenericStrategy
+        set(value) { collectedPlan.framework = value }
 
     /**
      * 全局 $t 别名注入标记（用户要求：全部统一用 $t，减少复杂度）。
@@ -143,8 +153,12 @@ class I18nProcessor(
      *       const t = getI18n().t;
      *   之后文件里所有替换都是短写法 t('xxx')，与组件/Hook 内部一致。
      */
-    private var needInjectGlobalDollarT: Boolean = false
-    private var needInjectReactGlobalDollarT: Boolean = false
+    private var needInjectGlobalDollarT: Boolean
+        get() = collectedPlan.needInjectGlobalDollarT
+        set(value) { collectedPlan.needInjectGlobalDollarT = value }
+    private var needInjectReactGlobalDollarT: Boolean
+        get() = collectedPlan.needInjectReactGlobalDollarT
+        set(value) { collectedPlan.needInjectReactGlobalDollarT = value }
 
     /**
      * Solid 纯工具 TS（无组件无 Hook）全局 `$t` 别名注入标记。
@@ -153,7 +167,9 @@ class I18nProcessor(
      * 分支：注入 `import { createAppI18n } from '@solid-primitives/i18n'` + `const { t: $t } = createAppI18n()`。
      * 命中后 collect 阶段锁死 tFunctionName=$t，新提取写 `$t('xxx')`。
      */
-    private var needInjectSolidGlobalDollarT: Boolean = false
+    private var needInjectSolidGlobalDollarT: Boolean
+        get() = collectedPlan.needInjectSolidGlobalDollarT
+        set(value) { collectedPlan.needInjectSolidGlobalDollarT = value }
 
     /**
      * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 t 别名：
@@ -161,9 +177,15 @@ class I18nProcessor(
      * 并把文件里已有的 i18n.t('...') 调用改写为 t('...')（否则 i18n 标识符会悬空）。
      * 命中后在 collect 阶段锁死 tFunctionName="t"。
      */
-    private var reactI18nTFallbackToDollarT: Boolean = false
-    private var reactFallbackChecked: Boolean = false
-    private var reactFallbackResult: Boolean = false
+    private var reactI18nTFallbackToDollarT: Boolean
+        get() = collectedPlan.reactI18nTFallbackToDollarT
+        set(value) { collectedPlan.reactI18nTFallbackToDollarT = value }
+    private var reactFallbackChecked: Boolean
+        get() = collectedPlan.reactFallbackChecked
+        set(value) { collectedPlan.reactFallbackChecked = value }
+    private var reactFallbackResult: Boolean
+        get() = collectedPlan.reactFallbackResult
+        set(value) { collectedPlan.reactFallbackResult = value }
 
     /**
      * React 文件 + 无任何 i18n 实例导入 + locale 初始化不可用 → 需要回退 getI18n。
@@ -380,19 +402,10 @@ class I18nProcessor(
      * 检测的框架策略。
      */
     private fun resetState() {
-        pendingChanges = mutableListOf()
-        // 收集期可变状态整体替换清零（siteCounter / collectedSites / blockedSiteIds /
-        // extractedStrings / existingStrings 一次性重置，见 CollectedPlan）
+        // 收集期可变状态整体替换为零状态容器。所有收集期状态（siteCounter / collectedSites /
+        // blockedSiteIds / extractedStrings / existingStrings / pendingChanges / tFunctionName /
+        // framework / needInject* / react fallback 缓存 / framework）一次性重置，见 CollectedPlan。
         collectedPlan = com.pan.extractor.planner.CollectedPlan()
-        reactFallbackChecked = false
-        reactFallbackResult = false
-        // BUG_ANALYSIS 4.1：这些"全局 $t 别名注入"flag 也会在 collect() 里被置位，
-        // 若不在 reset 时清回，二次 collect() 会把上一次的注入意图残留到本次执行。
-        needInjectGlobalDollarT = false
-        needInjectReactGlobalDollarT = false
-        needInjectSolidGlobalDollarT = false
-        reactI18nTFallbackToDollarT = false
-        tFunctionName = "\$t"
         // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
         // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
         jsCollector.clearProcessedEnums()
@@ -439,7 +452,7 @@ class I18nProcessor(
         // 已经存在 i18n.t('xxx') 调用）——这是对的，不要覆盖回去。
         val changes = collectFromPsi(psiFile)
         pendingChanges = changes
-        return changes
+        return pendingChanges
     }
 
     /**

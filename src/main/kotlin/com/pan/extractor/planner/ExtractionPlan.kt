@@ -71,14 +71,14 @@ data class ResourcePlan(
  * > 外部（MergeApplier / 对话框 / Validator / 测试）只按「站点 / 提取 / 已有翻译」三组只读意图消费，
  * > 不直接操作处理器内部散落字段；收集过程产生的可变状态集中于此，reset 时整体替换即可清零。
  *
- * 包含：
- *  - [collectedSites]：全部待改写站点；
- *  - [blockedSiteIds]：被合并承载、应跳过普通替换的 siteId；
- *  - [siteCounter]：siteId 自增计数（保证同一 collect 内 id 稳定）；
- *  - [extractedStrings]：新提取 key → 原文（写资源文件）；
- *  - [existingStrings]：已存在的翻译 key → 原文（仅展示，不替换）。
+ * 覆盖两类状态：
+ *  1. 收集期产物（站点 / 提取 / 已有翻译 / 跳过的站点）：
+ *     [collectedSites] / [extractedStrings] / [existingStrings] / [blockedSiteIds] / [siteCounter]；
+ *  2. 收集期决策（改写动作 / 框架 / 翻译函数名 / 注入意图）：
+ *     [pendingChanges] / [framework] / [tFunctionName] / [needInject*] / react fallback 缓存。
  */
 class CollectedPlan {
+    // ── 收集期产物 ────────────────────────────────────────────────
     /** 一次提取命中站点列表。 */
     val collectedSites = mutableListOf<com.pan.extractor.I18nProcessor.CollectedSite>()
 
@@ -93,4 +93,30 @@ class CollectedPlan {
 
     /** 已存在的 \$t() 调用 key → 原文本（仅展示，不替换）。 */
     val existingStrings = mutableMapOf<String, String>()
+
+    // ── 收集期决策 ────────────────────────────────────────────────
+    /** 待应用的重写动作（collect 阶段收集，run 阶段逐个执行）。 */
+    val pendingChanges = mutableListOf<com.pan.extractor.I18nProcessor.CollectedChange>()
+
+    /** 当前文件检测到的框架策略。 */
+    var framework: com.pan.extractor.I18nFramework? = null
+
+    /** 检测到的翻译函数名（\$t / t / i18n.t / i18n.global.t），默认 \$t。 */
+    var tFunctionName: String = "\$t"
+
+    /** 全局 \$t 别名注入标记（Vue 非 SFC 纯 TS）。 */
+    var needInjectGlobalDollarT: Boolean = false
+
+    /** React 全局 t 别名注入标记（React 纯工具 TS）。 */
+    var needInjectReactGlobalDollarT: Boolean = false
+
+    /** Solid 全局 \$t 别名注入标记（Solid 纯工具 TS）。 */
+    var needInjectSolidGlobalDollarT: Boolean = false
+
+    /** React i18n.t 回退 getI18n 的 t 别名标记。 */
+    var reactI18nTFallbackToDollarT: Boolean = false
+
+    /** React 是否回退 getI18n 的结果缓存（同一 collect 只算一次）。 */
+    var reactFallbackChecked: Boolean = false
+    var reactFallbackResult: Boolean = false
 }
