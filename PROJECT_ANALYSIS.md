@@ -1043,7 +1043,11 @@ class I18nProcessor(
 
 ## 21.5 判定完成的标准
 
-- [ ] `I18nProcessor` 不再持有收集业务/注入业务代码，仅剩注入依赖 + `extract(context)` 调度
-- [ ] `JsStringCollector` / `I18nImportInjector` 不再接收 `I18nProcessor` 整个对象
+- [x] `I18nProcessor` 不再持有收集业务/注入业务代码，仅剩注入依赖 + `extract(context)` 调度
+      —— 收集业务已收敛至 `analyzer.I18nAnalyzer`（`collectExistingTKeys / collectFromPsi / recordChange / resetState` 全部委托），
+      注入业务已收敛至 `planner.ImportPlanner + rewriter.ImportRewriter`（`injectForFramework` 只做转发）。
+- [x] `JsStringCollector` / `I18nImportInjector` 不再接收 `I18nProcessor` 整个对象
+      —— 二者统一以窄接口 `I18nProcessorContract` 注入，反向依赖收敛为接口契约能力。
 - [ ] `extract()` 全部自动修改进入同一个 `WriteCommandAction`
-- [ ] 现有 `I18nProcessorTest / SolidI18nProcessorTest / I18nVueTemplatePsi2Test / I18nRegexFallbackBoundaryTest / I18nImportInjectorMoreTest` 全绿
+- [x] 现有 `I18nProcessorTest / SolidI18nProcessorTest / I18nVueTemplatePsi2Test / I18nRegexFallbackBoundaryTest / I18nImportInjectorMoreTest` 全绿
+      —— 另有 `I18nImportsTest / MergeApplierTest / ReactI18nProcessorTest / VueI18nProcessorTest` 一并验证无回归。

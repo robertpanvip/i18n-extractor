@@ -61,8 +61,19 @@ class I18nProcessor @JvmOverloads constructor(
      * 目标架构 Phase 1：以领域模型 [com.pan.extractor.model.ExtractionSite] 表示，
      * 并代理到 [CollectedPlan.collectedSites]，消除原内嵌 CollectedSite 的重复建模。
      */
+    /** 单文件收集与分析宿主（Analyzer 层，§21.4 第 3 步）：拥有收集期状态与收集业务；processor 对下游暴露薄转发。 */
+    internal val analyzer: com.pan.extractor.analyzer.I18nAnalyzer by lazy {
+        com.pan.extractor.analyzer.I18nAnalyzer(
+            project = project,
+            contract = this,
+            jsCollector = jsCollector,
+            injector = injector,
+        )
+    }
+
+    /** 一次提取命中站点列表（领域模型 site，委托 Analyzer）。 */
     val collectedSites: MutableList<com.pan.extractor.model.ExtractionSite>
-        get() = collectedPlan.collectedSites
+        get() = analyzer.collectedSites
 
     /** 原文包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
     class CollectedChange(val siteId: String, private val runnable: () -> Unit) {
@@ -72,35 +83,19 @@ class I18nProcessor @JvmOverloads constructor(
     /** 公开只读访问器，供进度条 UI 显示文件名（progress 线程里调用） */
     val targetPsiFile: PsiElement get() = psiFile
 
-    /** 待应用的重写动作（collect 阶段收集，execute/run 阶段逐个执行，代理到 [collectedPlan]）。 */
+    /** 待应用的重写动作（collect 阶段收集，run 阶段逐个执行，委托 Analyzer）。 */
     var pendingChanges: MutableList<CollectedChange>
-        get() = collectedPlan.pendingChanges
-        set(value) {
-            // 外部（collect/open）会重新赋值整个列表；同步回容器，避免分叉。
-            collectedPlan.pendingChanges.clear()
-            collectedPlan.pendingChanges.addAll(value)
-        }
+        get() = analyzer.pendingChanges
+        set(value) { analyzer.pendingChanges = value }
 
-    /**
-     * 收集期产物容器（目标架构 Phase 1）：集中收敛 collectedSites / blockedSiteIds /
-     * siteCounter / extractedStrings / existingStrings 这一组可变状态，reset 时整体替换清零。
-     * 下方公开访问器都代理到此容器，外部消费方与测试零改动。
-     */
-    private var collectedPlan = com.pan.extractor.planner.CollectedPlan()
+    /** 被骨架合并承载、应跳过普通替换的 siteId（委托 Analyzer）。 */
+    val blockedSiteIds: MutableSet<String> get() = analyzer.blockedSiteIds
 
-    /** 被骨架合并承载、应跳过普通替换的 siteId（见 [CollectedPlan.blockedSiteIds]）。 */
-    val blockedSiteIds: MutableSet<String> get() = collectedPlan.blockedSiteIds
+    /** 新提取的 key -> 原文本（委托 Analyzer）。 */
+    override val extractedStrings: MutableMap<String, String> get() = analyzer.extractedStrings
 
-    private var siteCounter: Int
-        get() = collectedPlan.siteCounter
-        set(value) { collectedPlan.siteCounter = value }
-    private fun nextSiteId() = "S${++siteCounter}"
-
-    /** 新提取的 key -> 原文本（见 [CollectedPlan.extractedStrings]）。 */
-    override val extractedStrings: MutableMap<String, String> get() = collectedPlan.extractedStrings
-
-    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换，见 [CollectedPlan.existingStrings]）。 */
-    val existingStrings: MutableMap<String, String> get() = collectedPlan.existingStrings
+    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换，委托 Analyzer）。 */
+    val existingStrings: MutableMap<String, String> get() = analyzer.existingStrings
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
@@ -110,15 +105,15 @@ class I18nProcessor @JvmOverloads constructor(
     /** 「JS 字符串收集 与 $t 表达式生成」辅助类 */
     internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
 
-    /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t（代理到 [collectedPlan]）。 */
+    /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t（委托 Analyzer）。 */
     override var tFunctionName: String
-        get() = collectedPlan.tFunctionName
-        set(value) { collectedPlan.tFunctionName = value }
+        get() = analyzer.tFunctionName
+        set(value) { analyzer.tFunctionName = value }
 
-    /** 当前文件检测到的框架策略，在 collect() 入口初始化（代理到 [collectedPlan]）。 */
+    /** 当前文件检测到的框架策略，在 collect() 入口初始化（委托 Analyzer）。 */
     internal var framework: I18nFramework
-        get() = collectedPlan.framework ?: GenericStrategy
-        set(value) { collectedPlan.framework = value }
+        get() = analyzer.framework
+        set(value) { analyzer.framework = value }
 
     /**
      * 全局 $t 别名注入标记（用户要求：全部统一用 $t，减少复杂度）。
@@ -146,60 +141,25 @@ class I18nProcessor @JvmOverloads constructor(
      *   之后文件里所有替换都是短写法 t('xxx')，与组件/Hook 内部一致。
      */
     internal var needInjectGlobalDollarT: Boolean
-        get() = collectedPlan.needInjectGlobalDollarT
-        set(value) { collectedPlan.needInjectGlobalDollarT = value }
+        get() = analyzer.needInjectGlobalDollarT
+        set(value) { analyzer.needInjectGlobalDollarT = value }
     internal var needInjectReactGlobalDollarT: Boolean
-        get() = collectedPlan.needInjectReactGlobalDollarT
-        set(value) { collectedPlan.needInjectReactGlobalDollarT = value }
+        get() = analyzer.needInjectReactGlobalDollarT
+        set(value) { analyzer.needInjectReactGlobalDollarT = value }
 
     /**
-     * Solid 纯工具 TS（无组件无 Hook）全局 `$t` 别名注入标记。
-     *
-     * 与 [needInjectReactGlobalDollarT] 对称，但走独立的 [I18nImportInjector.injectSolid]
-     * 分支：注入 `import { createAppI18n } from '@solid-primitives/i18n'` + `const { t: $t } = createAppI18n()`。
-     * 命中后 collect 阶段锁死 tFunctionName=$t，新提取写 `$t('xxx')`。
+     * Solid 纯工具 TS（无组件无 Hook）全局 `$t` 别名注入标记。（委托 Analyzer）
      */
     internal var needInjectSolidGlobalDollarT: Boolean
-        get() = collectedPlan.needInjectSolidGlobalDollarT
-        set(value) { collectedPlan.needInjectSolidGlobalDollarT = value }
+        get() = analyzer.needInjectSolidGlobalDollarT
+        set(value) { analyzer.needInjectSolidGlobalDollarT = value }
 
     /**
-     * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 t 别名：
-     * 顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t;`，
-     * 并把文件里已有的 i18n.t('...') 调用改写为 t('...')（否则 i18n 标识符会悬空）。
-     * 命中后在 collect 阶段锁死 tFunctionName="t"。
+     * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 t 别名（委托 Analyzer）。
      */
     internal var reactI18nTFallbackToDollarT: Boolean
-        get() = collectedPlan.reactI18nTFallbackToDollarT
-        set(value) { collectedPlan.reactI18nTFallbackToDollarT = value }
-    private var reactFallbackChecked: Boolean
-        get() = collectedPlan.reactFallbackChecked
-        set(value) { collectedPlan.reactFallbackChecked = value }
-    private var reactFallbackResult: Boolean
-        get() = collectedPlan.reactFallbackResult
-        set(value) { collectedPlan.reactFallbackResult = value }
-
-    /**
-     * React 文件 + 无任何 i18n 实例导入 + locale 初始化不可用 → 需要回退 getI18n。
-     * 结果在 collect 阶段只算一次（避免对每个 i18n.t 调用都重复走项目目录扫描）。
-     */
-    private fun reactFallsBackToGetI18n(): Boolean {
-        if (reactFallbackChecked) return reactFallbackResult
-        reactFallbackChecked = true
-        reactFallbackResult = run {
-            if (isVueFile(psiFile.containingFile) || framework is VueI18nStrategy) return@run false
-            val f = psiFile.containingFile ?: (psiFile as? PsiFile) ?: return@run false
-            if (framework !is ReactI18nextStrategy) return@run false
-            // 已有 i18n 实例导入（locale / ./i18n / i18next / getI18n）→ 直接用，不需回退
-            if (hasI18nInstanceImported(psiFile)) return@run false
-            // locale 初始化文件导出了 i18n 且路径可推断 → 走 locale，不回退
-            val root = ProjectStructure.findProjectRoot(f) ?: return@run true
-            val initFile = I18nInstanceLocator.findReactI18nInstanceFileInRoot(root, project)
-            if (initFile != null && I18nInstanceLocator.resolveVueI18nImportPath(f, initFile) != null) return@run false
-            true
-        }
-        return reactFallbackResult
-    }
+        get() = analyzer.reactI18nTFallbackToDollarT
+        set(value) { analyzer.reactI18nTFallbackToDollarT = value }
 
     fun isMustache(text: String): Boolean = I18nPsiTools.isMustache(text)
 
@@ -238,173 +198,13 @@ class I18nProcessor @JvmOverloads constructor(
         changes: MutableList<CollectedChange>,
         replaceAction: () -> Unit
     ) {
-        val id = nextSiteId()
-        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
-        val f = (anchor.containingFile ?: (this.psiFile as? PsiFile))
-        // P7：站点形态由策略判定（O(1) 框架级常量），替代原 Util.isVue/isReact 二分。
-        // framework 在 collect() 入口已由 I18nFrameworkRegistry.detect 初始化（基于
-        // Util.isVue/isReact/isSolid，含 .vue 扩展名 + 依赖 + 无 package.json 兜底），
-        // 故策略命中即等价于原 Util.isVue/isReact 判定结果，1:1 还原 isVue/isReact。
-        val form = framework.getSiteForm(anchor)
-        val isVue = form == SiteForm.VUE_BINDING || form == SiteForm.VUE_MUSTACHE
-        val isReact = !isVue && (form == SiteForm.JSX_ATTRIBUTE || form == SiteForm.TEMPLATE_LITERAL)
-        val vf = f?.virtualFile
-        collectedSites += com.pan.extractor.model.ExtractionSite(
-            id = id,
-            originalMessage = message.trim(),
-            replaceRoot = ptr,
-            location = com.pan.extractor.model.ExtractionSiteLocation(
-                containingFile = vf,
-                startLine = computeStartLine(ptr, vf),
-            ),
-            isVue = isVue,
-            isReact = isReact,
-            form = form,
-        )
-        changes += CollectedChange(id, replaceAction)
-    }
-
-    /**
-     * 给 Dialog/摘要展示用的起始行（1 基）。只读、失败返回 1。
-     * 目标架构 Phase 1：该定位逻辑从原 CollectedSite.startLine 迁入，
-     * 在收集期一次性写入 ExtractionSite.location。
-     */
-    private fun computeStartLine(
-        pointer: SmartPsiElementPointer<PsiElement>,
-        file: com.intellij.openapi.vfs.VirtualFile?,
-    ): Int = runCatching {
-        val e = pointer.element ?: return@runCatching 1
-        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
-            .getDocument(file ?: return@runCatching 1) ?: return@runCatching 1
-        val range = e.textRange ?: return@runCatching 1
-        if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
-        doc.getLineNumber(range.startOffset) + 1
-    }.getOrDefault(1)
-
-    fun collectXmlText(element: PsiElement, changes: MutableList<CollectedChange>) {
-        if (isComment(element)) {
-            return
-        }
-
-        val quote = "`"
-        // 过滤掉 PsiWhiteSpace 和注释子节点，避免首尾空白和注释内容干扰 raw 字符串构建
-        val children = element.children.filter { it !is PsiWhiteSpace && !isComment(it) && it !is PsiComment }
-        if (children.isEmpty()) return
-
-        val sb = StringBuilder()
-        children.forEachIndexed { index, e ->
-            val text = rm(e)
-            when (index) {
-                0 -> sb.append(quote).append(text)
-                children.lastIndex -> sb.append(text).append(quote)
-                else -> sb.append(text)
-            }
-        }
-        if (children.size == 1) {
-            sb.append(quote)
-        }
-        val raw = sb.toString().trim()
-
-        // 已是 $t() 调用的跳过（兼容 ${ $t( 和 ${$t( 两种写法）
-        // 同时去除所有空白字符后检查，避免换行/空格干扰
-        val compactRaw = raw.replace(Regex("\\s"), "")
-        if (compactRaw.startsWith("`\${\$t(")) {
-            return
-        }
-
-        // 1. 先尝试通过注入的 JS 提取字符串字面量
-        // 对于复杂表达式（三目、函数调用等），注入的 JS PSI 能准确找到内部的字符串
-        val injected = InjectedLanguageManager.getInstance(project)
-            .getInjectedPsiFiles(element)
-        if (injected != null && injected.isNotEmpty()) {
-            var foundStrings = false
-            injected.forEach { pair ->
-                pair.first.accept(object : PsiRecursiveElementWalkingVisitor() {
-                    override fun visitElement(e: PsiElement) {
-                        if (e is JSLiteralExpression && !isInComment(e)) {
-                            // 跳过模板字面量内部的字符串（避免重复提取）
-                            if (PsiTreeUtil.getParentOfType(e, JSStringTemplateExpression::class.java) == null) {
-                                // 跳过已在 $t() 调用中的字符串
-                                if (!isTransformedCalled(e)) {
-                                    collectJSStringChange(e, changes)
-                                    foundStrings = true
-                                }
-                            }
-                        }
-                        if (e is JSBinaryExpression && !isInComment(e)) {
-                            // 只有实际产生变更时才标记 foundStrings，避免无条件跳过 $t() 检查
-                            val sizeBefore = changes.size
-                            collectJSBinaryExpressionChange(e, changes)
-                            if (changes.size > sizeBefore) {
-                                foundStrings = true
-                            }
-                        }
-                        super.visitElement(e)
-                    }
-                })
-            }
-            // 如果注入 JS 中找到了字符串，就不再用模板字符串方式处理
-            if (foundStrings) {
-                return
-            }
-            // 如果 raw 中已包含 $t() 调用，说明所有字符串已在 $t() 中，跳过回退方案
-            if (raw.contains("\$t(") || raw.contains("i18n.global.t(") || raw.contains("i18n.t(")) {
-                return
-            }
-            // 如果 raw 去除 ${} 后只剩 JS 注释（如 {{ //新增按钮 }}），跳过
-            val contentOnly = raw.substring(1, raw.length - 1).trim()
-            val strippedContent = contentOnly.replace(Regex("\\$\\{[^}]*\\}"), "").trim()
-            if (strippedContent.startsWith("//") || (strippedContent.startsWith("/*") && strippedContent.endsWith("*/"))) {
-                return
-            }
-        }
-
-        // 2. 回退方案：用模板字符串方式处理（适用于简单模板字面量场景）
-        collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
+        // 收集业务收敛至 Analyzer 层（§21.4 第 3 步）：统一登记 site + 包装 change。
+        analyzer.recordChange(message, replaceRoot, anchor, changes, replaceAction)
     }
 
     internal fun collectFromPsi(psiFile: PsiElement): MutableList<CollectedChange> {
-        val changes = mutableListOf<CollectedChange>()
-
-        // 目标架构 Scanner 层：遍历发现候选节点（迁移自本方法原 PsiRecursiveElementWalkingVisitor）。
-        // 节点类型过滤（style/注释）已在 scanner 内完成，sink 只做收集分发。
-        fun handle(element: PsiElement) {
-            when (element) {
-                is XmlText -> {
-                    if (isMustache(element.text)) {
-                        // 只用 collectXmlText 统一处理，避免 visitMustache 重复提取单个表达式
-                        collectXmlText(element, changes)
-                    } else {
-                        // 合并相邻、仅被空白分隔的文本节点（JSX 会把 "Hello world" 拆成两个单 token 节点）
-                        val run = collectTextRun(element)
-                        if (run.first() === element) {
-                            collectTemplateTextChange(run, changes)
-                        }
-                    }
-                }
-
-                is XmlAttributeValue -> {
-                    collectXmlAttributeValueChange(element, changes)
-                }
-
-                is JSLiteralExpression -> {
-                    collectJSStringChange(element, changes)
-                }
-
-                is JSBinaryExpression -> {
-                    collectJSBinaryExpressionChange(element, changes)
-                }
-            }
-        }
-
-        val scanner = when {
-            framework is VueI18nStrategy -> com.pan.extractor.scanner.VueScanner
-            framework is ReactI18nextStrategy -> com.pan.extractor.scanner.ReactScanner
-            framework is SolidI18nStrategy -> com.pan.extractor.scanner.SolidScanner
-            else -> com.pan.extractor.scanner.JsScanner
-        }
-        scanner.scan(psiFile) { handle(it) }
-        return changes
+        // 候选发现（Scanner 遍历 + Analyzer 收集）收敛至 Analyzer 层（§21.4 第 3 步）。
+        return analyzer.collectFromPsi(psiFile)
     }
 
     /**
@@ -416,13 +216,9 @@ class I18nProcessor @JvmOverloads constructor(
      * 检测的框架策略。
      */
     internal fun resetState() {
-        // 收集期可变状态整体替换为零状态容器。所有收集期状态（siteCounter / collectedSites /
-        // blockedSiteIds / extractedStrings / existingStrings / pendingChanges / tFunctionName /
-        // framework / needInject* / react fallback 缓存 / framework）一次性重置，见 CollectedPlan。
-        collectedPlan = com.pan.extractor.planner.CollectedPlan()
-        // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
-        // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
-        jsCollector.clearProcessedEnums()
+        // 收集期状态重置收敛至 Analyzer 层（§21.4 第 3 步）：一次性替换 CollectedPlan 并清空
+        // JsStringCollector 的 processedEnums，保证 collect() 幂等可重复执行（BUG_ANALYSIS 4.1）。
+        analyzer.resetState()
     }
 
     /**
@@ -449,112 +245,9 @@ class I18nProcessor @JvmOverloads constructor(
      * 通用 JSCallExpression 顶层遍历（detectTFunctionName + collectTKeyFromCall）保留在此处。
      */
     internal fun collectExistingTKeys() {
-        // 一次性收集所有 JSCallExpression，供 detectTFunctionName 和 collectTKeyFromCall 复用，
-        // 避免对同一棵 PSI 树做两次 findChildrenOfType 顶层遍历（性能）。
-        val calls = PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java)
-        calls.forEach { call -> detectTFunctionName(call) }
-
-        // 模板 {{ }} 中的注入 JS（Vue 专属，React/Solid/Generic 默认空实现）
-        // onCall：对注入 JS 中的每个 JSCallExpression 执行 collectTKeyFromCall + detectTFunctionName
-        //         （与原 collectTKeysRecursive 行为 1:1 等价）
-        // onRawText：对 mustache XmlText 原始文本执行 collectTKeysFromRawText
-        //         （覆盖 backtick 模板字符串 $t(`确定`) 场景）
-        framework.collectExistingTKeysFromTemplate(
-            root = psiFile,
-            onCall = { call ->
-                collectTKeyFromCall(call)
-                // 同步检测翻译函数名：mustache 注入的 i18n.global.t / i18n.t
-                // 不在主 PSI 树中，需在此补充检测
-                detectTFunctionName(call)
-            },
-            onRawText = { text -> collectTKeysFromRawText(text) },
-        )
-
-        // script / JS / TS 中的 $t() 调用
-        calls.forEach { call -> collectTKeyFromCall(call) }
+        // 现有 $t() 调用 key 收集 + tFunctionName 检测收敛至 Analyzer 层（§21.4 第 3 步）。
+        analyzer.collectExistingTKeys(psiFile)
     }
-
-    /**
-     * 从原始文本中提取 $t(`文本`)、$t("文本")、$t('文本')、i18n.global.t(`文本`) 等调用，
-     * 用于 Vue 模板中 backtick 等无法被 JS 注入解析的情况。
-     */
-    private fun collectTKeysFromRawText(text: String) {
-        // 匹配 $t / $tc / i18n.global.t / i18n.global.tc / i18n.t / i18n.tc 调用
-        // 使用反向引用确保引号配对（如开闭都是反引号）
-        T_CALL_PATTERN.findAll(text).forEach { match ->
-            val content = match.groupValues[2]
-            // 现有调用的 key 是用户已写定的资源键（可含 `.` 嵌套路径，如 'nav.home'），
-            // 必须原样保留，不能走 generateKey 的保留字符消毒——否则 'nav.home' 会被拆成 'nav home'，
-            // 与真实资源键失配、漏判"已翻译"。（#37 消毒只作用于新提取生成的 site key，见 collectExtractedStrings）
-            val key = content.trim()
-            existingStrings.putIfAbsent(key, content.trim())
-        }
-    }
-
-    private fun collectTKeyFromCall(call: JSCallExpression) {
-        val firstArg = call.arguments.firstOrNull() ?: return
-        val text = extractStringArgText(firstArg) ?: return
-        // 现有调用的 key 是用户已写定的资源键（可含 `.` 嵌套路径，如 'nav.home' / 'dir.title'），
-        // 必须原样保留，不能走 generateKey 的保留字符消毒——否则 'nav.home' 会被拆成 'nav home'，
-        // 与真实资源键失配、漏判"已翻译"。（#37 消毒只作用于新提取生成的 site key，见 collectExtractedStrings）
-        val key = text.trim()
-
-        // 【新判定模型】三态：只有「已证明」是翻译调用（来源 = 框架 import / hook 或工厂产物 / 插件 $t）
-        // 才把 key 计入 existingStrings；UNKNOWN（无法证明）不声称它是已翻译 key——名字不是语义证明。
-        // 通过目标架构模型 TranslationCall 消费判定结果（status 等价于 statusOf，见 TranslationAnalyzer.analyzeCall）。
-        val analyzed = com.pan.extractor.analyzer.TranslationAnalyzer.analyzeCall(call)
-        when (analyzed.status) {
-            com.pan.extractor.analyzer.TranslationCallStatus.TRANSLATION -> existingStrings.putIfAbsent(key, text.trim())
-            com.pan.extractor.analyzer.TranslationCallStatus.NON_TRANSLATION,
-            com.pan.extractor.analyzer.TranslationCallStatus.UNKNOWN,
-            -> { /* 交给提取 / 保守跳过 */ }
-        }
-    }
-
-    /**
-     * 检测翻译函数名并更新 [tFunctionName]。优先级（默认 \$t 不变的前提下）：i18n.global.t > i18n.t。
-     * 在主 PSI 树和 mustache 注入 PSI 中均需调用，以覆盖 Vue 模板内的调用。
-     *
-     * 【Bug 修复：needInject*GlobalDollarT 时绝不切长调用】
-     * 用户要求「全部统一用 \$t 减少复杂度」，所以一旦 collect() 预判命中
-     * needInjectGlobalDollarT / needInjectReactGlobalDollarT=true（即这个文件被判定为
-     * 「Vue 纯 TS 工具」或「React 纯 TS 工具」），即便该文件里有历史遗留的
-     * i18n.global.t / i18n.t 长调用，也不允许把 tFunctionName 从 \$t 改写成长调；
-     * 老调用只作"兼容保留"，**新提取一律写短 $t('xxx')**。
-     */
-    private fun detectTFunctionName(call: JSCallExpression) {
-        // 纯工具别名模式：锁死短调用名（Vue $t / React t / Solid $t），老长调用只兼容不影响新提取
-        if (needInjectGlobalDollarT || needInjectReactGlobalDollarT || needInjectSolidGlobalDollarT) {
-            tFunctionName = if (needInjectReactGlobalDollarT) "t" else "\$t"
-            return
-        }
-        // 委托策略探测已有长调用名
-        val detected = framework.detectExistingTFunctionName(call) ?: return
-        when (detected) {
-            "i18n.global.t" -> tFunctionName = "i18n.global.t"  // 与原代码一致：无条件切换
-            "i18n.t" -> {
-                if (tFunctionName != "\$t") return  // 与原代码 if (tFunctionName == "\$t") 等价
-                // 框架默认短调用名（React=t / Solid=t / Generic=$t / Vue=$t）：
-                // 命中 i18n.t 长调用时，新提取用框架默认短名（与各策略 tFunctionName 一致）。
-                // 原硬编码 `framework is ReactI18nextStrategy` 改为读 framework.tFunctionName，
-                // 这样 SolidI18nStrategy（tFunctionName="t"）也走短 t 分支，无需新增 is 判定。
-                val defaultShort = framework.tFunctionName
-                if (defaultShort == "t") {
-                    // React / Solid 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
-                    tFunctionName = "t"
-                } else if (reactFallsBackToGetI18n()) {
-                    // React 场景且 i18n.t 语义 + locale 不可用 → 回退 getI18n 的 t 别名
-                    reactI18nTFallbackToDollarT = true
-                    tFunctionName = "t"
-                } else {
-                    tFunctionName = "i18n.t"
-                }
-            }
-        }
-    }
-
-    private fun extractStringArgText(expr: PsiElement): String? =
-        I18nPsiTools.extractStringArgText(expr)
 
     /**
      * 【中央调度入口 · Phase B：应用】执行 Rewriter/Injector 段，改写源码 + 注入 import/hook。
@@ -775,51 +468,6 @@ class I18nProcessor @JvmOverloads constructor(
     fun getCharactersText(textNode: XmlElement): List<XmlToken> =
         I18nPsiTools.getCharactersText(textNode)
 
-    // Template 文本节点
-    // ───────────────────────────────────────────────
-    /**
-     * 处理一段（可能由多个仅被空白分隔的 XmlText 节点组成的）纯文本。
-     * JSX 会把 "Hello world" 解析成 "Hello"、"world" 两个相邻 XmlText 节点，
-     * 此处把它们合并成一个整体来判定目标语言并生成单一 key，再整体替换。
-     */
-    private fun collectTemplateTextChange(nodes: List<XmlText>, changes: MutableList<CollectedChange>) {
-        val first = nodes.first()
-        // 合并纯文本：各节点去注释/空白后以单个空格连接
-        val pureText = nodes.joinToString(" ") { getPureXmlText(it) }.trim()
-        if (pureText.isEmpty()) {
-            return
-        }
-        // 过滤掉已在调用里的内容（避免重复提取）
-        if (pureText.contains("\$t(") || pureText.contains("i18n.global.t(") || pureText.contains("i18n.t(")) return
-
-        // 使用纯文本（过滤注释）检查是否包含目标语言，避免注释中的内容被误提取
-        if (!containsTargetLanguage(pureText, SiteKind.TEXT)) {
-            return
-        }
-
-        val isJSX = ProjectStructure.isJSX(first)
-        val key = collectExtractedStrings(pureText, first) ?: return
-
-        recordChange(
-            message = pureText,
-            replaceRoot = first,
-            anchor = first,
-            changes = changes
-        ) {
-            // 目标架构 Rewriter 层：VueRewriter 统一替换整段文本节点（行为与原闭包 1:1）
-            val newContent =
-                if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
-            com.pan.extractor.rewriter.VueRewriter.rewriteXmlTextNodes(nodes, newContent)
-        }
-    }
-
-    /**
-     * 收集从 [start] 开始、相邻且仅被空白分隔的文本节点序列。
-     * 用于把 JSX 中被空白拆开的英文短语（"Hello" / "world"）合并成一段。
-     */
-    private fun collectTextRun(start: XmlText): List<XmlText> =
-        I18nPsiTools.collectTextRun(start)
-
     /** 文本是否包含任一已启用目标语言的字符（由全局设置决定，默认仅中文）。 */
     fun containsTargetLanguage(text: String): Boolean = I18nPsiTools.containsTargetLanguage(text)
 
@@ -840,74 +488,6 @@ class I18nProcessor @JvmOverloads constructor(
     fun isBlock(originalText: String): Boolean = I18nPsiTools.isBlock(originalText)
 
     fun isVueDirective(targetStr: String): Boolean = I18nPsiTools.isVueDirective(targetStr)
-
-    /** 去掉字符串两侧成对的引号（' / " / `）。若不成对则原样返回。 */
-    private fun stripSurroundingQuotes(s: String): String = I18nPsiTools.stripSurroundingQuotes(s)
-
-
-    // 属性值（重点处理 <slot name="中文"> → :name）
-    // ───────────────────────────────────────────────
-    private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<CollectedChange>) {
-        val originalText = attrValue.value.trim();
-        //println("jsx${ProjectStructure.isJSX(attrValue)}")
-        //println("XmlAttributeValue-${originalText}-${attrValue.text}")
-        val isJSX = ProjectStructure.isJSX(attrValue);
-        if (isJSX && isBlock(originalText)) {
-            return
-        }
-        if (originalText.isEmpty()) return
-        if (!containsTargetLanguage(originalText, SiteKind.ATTRIBUTE)) {
-            return
-        }
-        if (originalText.contains("\$t(") || originalText.contains("i18n.global.t(") || originalText.contains("i18n.t(")) {
-            return
-        }
-        if (isJSTemplateLiteral(originalText)) {
-            return;
-        }
-
-        val attr = attrValue.parent as? XmlAttribute ?: return
-
-        val isDirective = isVueDirective(attr.name);
-
-        var newText = originalText;
-
-        if (!(isDirective && !originalText.startsWith("\"")
-                    && !originalText.startsWith("'")
-                    && !originalText.startsWith("`"))
-        ) {
-            // 指令的字符串字面量值（如 :title="'中文'"）去掉内层引号后再提取
-            val literal = stripSurroundingQuotes(originalText)
-            val extracted = collectExtractedStrings(literal, attrValue)
-            if (extracted != null) {
-                // BUG #36：属性路径此前零转义裸拼，含撇号文案（It's ok / Don't）会生成 $t('It's ok')
-                // → 语法破坏。与 buildTFunctionExpr 保持一致：含换行走模板字符串/转义反引号，否则转义单引号。
-                val escaped = if (extracted.contains("\n")) {
-                    extracted.replace("`", "\\`")
-                } else {
-                    extracted.replace("'", "\\'")
-                }
-                newText = "${tFunctionName}('$escaped')"
-            }
-        }
-
-        if (newText == originalText) return
-
-        recordChange(
-            message = originalText,
-            replaceRoot = attrValue,
-            anchor = attrValue,
-            changes = changes
-        ) {
-            // 目标架构 Rewriter 层：VueRewriter 统一改写属性（行为与原闭包 1:1）
-            com.pan.extractor.rewriter.VueRewriter.rewriteAttribute(
-                attrValue = attrValue,
-                newText = newText,
-                isJSX = isJSX,
-                isDirective = isVueDirective(attr.name),
-            )
-        }
-    }
 
     override val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
