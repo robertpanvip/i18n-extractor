@@ -126,58 +126,30 @@ object MergeApplier {
         }
 
         // ③ 预构建骨架重写任务
+        //    计划由 Planner 层产出（ExtractionPlanner.buildRewritePlans）—— 差分占位表达式已按
+        //    每个 site 的 Vue/React 形态渲染好；此处把计划解析为「标签 → 待执行重写」的映射。
         indicator?.text = "生成骨架重写任务列表（公共前后缀/数字抽取）"
         val finalExtracted: MutableMap<String, String> = LinkedHashMap(extracted)
         val rewriteTasks = mutableListOf<Pair<String, () -> Unit>>()
 
-        for (g in mergePlan.selectedAffix) {
-            if (g.isExactDuplicate) continue
-            for (v in g.variants) for (ref in v.sites) {
-                val proc = processors[ref.processorIndex]
-                val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
-                val root = site.replaceRootPointer?.element ?: continue
-                if (!root.isValid) continue
-                val diffExpr = if (Util.containsTargetLanguage(v.diff)) {
-                    val diffKey = v.diff.trim()
-                    finalExtracted.putIfAbsent(diffKey, v.diff)
-                    proc.buildTExprForRawText(v.diff, "{}", site.isVue, site.isReact)
-                } else {
-                    renderLiteralValue(v.diff)
-                }
-                val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
-                rewriteTasks += label to {
-                    rewriteSiteToSkeleton(
-                        rootPsi = root,
-                        site = site,
-                        skeletonValue = g.skeleton,
-                        skeletonKey = g.skeletonKey.trim().ifBlank { g.skeleton },
-                        paramPairs = listOf("N0" to diffExpr),
-                        proc = proc,
-                        finalExtracted = finalExtracted,
-                    )
-                }
-            }
-        }
-        for (g in mergePlan.selectedDigit) {
-            for (ps in g.perSites) {
-                val ref = ps.site
-                val proc = processors[ref.processorIndex]
-                val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
-                val root = site.replaceRootPointer?.element ?: continue
-                if (!root.isValid) continue
-                val digitText = renderDigitLiteral(ps.digitValues.firstOrNull() ?: "0")
-                val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
-                rewriteTasks += label to {
-                    rewriteSiteToSkeleton(
-                        rootPsi = root,
-                        site = site,
-                        skeletonValue = g.skeleton,
-                        skeletonKey = g.skeletonKey.trim().ifBlank { g.skeleton },
-                        paramPairs = listOf("N0" to digitText),
-                        proc = proc,
-                        finalExtracted = finalExtracted,
-                    )
-                }
+        val skeletonPlans = com.pan.extractor.planner.ExtractionPlanner
+            .buildRewritePlans(mergePlan, processors, finalExtracted)
+        for (plan in skeletonPlans) {
+            val proc = processors[plan.processorIndex]
+            val site = proc.collectedSites.firstOrNull { it.id == plan.siteId } ?: continue
+            val root = site.replaceRootPointer?.element ?: continue
+            if (!root.isValid) continue
+            val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
+            rewriteTasks += label to {
+                rewriteSiteToSkeleton(
+                    rootPsi = root,
+                    site = site,
+                    skeletonValue = plan.skeleton.orEmpty(),
+                    skeletonKey = plan.skeletonKey.orEmpty().ifBlank { plan.skeleton.orEmpty() },
+                    paramPairs = plan.params,
+                    proc = proc,
+                    finalExtracted = finalExtracted,
+                )
             }
         }
 

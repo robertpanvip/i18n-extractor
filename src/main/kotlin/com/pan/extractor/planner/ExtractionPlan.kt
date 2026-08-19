@@ -31,10 +31,14 @@ data class ExtractionPlan(
 data class RewritePlan(
     /** 目标文件内的 site 标识。 */
     val siteId: String,
-    /** 替换生成的调用表达式（如 `$t('key')`）。 */
-    val newExpression: String,
-    /** 若为骨架合并：替换为 `$t('骨架{N0}', { N0: diff })`。 */
+    /** 目标处理器下标（processors 列表中的位置）。 */
+    val processorIndex: Int,
+    /** 替换生成的调用表达式（如 `$t('key')`）。重写器执行时填充。 */
+    val newExpression: String = "",
+    /** 若为骨架合并：替换为 `$t('骨架{N0}', { N0: diff })`。原骨架文本（含 {N0} 占位）。 */
     val skeleton: String? = null,
+    /** 重新生成资源 key 时使用的骨架 key（G：与 [skeleton] 同含 {N0} → {{0}} 变换）。 */
+    val skeletonKey: String? = null,
     /** 差异段表达式列表（占位符 N0/N1… → 表达式文本）。 */
     val params: List<Pair<String, String>> = emptyList(),
 )
