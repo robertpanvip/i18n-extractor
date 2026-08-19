@@ -220,12 +220,12 @@ apply
 
 ## TODO
 
-- [ ] P0：建立 `ExtractionSite` / `RewritePlan` / `ImportPlan` / `ResourcePlan`
-- [ ] P0：建立统一 `ExtractionPlan`
-- [ ] P0：Apply 前执行完整 validation
-- [ ] P0：确保所有 change 都可以应用后再开始修改
-- [ ] P1：让分析阶段尽量 stateless
-- [ ] P1：逐步减少 Processor mutable state
+- [x] P0：建立 `ExtractionSite` / `RewritePlan` / `ImportPlan` / `ResourcePlan` —— 见 `model/Model.kt`（ExtractionSite / TranslationCall）与 `planner/ExtractionPlan.kt`（ExtractionPlan / RewritePlan / ImportPlan / ResourcePlan / HookTarget / HookInjectPlan）
+- [x] P0：建立统一 `ExtractionPlan` —— `planner/ExtractionPlan.kt` 中 `data class ExtractionPlan`，由 MergeApplier 直接消费
+- [x] P0：Apply 前执行完整 validation —— `validator/ChangeValidator.validateAllModifiableSites` 在 `MergeApplier.apply` 首行调用
+- [x] P0：确保所有 change 都可以应用后再开始修改 —— 校验失败零写入（`MergeApplierTest.testApplyThrowsBeforeAnyWriteWhenSiteInvalid`）
+- [x] P1：让分析阶段尽量 stateless —— 收集期状态收敛于 `CollectedPlan`，分析阶段保持只读、在 Write Action 之外
+- [x] P1：逐步减少 Processor mutable state —— `I18nProcessor` 瘦身为薄 Orchestrator（§21.5）
 
 ---
 
@@ -371,11 +371,11 @@ Injected PSI 重建
 - [x] sibling pointer 基础测试
 - [x] nested pointer 基础测试
 - [x] Undo / Redo 基础测试
-- [ ] P0：pointer 第一次 rewrite 后仍有效
-- [ ] P0：多个 sibling pointer 连续 rewrite
-- [ ] P0：nested pointer 连续 rewrite
-- [ ] P0：injected PSI pointer 生命周期
-- [ ] P0：Vue rewrite → reparse → 再次查找 PSI → 再次 rewrite
+- [x] P0：pointer 第一次 rewrite 后仍有效 —— `VueLifecycleTest`（write → reparse → 二次 collect 稳定）
+- [x] P0：多个 sibling pointer 连续 rewrite —— `VueLifecycleTest.testVueMultipleSiblingSitesRewriteStable`
+- [x] P0：nested pointer 连续 rewrite —— `VueLifecycleTest.testVueMustacheStringRewriteThenReparseStable` / `testVueNestedTernary`
+- [x] P0：injected PSI pointer 生命周期 —— Vue 注入表达式 rewrite 后 reparse 再次定位（`testVueTernaryRewriteThenReparseThenRecognizeAsTranslated`）
+- [x] P0：Vue rewrite → reparse → 再次查找 PSI → 再次 rewrite —— `VueLifecycleTest` 三元/兄弟/嵌套生命周期用例
 - [ ] P1：删除节点后的 pointer 行为
 - [ ] P1：文件 reparse 后 pointer 行为
 - [ ] P1：多文件同时 rewrite
@@ -424,9 +424,9 @@ Reparse
 
 ## TODO
 
-- [ ] P0：rewrite → reparse → rewrite
-- [ ] P0：nested injected expression
-- [ ] P0：多个 template site 连续 rewrite
+- [x] P0：rewrite → reparse → rewrite —— `VueLifecycleTest` 覆盖
+- [x] P0：nested injected expression —— `VueLifecycleTest.testVueMustacheStringRewriteThenReparseStable`（三目内层多字符串）
+- [x] P0：多个 template site 连续 rewrite —— `VueLifecycleTest.testVueMultipleSiblingSitesRewriteStable`
 - [ ] P1：template literal + interpolation 混合场景
 - [ ] P1：directive + interpolation 混合场景
 - [ ] P1：slot / component prop 混合场景
@@ -512,12 +512,12 @@ ImportManager 负责最终执行。
 ## TODO
 
 - [ ] P1：ImportInjector → ImportManager
-- [ ] P1：ImportPlan
+- [x] P1：ImportPlan —— `planner/ExtractionPlan.kt` 中 `data class ImportPlan`（imports / aliases / hooks / frameworkId / injectIntoSfcScript / rewriteI18nTCallsToT）
 - [ ] P1：parameter collision
 - [ ] P1：re-export / barrel import
 - [ ] P1：namespace import
 - [ ] P1：跨文件 symbol collision
-- [ ] P1：保持原有 import 语义不变
+- [x] P1：保持原有 import 语义不变 —— `I18nImportInjector` / `ImportPlanner` 去重与别名改写测试（`I18nImportRewriteComboTest` / `MergeApplierTest`）
 
 ---
 
@@ -563,8 +563,8 @@ useTranslation
 
 ## TODO
 
-- [ ] P1：ResourcePlan
-- [ ] P1：code + resource simultaneous update
+- [x] P1：ResourcePlan —— `planner/ExtractionPlan.kt` 中 `data class ResourcePlan`（targetPath / entries / dropKeys / format）
+- [x] P1：code + resource simultaneous update —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`（代码+import+资源同组）
 - [ ] P1：资源写入失败恢复
 - [ ] P2：抽象 JSON / YAML / TS resource backend
 
@@ -644,9 +644,9 @@ After
 - [x] 单文件 Extract → Undo → Redo
 - [x] 多文件 Extract → Undo → Redo
 - [x] 连续两次 Extract → Undo → Redo
-- [ ] P0：import 修改 → Undo → Redo
-- [ ] P0：JSON 修改 → Undo → Redo
-- [ ] P0：code + import + JSON 同时修改 → Undo → Redo
+- [x] P0：import 修改 → Undo → Redo —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`
+- [x] P0：JSON 修改 → Undo → Redo —— 同上（资源写回纳入同一 undo 组）
+- [x] P0：code + import + JSON 同时修改 → Undo → Redo —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`
 - [ ] P1：Vue injected PSI → Undo → Redo
 - [ ] P1：真实 Editor lifecycle
 - [ ] P1：command boundary regression
@@ -927,19 +927,19 @@ Redo
 
 ## P0
 
-- [ ] 建立 `ExtractionSite / RewritePlan / ImportPlan / ResourcePlan`
-- [ ] 建立 `ExtractionPlan`
-- [ ] Scanner / Analyzer / Planner 渐进式迁移
-- [ ] Apply 前完整 validation
-- [ ] 多文件修改原子性
-- [ ] Vue injected PSI rewrite → reparse → rewrite
+- [x] 建立 `ExtractionSite / RewritePlan / ImportPlan / ResourcePlan`
+- [x] 建立 `ExtractionPlan`
+- [x] Scanner / Analyzer / Planner 渐进式迁移
+- [x] Apply 前完整 validation
+- [x] 多文件修改原子性
+- [x] Vue injected PSI rewrite → reparse → rewrite
 - [ ] Translation Call semantic analysis 持续完善
-- [ ] code + import + resource 完整 Undo / Redo
+- [x] code + import + resource 完整 Undo / Redo
 
 ## P1
 
 - [ ] ImportManager
-- [ ] ResourcePlan
+- [x] ResourcePlan
 - [ ] ResourceWriter 与 Framework 解耦
 - [ ] 跨文件 symbol / i18n instance resolve
 - [ ] re-export / namespace import
