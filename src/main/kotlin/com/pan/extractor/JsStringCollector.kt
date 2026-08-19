@@ -28,7 +28,7 @@ import com.intellij.psi.xml.XmlText
  * 中文并生成 $t(...) 替换表达式。持有 I18nProcessor 引用以访问其状态（changes/pendingChanges、
  * extractedStrings、tFunctionName、isVueFile、templateVarRegex、project 等），保证行为不变。
  */
-class JsStringCollector(private val processor: I18nProcessor) {
+class JsStringCollector(private val processor: I18nProcessorContract) {
 
     private val templateVarRegex = processor.templateVarRegex
 

@@ -16,7 +16,7 @@ import com.intellij.psi.util.PsiTreeUtil
  * 从 [I18nProcessor] 拆分出的「翻译调用 import / i18n 实例注入」方法群。
  * 持有 [I18nProcessor] 引用以访问其内部状态（工厂、辅助方法、脚本标签定位等）。
  */
-class I18nImportInjector(private val processor: I18nProcessor) {
+class I18nImportInjector(private val processor: I18nProcessorContract) {
 
     // ───────────────────────────────────────────────
     // Vue import 去重 / 解构去重 工具函数（问题 4 修复）
@@ -62,7 +62,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
 
     fun ensureVueI18nImported(psiFile: PsiElement) {
         val scriptTag = processor.getScriptTag() ?: run {
-            val script = processor.factory.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
+            val script = processor.createHTMLTagFromText("<script setup lang=\"ts\">\n\n</script>")
             psiFile.add(script);
             processor.getScriptTag()
         } ?: return;

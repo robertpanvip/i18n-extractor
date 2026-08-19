@@ -34,7 +34,7 @@ import kotlin.collections.forEach
 import kotlin.text.replace
 
 class I18nProcessor @JvmOverloads constructor(
-    internal val project: Project,
+    override val project: Project,
     private var psiFile: PsiElement,
     /**
      * 单文件流水线调度器（DI 注入，§21.4 第 2 步）。
@@ -42,7 +42,7 @@ class I18nProcessor @JvmOverloads constructor(
      */
     private val orchestrator: com.pan.extractor.orchestrator.I18nFileOrchestrator =
         com.pan.extractor.orchestrator.I18nFileOrchestrator.Default,
-) {
+) : I18nProcessorContract {
     /** 编排访问器：把私有文件根暴露给 [com.pan.extractor.orchestrator.I18nFileOrchestrator]。 */
     internal val rootElement: PsiElement get() = psiFile
     /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。
@@ -96,7 +96,7 @@ class I18nProcessor @JvmOverloads constructor(
     private fun nextSiteId() = "S${++siteCounter}"
 
     /** 新提取的 key -> 原文本（见 [CollectedPlan.extractedStrings]）。 */
-    val extractedStrings: MutableMap<String, String> get() = collectedPlan.extractedStrings
+    override val extractedStrings: MutableMap<String, String> get() = collectedPlan.extractedStrings
 
     /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换，见 [CollectedPlan.existingStrings]）。 */
     val existingStrings: MutableMap<String, String> get() = collectedPlan.existingStrings
@@ -110,7 +110,7 @@ class I18nProcessor @JvmOverloads constructor(
     internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
 
     /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t（代理到 [collectedPlan]）。 */
-    internal var tFunctionName: String
+    override var tFunctionName: String
         get() = collectedPlan.tFunctionName
         set(value) { collectedPlan.tFunctionName = value }
 
@@ -230,7 +230,7 @@ class I18nProcessor @JvmOverloads constructor(
     fun rm(element: PsiElement): String = I18nPsiTools.rm(element)
 
     /** 统一登记 site + 包装 change，返回新的 change 列表条目 */
-    internal fun recordChange(
+    override fun recordChange(
         message: String,
         replaceRoot: PsiElement,
         anchor: PsiElement,
@@ -579,7 +579,7 @@ class I18nProcessor @JvmOverloads constructor(
         )
     }
 
-    fun getScriptTag(): XmlTag? {
+    override fun getScriptTag(): XmlTag? {
         return PsiTreeUtil.findChildrenOfType(psiFile, XmlTag::class.java)
             .firstOrNull { it.name == "script" }
     }
@@ -822,17 +822,17 @@ class I18nProcessor @JvmOverloads constructor(
     fun containsTargetLanguage(text: String): Boolean = I18nPsiTools.containsTargetLanguage(text)
 
     /** 按站点上下文（Approach A）判定文本是否命中任一已启用目标语言。 */
-    fun containsTargetLanguage(text: String, site: SiteKind): Boolean = I18nPsiTools.containsTargetLanguage(text, site)
+    override fun containsTargetLanguage(text: String, site: SiteKind): Boolean = I18nPsiTools.containsTargetLanguage(text, site)
 
 
-    fun isJSTemplateLiteral(text: String): Boolean = I18nPsiTools.isJSTemplateLiteral(text)
+    override fun isJSTemplateLiteral(text: String): Boolean = I18nPsiTools.isJSTemplateLiteral(text)
 
     /**
      * 如果内容是纯字符串字面量（无插值的反引号、单引号、双引号字符串），
      * 返回去掉外层引号后的内容；否则返回 null。
      * 例如：`测试` -> "测试"，'hello' -> "hello"，"world" -> "world"
      */
-    fun extractPureStringContent(text: String): String? =
+    override fun extractPureStringContent(text: String): String? =
         I18nPsiTools.extractPureStringContent(text)
 
     fun isBlock(originalText: String): Boolean = I18nPsiTools.isBlock(originalText)
@@ -907,7 +907,7 @@ class I18nProcessor @JvmOverloads constructor(
         }
     }
 
-    internal val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
+    override val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
     /**
      * Vue-i18n 不支持数字占位符 `$t('默认模型配置{0}子', { '0': "123" })` 这种
@@ -951,7 +951,7 @@ class I18nProcessor @JvmOverloads constructor(
     fun buildNestedTExprFromText(raw: String, ele: PsiElement): String =
         jsCollector.buildNestedTExprFromText(raw, ele)
 
-    fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
+    override fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
         jsCollector.createStringExpressionNode(text, context)
 
     /**
@@ -959,8 +959,11 @@ class I18nProcessor @JvmOverloads constructor(
      * 相比直接操作 AST 节点，这种方式创建的语句结构完整，
      * 不会导致 Document is locked 异常。
      */
-    internal fun createJSStatementFromText(text: String, context: PsiElement): PsiElement =
+    override fun createJSStatementFromText(text: String, context: PsiElement): PsiElement =
         jsCollector.createJSStatementFromText(text, context)
+
+    override fun createHTMLTagFromText(text: String): PsiElement =
+        factory.createHTMLTagFromText(text)
 
     fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<CollectedChange>) =
         jsCollector.collectJSStringTemplateFromExpression(stringExpr, changes)
