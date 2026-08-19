@@ -511,7 +511,7 @@ ImportManager 负责最终执行。
 
 ## TODO
 
-- [ ] P1：ImportInjector → ImportManager
+- [x] P1：ImportInjector → ImportManager —— `ImportManager.kt`（由 `I18nImportInjector` 重命名），持有 `I18nProcessorContract`，`InjectionDecision` 收敛；消费方（I18nProcessor / I18nAnalyzer / ImportPlanner / SourceRewriter / I18nFileOrchestrator）引用已更新，回归测试（I18nImportInjectorMore/Harden/ImportRewriteCombo）全绿
 - [x] P1：ImportPlan —— `planner/ExtractionPlan.kt` 中 `data class ImportPlan`（imports / aliases / hooks / frameworkId / injectIntoSfcScript / rewriteI18nTCallsToT）
 - [ ] P1：parameter collision
 - [x] P1：re-export / barrel import —— `SymbolSemanticMatrixTest`（barrel）+ `I18nImportRewriteComboTest`（re-export 形态）
@@ -566,6 +566,7 @@ useTranslation
 - [x] P1：ResourcePlan —— `planner/ExtractionPlan.kt` 中 `data class ResourcePlan`（targetPath / entries / dropKeys / format）
 - [x] P1：code + resource simultaneous update —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`（代码+import+资源同组）
 - [x] P1：资源写入失败恢复 —— 低层写失败返回 false（`UtilWriteBackEntryFileTest.testWriteVirtualFileTextReturnsFalseOnWriteFailure`）；多文件合并零部分写入（`MergeApplierTest` 验证前置 + 单 command 原子回滚）
+- [x] P1：ResourceWriter 与 Framework 解耦 —— resource 包新增 `ResourceMerge.kt`（扁平→嵌套合并原语，内迁自 `TsFileEditor`）；`ResourceApplier` 直连 `JsonWriter` / `TsResourceWriter`，不再经代码编辑器门面派发；resource 包不依赖框架 / PSI / UI（§12）
 - [ ] P2：抽象 JSON / YAML / TS resource backend
 
 ---
@@ -938,9 +939,9 @@ Redo
 
 ## P1
 
-- [ ] ImportManager
+- [x] ImportManager
 - [x] ResourcePlan
-- [ ] ResourceWriter 与 Framework 解耦
+- [x] ResourceWriter 与 Framework 解耦
 - [ ] 跨文件 symbol / i18n instance resolve
 - [ ] re-export / namespace import
 - [ ] shared package framework 行为明确化
