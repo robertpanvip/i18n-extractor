@@ -132,7 +132,7 @@ object MergeApplier {
             for (v in g.variants) for (ref in v.sites) {
                 val proc = processors[ref.processorIndex]
                 val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
-                val root = site.replaceRootPointer.element ?: continue
+                val root = site.replaceRootPointer?.element ?: continue
                 if (!root.isValid) continue
                 val diffExpr = if (Util.containsTargetLanguage(v.diff)) {
                     val diffKey = v.diff.trim()
@@ -160,7 +160,7 @@ object MergeApplier {
                 val ref = ps.site
                 val proc = processors[ref.processorIndex]
                 val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
-                val root = site.replaceRootPointer.element ?: continue
+                val root = site.replaceRootPointer?.element ?: continue
                 if (!root.isValid) continue
                 val digitText = renderDigitLiteral(ps.digitValues.firstOrNull() ?: "0")
                 val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
@@ -248,7 +248,7 @@ object MergeApplier {
     /** 把某个 site 重写为 \$t('骨架{N0}', { N0: <diff> }) 并回填骨架 key 到翻译资源 */
     internal fun rewriteSiteToSkeleton(
         rootPsi: PsiElement,
-        site: I18nProcessor.CollectedSite,
+        site: com.pan.extractor.model.ExtractionSite,
         skeletonValue: String,
         skeletonKey: String,
         paramPairs: List<Pair<String, String>>,

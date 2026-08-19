@@ -79,8 +79,8 @@ data class ResourcePlan(
  */
 class CollectedPlan {
     // ── 收集期产物 ────────────────────────────────────────────────
-    /** 一次提取命中站点列表。 */
-    val collectedSites = mutableListOf<com.pan.extractor.I18nProcessor.CollectedSite>()
+    /** 一次提取命中站点列表（领域模型 site，见 [com.pan.extractor.model.ExtractionSite]）。 */
+    val collectedSites = mutableListOf<com.pan.extractor.model.ExtractionSite>()
 
     /** 被骨架合并承载、应跳过普通单句替换的 siteId 集合。 */
     val blockedSiteIds = mutableSetOf<String>()

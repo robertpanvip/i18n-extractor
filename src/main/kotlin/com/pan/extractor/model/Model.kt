@@ -46,7 +46,19 @@ data class ExtractionSite(
     val isVue: Boolean = false,
     val isReact: Boolean = false,
     val form: com.pan.extractor.SiteForm? = null,
-)
+) {
+    /** 兼容访问：替换目标（旧 CollectedSite.replaceRootPointer 的同义名）。 */
+    val replaceRootPointer: SmartPsiElementPointer<PsiElement>?
+        get() = replaceRoot
+
+    /** 站点所在虚拟文件（等效旧 CollectedSite.containingFile）。 */
+    val containingFile: com.intellij.openapi.vfs.VirtualFile?
+        get() = location?.containingFile
+
+    /** 站点内容起始行（1 基），用于 UI/摘要展示（等效旧 CollectedSite.startLine）。 */
+    val startLine: Int
+        get() = location?.startLine ?: 1
+}
 
 /**
  * 一个翻译调用的语义判定结果（Analyzer 层产物）。

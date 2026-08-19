@@ -10,7 +10,7 @@ import com.pan.extractor.SiteRef
  * ChangeValidator —— 应用前完整性校验（目标架构 Validator 层）。
  *
  * 职责：在**写入任何文件之前**确认所有将被改写 / 将作为骨架重写目标的 site 所指向的
- * [I18nProcessor.CollectedSite.replaceRootPointer] 仍然有效。任何被选中的合并计划引用的
+ * [com.pan.extractor.model.ExtractionSite.replaceRoot] 仍然有效。任何被选中的合并计划引用的
  * site 失效（文件已被外部修改 / PSI 失效）时，抛出 [IllegalStateException]，
  * 调用方可在写入任何文件之前中止整批操作，避免留下"部分文件已改、其余未改"的半完成状态。
  *
@@ -41,7 +41,7 @@ object ChangeValidator {
                 invalid += "${ref.originalMessage}@${ref.containingFile?.name}（site ${ref.siteId} 缺失）"
                 return
             }
-            val el = site.replaceRootPointer.element
+            val el = site.replaceRootPointer?.element
             if (el == null || !el.isValid) {
                 invalid += "${ref.originalMessage}@${ref.containingFile?.name}（替换目标已失效）"
             }

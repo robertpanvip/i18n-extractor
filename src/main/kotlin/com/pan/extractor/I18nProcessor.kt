@@ -47,27 +47,13 @@ class I18nProcessor(
     // ─────────────────────────────────────────────────────────────
     // 结构化 site（供跨文件公共前后缀合并 + 差异段嵌套 $t 重写使用）
     // ─────────────────────────────────────────────────────────────
-    /** 一次提取命中：要被替换为 $t(key) 的中文 site */
-    data class CollectedSite(
-        val id: String,
-        val originalMessage: String,
-        val replaceRootPointer: SmartPsiElementPointer<PsiElement>,
-        val containingFile: VirtualFile?,
-        val isVue: Boolean,
-        val isReact: Boolean,
-    ) {
-        /** 给 Dialog/摘要展示用（只读，失败返回 1）。ReadAction 内调用更安全。 */
-        val startLine: Int
-            get() = runCatching {
-                val e = replaceRootPointer.element ?: return@runCatching 1
-                val file = containingFile ?: return@runCatching 1
-                val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
-                    .getDocument(file) ?: return@runCatching 1
-                val range = e.textRange ?: return@runCatching 1
-                if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
-                doc.getLineNumber(range.startOffset) + 1
-            }.getOrDefault(1)
-    }
+    /**
+     * 一次提取命中：要被替换为 $t(key) 的中文 site。
+     * 目标架构 Phase 1：以领域模型 [com.pan.extractor.model.ExtractionSite] 表示，
+     * 并代理到 [CollectedPlan.collectedSites]，消除原内嵌 CollectedSite 的重复建模。
+     */
+    val collectedSites: MutableList<com.pan.extractor.model.ExtractionSite>
+        get() = collectedPlan.collectedSites
 
     /** 原文包装：带 siteId，重写时可被 blockedSiteIds 跳过 */
     class CollectedChange(val siteId: String, private val runnable: () -> Unit) {
@@ -92,9 +78,6 @@ class I18nProcessor(
      * 下方公开访问器都代理到此容器，外部消费方与测试零改动。
      */
     private var collectedPlan = com.pan.extractor.planner.CollectedPlan()
-
-    /** 一次提取命中列表（见 [CollectedPlan.collectedSites]）。 */
-    val collectedSites: MutableList<CollectedSite> get() = collectedPlan.collectedSites
 
     /** 被骨架合并承载、应跳过普通替换的 siteId（见 [CollectedPlan.blockedSiteIds]）。 */
     val blockedSiteIds: MutableSet<String> get() = collectedPlan.blockedSiteIds
@@ -256,16 +239,38 @@ class I18nProcessor(
         val form = framework.getSiteForm(anchor)
         val isVue = form == SiteForm.VUE_BINDING || form == SiteForm.VUE_MUSTACHE
         val isReact = !isVue && (form == SiteForm.JSX_ATTRIBUTE || form == SiteForm.TEMPLATE_LITERAL)
-        collectedSites += CollectedSite(
+        val vf = f?.virtualFile
+        collectedSites += com.pan.extractor.model.ExtractionSite(
             id = id,
             originalMessage = message.trim(),
-            replaceRootPointer = ptr,
-            containingFile = f?.virtualFile,
+            replaceRoot = ptr,
+            location = com.pan.extractor.model.ExtractionSiteLocation(
+                containingFile = vf,
+                startLine = computeStartLine(ptr, vf),
+            ),
             isVue = isVue,
             isReact = isReact,
+            form = form,
         )
         changes += CollectedChange(id, replaceAction)
     }
+
+    /**
+     * 给 Dialog/摘要展示用的起始行（1 基）。只读、失败返回 1。
+     * 目标架构 Phase 1：该定位逻辑从原 CollectedSite.startLine 迁入，
+     * 在收集期一次性写入 ExtractionSite.location。
+     */
+    private fun computeStartLine(
+        pointer: SmartPsiElementPointer<PsiElement>,
+        file: com.intellij.openapi.vfs.VirtualFile?,
+    ): Int = runCatching {
+        val e = pointer.element ?: return@runCatching 1
+        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+            .getDocument(file ?: return@runCatching 1) ?: return@runCatching 1
+        val range = e.textRange ?: return@runCatching 1
+        if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
+        doc.getLineNumber(range.startOffset) + 1
+    }.getOrDefault(1)
 
     fun collectXmlText(element: PsiElement, changes: MutableList<CollectedChange>) {
         if (isComment(element)) {
