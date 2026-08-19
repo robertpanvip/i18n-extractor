@@ -981,3 +981,69 @@ Undo / Redo
 ```
 
 如果这一层完成，后续增加 Svelte、Angular、更多 React/Vue i18n 库，以及 JSON/YAML/TS resource backend，都会比继续向 `I18nProcessor` 增加条件分支容易得多。
+
+---
+
+# 21. 目标形态：I18nProcessor → 依赖注入的薄 Orchestrator
+
+## 21.1 愿景
+
+`I18nProcessor` 的最终形态应当是**通过构造注入各层、以单一 `extract(context)` 串起整条管道**的薄 Orchestrator，不再内联任何收集/注入/资源业务，也不再充当 `JsStringCollector` / `I18nImportInjector` 的共享状态宿主。
+
+```kotlin
+class I18nProcessor(
+    private val scanner: SourceScanner,
+    private val analyzer: I18nAnalyzer,
+    private val planner: ExtractionPlanner,
+    private val validator: ChangeValidator,
+    private val rewriter: SourceRewriter,
+    private val importManager: ImportManager,
+    private val resourceWriter: ResourceWriter,
+) {
+    fun extract(context: ExtractionContext) {
+        val candidates = scanner.scan(context)          // 只发现候选 PSI 节点
+        val analyzed  = analyzer.analyze(candidates, context) // 语义判断：是否提取/框架/t 调用/合法字符串
+        val plan      = planner.plan(analyzed, context) // 产出 ExtractionPlan/ImportPlan/ResourcePlan
+        validator.validate(plan)                        // 跨文件 radio 校验后才允许进入 Write Action
+        rewriter.apply(plan)
+        importManager.apply(plan)
+        resourceWriter.apply(plan)
+    }
+}
+```
+
+数据流与 §4 一致：`Scanner → Analyzer → Planner → Validate → Rewriter/ImportManager → ResourceWriter → Command → Undo/Redo`。
+
+## 21.2 分层接口契约
+
+| 组件 | 现状 | 目标接口 |
+|---|---|---|
+| `SourceScanner` | ✅ 已有 [scanner/SourceScanner.kt](../../src/main/kotlin/com/pan/extractor/scanner/SourceScanner.kt) | `scanner.scan(context): Collection<CandidateSite>` |
+| `I18nAnalyzer` | ⚠️ 分析散布在 `I18nProcessor` + `JsStringCollector` + 各 strategy 默认实现 | `analyzer.analyze(candidates, context): Collection<AnalyzedSite>` |
+| `ExtractionPlanner` | ✅`planner/ExtractionPlanner.kt`（已接入 MergeApplier） | `planner.plan(analyzed, context): ExtractionPlan` |
+| `ChangeValidator` | ✅ `validator/ChangeValidator.kt`（MergeApplier 已委托） | `validator.validate(plan)` |
+| `ImportManager` | ⚠️ 现在内嵌于 `I18nImportInjector`（依赖 processor 宿主） | `importManager.apply(plan)`（含重复检测/symbol collision/alias/注入） |
+| `SourceRewriter` | ✅ `rewriter/SourceRewriter.kt`（消费 `ImportPlan`） | `rewriter.apply(plan)` |
+| `ResourceWriter` | ⚠️ `resource/ResourceApplier.kt` 已实现，但由**跨文件层**驱动 | `resourceWriter.apply(plan)` |
+| `ExtractionContext` | ❌ 缺 | 一次提取的输入封装（`Project`、目标 `PsiFile`、已收集的跨文件 key、输出模式） |
+| 领域模型 | 部分（`ImportPlan` 等已建） | `CandidateSite / AnalyzedSite / ExtractionPlan / ImportPlan / ResourcePlan` |
+
+## 21.3 必须先拆的两个耦合点
+
+1. **宿主绑定（最大障碍）**：`JsStringCollector` / `I18nImportInjector` 都持有 `processor: I18nProcessor` 并回调其 `templateVarRegex / tFunctionName / extractedStrings / factory / getScriptTag / createStringExpressionNode / detectGlobalDollarT` 等。不把这些状态参数化到 `Analyzer` / `ImportManager`，`I18nProcessor` 瘦不下来。
+2. **resourceWriter 归属重叠**：目标 `extract()` 内含 `resourceWriter.apply(plan)`，但当前资源写回由跨文件层（[MergeApplier](../../src/main/kotlin/com/pan/extractor/MergeApplier.kt) / [I18nExtractionOrchestrator.apply](orchestrator/I18nExtractionOrchestrator.kt)）执行。需明确：入口文件 key 来自多 processor 合并后统一落盘，单文件 `extract()` 不应重复做 resource 写回；至少在合并语义下，resource 写回应仍属于跨文件层，`resourceWriter` 只在「单文件独立发布」场景由 `extract()` 直接调用。
+
+## 21.4 迁移路径（渐进、行为保持）
+
+1. **冻结接口**：补齐 `I18nAnalyzer`、`ImportManager`、`ResourceWriter`、`ExtractionContext` 与 `CandidateSite/AnalyzedSite` 的最小接口，不改现有调用。
+2. **DI 薄类 + 兼容壳**：构造注入 7 依赖，`I18nProcessor(project, psiFile)` 兼容构造保留（各依赖给默认实现），`collect()/run()/runWithUndo()` 保留为兼容入口，内部改走 `extract(context)` 中央调度。测试契约不变，行为不变。
+3. **拆宿主**：把 `JsStringCollector` 的字符串收集收敛进 `I18nAnalyzer`、`I18nImportInjector` 收敛进 `ImportManager`，二者改为接收 `ExtractionContext` / plan 而非整个 processor。
+4. **统一 Write Action**：确保 `validate → rewriter → importManager → resourceWriter` 全部落在同一个 `WriteCommandAction`，失败整体回滚。
+5. **收敛 resource**：按 21.3 明确单文件/跨文件两条 resource 职责边界后，把 `resourceWriter` 接入。
+
+## 21.5 判定完成的标准
+
+- [ ] `I18nProcessor` 不再持有收集业务/注入业务代码，仅剩注入依赖 + `extract(context)` 调度
+- [ ] `JsStringCollector` / `I18nImportInjector` 不再接收 `I18nProcessor` 整个对象
+- [ ] `extract()` 全部自动修改进入同一个 `WriteCommandAction`
+- [ ] 现有 `I18nProcessorTest / SolidI18nProcessorTest / I18nVueTemplatePsi2Test / I18nRegexFallbackBoundaryTest / I18nImportInjectorMoreTest` 全绿
