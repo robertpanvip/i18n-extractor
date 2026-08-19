@@ -316,10 +316,10 @@ TranslationCall
 
 - [ ] P0：继续完善 `t` / `$t` / `tc` / `$tc` 语义矩阵
 - [ ] P0：覆盖 `useTranslation()` / `useI18n()` 多种 destructuring 形式
-- [ ] P1：覆盖 re-export / barrel import
-- [ ] P1：覆盖 namespace import
+- [x] P1：覆盖 re-export / barrel import —— `SymbolSemanticMatrixTest`（barrel re-export t/tc）+ `I18nImportRewriteComboTest`（`export { i18n }` 花括号 re-export）
+- [x] P1：覆盖 namespace import —— `SymbolSemanticMatrixTest`（`import * as i18n`）+ `I18nImportInjectorHardenTest`（namespace 去重）+ `UtilSpreadRoutingTest`
 - [ ] P1：覆盖跨文件 i18n instance resolve
-- [ ] P1：覆盖更多 scope shadowing 场景
+- [x] P1：覆盖更多 scope shadowing 场景 —— `I18nRegexFallbackBoundaryTest`（`const t` / `let tc` 本地变量覆盖）+ `SymbolSemanticMatrixTest`（本地 shadow / 非 i18n import）
 
 ### 安全原则
 
@@ -514,8 +514,8 @@ ImportManager 负责最终执行。
 - [ ] P1：ImportInjector → ImportManager
 - [x] P1：ImportPlan —— `planner/ExtractionPlan.kt` 中 `data class ImportPlan`（imports / aliases / hooks / frameworkId / injectIntoSfcScript / rewriteI18nTCallsToT）
 - [ ] P1：parameter collision
-- [ ] P1：re-export / barrel import
-- [ ] P1：namespace import
+- [x] P1：re-export / barrel import —— `SymbolSemanticMatrixTest`（barrel）+ `I18nImportRewriteComboTest`（re-export 形态）
+- [x] P1：namespace import —— `SymbolSemanticMatrixTest` / `I18nImportInjectorHardenTest` / `UtilSpreadRoutingTest`
 - [ ] P1：跨文件 symbol collision
 - [x] P1：保持原有 import 语义不变 —— `I18nImportInjector` / `ImportPlanner` 去重与别名改写测试（`I18nImportRewriteComboTest` / `MergeApplierTest`）
 
@@ -565,7 +565,7 @@ useTranslation
 
 - [x] P1：ResourcePlan —— `planner/ExtractionPlan.kt` 中 `data class ResourcePlan`（targetPath / entries / dropKeys / format）
 - [x] P1：code + resource simultaneous update —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`（代码+import+资源同组）
-- [ ] P1：资源写入失败恢复
+- [x] P1：资源写入失败恢复 —— 低层写失败返回 false（`UtilWriteBackEntryFileTest.testWriteVirtualFileTextReturnsFalseOnWriteFailure`）；多文件合并零部分写入（`MergeApplierTest` 验证前置 + 单 command 原子回滚）
 - [ ] P2：抽象 JSON / YAML / TS resource backend
 
 ---
@@ -611,9 +611,9 @@ packages/
 - [x] nested package.json
 - [x] workspace package detection
 - [x] custom framework registration
-- [ ] P1：Generic fallback 独立测试
-- [ ] P1：shared package 明确行为
-- [ ] P1：package ownership regression test
+- [x] P1：Generic fallback 独立测试 —— `I18nFrameworkDetectionTest.testDetectGenericProject` / `testGenericIsRegistrationBasedFallback` / `testNoPackageJsonTsFileFallsBackToVue`
+- [x] P1：shared package 明确行为 —— `I18nFrameworkDetectionTest.testSharedPackageOwnPackageNoFrameworkStaysGeneric`（自有 package.json 无框架 → Generic，禁止 consumer 推断）
+- [x] P1：package ownership regression test —— `I18nFrameworkDetectionTest.testSharedPackageOwnPackageFrameworkOwnsIt` / `testSharedWithoutOwnPackageInheritsRoot`（归属 = 最近可解析 package.json；无自有才继承 root）
 
 ---
 

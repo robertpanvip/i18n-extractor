@@ -145,6 +145,38 @@ class I18nFrameworkDetectionTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // 3b. shared package / package ownership（§13：shared package 行为明确化）
+    // 行为契约：文件归属 = 其自身最近的可解析 package.json；只有当路径上根本不存在
+    // 更近的 package.json 时才继承 consumer / root 的依赖。
+    // ─────────────────────────────────────────────────────────────
+
+    fun testSharedPackageOwnPackageNoFrameworkStaysGeneric() {
+        // root 装 react，但 packages/shared 有自己的 package.json（仅 lodash，无框架）→
+        // shared 内文件判 Generic，绝不继承 root 的 react（consumers 推断被禁止）。
+        addPackageJson("package.json", """{ "react": "^18" }""")
+        addPackageJson("packages/shared/package.json", """{ "lodash": "^4" }""")
+        val fw = detectAt("packages/shared/util.ts", "export const shared = 1")
+        assertSame("shared 自有 package.json 无框架依赖应判 Generic", GenericStrategy, fw)
+    }
+
+    fun testSharedPackageOwnPackageFrameworkOwnsIt() {
+        // root 装 vue，但 packages/shared 的 package.json 声明了 react →
+        // shared 内文件由自身 package.json 定属 React（即便 root 是 Vue 项目）。
+        addPackageJson("package.json", """{ "vue": "^3" }""")
+        addPackageJson("packages/shared/package.json", """{ "react": "^18", "react-dom": "^18" }""")
+        val fw = detectAt("packages/shared/ui.tsx", "export function Shared() { return 'hi' }")
+        assertSame("shared 自有 package.json 声明 react 应判 React", ReactI18nextStrategy, fw)
+    }
+
+    fun testSharedWithoutOwnPackageInheritsRoot() {
+        // 关键回归：共享目录下若【不存在】自有 package.json，才允许向上继承 root 的依赖；
+        // 一旦存在自有 package.json（即使无框架），就由它定属、禁止 consumer 推断。
+        addPackageJson("package.json", """{ "react": "^18" }""")
+        val fw = detectAt("packages/shared/utils.ts", "export function util() { return 'x' }")
+        assertSame("shared 无自有 package.json 才允许继承 root，此处判 React", ReactI18nextStrategy, fw)
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // 5. detect 完整等价断言
     // ─────────────────────────────────────────────────────────────
 
