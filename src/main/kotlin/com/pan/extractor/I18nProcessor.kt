@@ -37,6 +37,8 @@ class I18nProcessor(
     internal val project: Project,
     private var psiFile: PsiElement,
 ) {
+    /** 编排访问器：把私有文件根暴露给 [com.pan.extractor.orchestrator.I18nFileOrchestrator]。 */
+    internal val rootElement: PsiElement get() = psiFile
     /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。
      *  BUG_ANALYSIS 3.4：去掉 [^
 "'] 中的 \n 排除，支持跨行调用如
@@ -136,10 +138,10 @@ class I18nProcessor(
      *       const t = getI18n().t;
      *   之后文件里所有替换都是短写法 t('xxx')，与组件/Hook 内部一致。
      */
-    private var needInjectGlobalDollarT: Boolean
+    internal var needInjectGlobalDollarT: Boolean
         get() = collectedPlan.needInjectGlobalDollarT
         set(value) { collectedPlan.needInjectGlobalDollarT = value }
-    private var needInjectReactGlobalDollarT: Boolean
+    internal var needInjectReactGlobalDollarT: Boolean
         get() = collectedPlan.needInjectReactGlobalDollarT
         set(value) { collectedPlan.needInjectReactGlobalDollarT = value }
 
@@ -150,7 +152,7 @@ class I18nProcessor(
      * 分支：注入 `import { createAppI18n } from '@solid-primitives/i18n'` + `const { t: $t } = createAppI18n()`。
      * 命中后 collect 阶段锁死 tFunctionName=$t，新提取写 `$t('xxx')`。
      */
-    private var needInjectSolidGlobalDollarT: Boolean
+    internal var needInjectSolidGlobalDollarT: Boolean
         get() = collectedPlan.needInjectSolidGlobalDollarT
         set(value) { collectedPlan.needInjectSolidGlobalDollarT = value }
 
@@ -160,7 +162,7 @@ class I18nProcessor(
      * 并把文件里已有的 i18n.t('...') 调用改写为 t('...')（否则 i18n 标识符会悬空）。
      * 命中后在 collect 阶段锁死 tFunctionName="t"。
      */
-    private var reactI18nTFallbackToDollarT: Boolean
+    internal var reactI18nTFallbackToDollarT: Boolean
         get() = collectedPlan.reactI18nTFallbackToDollarT
         set(value) { collectedPlan.reactI18nTFallbackToDollarT = value }
     private var reactFallbackChecked: Boolean
@@ -354,7 +356,7 @@ class I18nProcessor(
         collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
     }
 
-    fun collectFromPsi(psiFile: PsiElement): MutableList<CollectedChange> {
+    internal fun collectFromPsi(psiFile: PsiElement): MutableList<CollectedChange> {
         val changes = mutableListOf<CollectedChange>()
 
         // 目标架构 Scanner 层：遍历发现候选节点（迁移自本方法原 PsiRecursiveElementWalkingVisitor）。
@@ -406,7 +408,7 @@ class I18nProcessor(
      * 与 blockedSiteIds 判定错位。framework / fallback 缓存标志一并重置，避免沿用上一次
      * 检测的框架策略。
      */
-    private fun resetState() {
+    internal fun resetState() {
         // 收集期可变状态整体替换为零状态容器。所有收集期状态（siteCounter / collectedSites /
         // blockedSiteIds / extractedStrings / existingStrings / pendingChanges / tFunctionName /
         // framework / needInject* / react fallback 缓存 / framework）一次性重置，见 CollectedPlan。
@@ -417,47 +419,8 @@ class I18nProcessor(
     }
 
     fun collect(): MutableList<CollectedChange> {
-        resetState()
-        // Bug 2: 语言包/翻译资源文件（en-US.ts、i18n/zh-CN.js、messages.ja.ts、locales/xxx）
-        // 本身存储的就是翻译后的 key/value，应当跳过整个提取与注入流程。
-        val containingFile = psiFile.containingFile
-        if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
-            return pendingChanges
-        }
-
-        framework = I18nFrameworkRegistry.detect(psiFile.containingFile ?: psiFile)
-        tFunctionName = framework.tFunctionName
-
-        val f = containingFile ?: (psiFile as? PsiFile)
-        // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
-        if (f != null && framework is ReactI18nextStrategy && tFunctionName == "\$t") {
-            tFunctionName = "t"
-        }
-        if (f != null && framework.detectGlobalDollarTNeeded(f)) {
-            // React: 统一短 t（useTranslation / getI18n 的 t），新提取写 t('key')；
-            //        打 needInjectReactGlobalDollarT=true，由 ensureI18nInstanceImported
-            //        在文件顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t`。
-            // Vue:   保持默认 $t；打 needInjectGlobalDollarT=true，由 ensureI18nInstanceImported
-            //        在文件顶部注入 `import { i18n } from '@/locales/xxx'` + `const $t = i18n.global.t`。
-            // Solid: 与 Vue 一致用 $t；打 needInjectSolidGlobalDollarT=true，由 injectSolid
-            //        在文件顶部注入 `import { createAppI18n } from '@/i18n'` + `const { t: $t } = createAppI18n()`。
-            // Generic: detectGlobalDollarTNeeded 返回 false，不会进入此分支。
-            when (framework) {
-                is ReactI18nextStrategy -> needInjectReactGlobalDollarT = true
-                is SolidI18nStrategy -> {
-                    needInjectSolidGlobalDollarT = true
-                    tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
-                }
-                is VueI18nStrategy -> needInjectGlobalDollarT = true
-            }
-        }
-
-        collectExistingTKeys()
-        // collectExistingTKeys 可能会基于现有调用把 tFunctionName 改成 i18n.t（如文件
-        // 已经存在 i18n.t('xxx') 调用）——这是对的，不要覆盖回去。
-        val changes = collectFromPsi(psiFile)
-        pendingChanges = changes
-        return pendingChanges
+        // 单文件流水线的调度已收敛到 I18nFileOrchestrator；本入口仅供外部消费方直接调用。
+        return com.pan.extractor.orchestrator.I18nFileOrchestrator.collect(this)
     }
 
     /**
@@ -473,7 +436,7 @@ class I18nProcessor(
      * [I18nFramework.collectExistingTKeysFromTemplate]，由 [VueI18nStrategy] 重写。
      * 通用 JSCallExpression 顶层遍历（detectTFunctionName + collectTKeyFromCall）保留在此处。
      */
-    private fun collectExistingTKeys() {
+    internal fun collectExistingTKeys() {
         // 一次性收集所有 JSCallExpression，供 detectTFunctionName 和 collectTKeyFromCall 复用，
         // 避免对同一棵 PSI 树做两次 findChildrenOfType 顶层遍历（性能）。
         val calls = PsiTreeUtil.findChildrenOfType(psiFile, JSCallExpression::class.java)
@@ -582,27 +545,8 @@ class I18nProcessor(
         I18nPsiTools.extractStringArgText(expr)
 
     fun run() {
-        // Bug 2（双重保险）：翻译资源文件不做任何 import/hook 注入
-        val containingFile = psiFile.containingFile
-        if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
-
-        this.pendingChanges.forEach { if (it.siteId !in blockedSiteIds) it.run() }
-
-        // P2：注入分支按框架拆分到 I18nImportInjector，run() 只做编排。
-        injector.injectForFramework(
-            processor = this,
-            psiFile = psiFile,
-            framework = framework,
-            decision = I18nImportInjector.InjectionDecision(
-                needInjectGlobalDollarT = needInjectGlobalDollarT,
-                needInjectReactGlobalDollarT = needInjectReactGlobalDollarT,
-                needInjectSolidGlobalDollarT = needInjectSolidGlobalDollarT,
-                reactI18nTFallbackToDollarT = reactI18nTFallbackToDollarT,
-                tFunctionName = tFunctionName,
-                hasExtractedStrings = extractedStrings.isNotEmpty(),
-                hasExistingStrings = existingStrings.isNotEmpty(),
-            ),
-        )
+        // 改写 + 注入的调度已收敛到 I18nFileOrchestrator；本入口仅供外部消费方直接调用。
+        com.pan.extractor.orchestrator.I18nFileOrchestrator.run(this)
     }
 
     /** 处理整个 Vue/React 文件：包裹 Command + 写操作以支持 undo。 */
