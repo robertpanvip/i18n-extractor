@@ -545,4 +545,70 @@ class MergeApplierTest : BasePlatformTestCase() {
         assertTrue("一次 Undo 后 A 应整体回滚，实际:\n$textAUndo", textAUndo.contains("完成A") && !textAUndo.contains("完成{N0}"))
         assertTrue("一次 Undo 后 B 应整体回滚，实际:\n$textBUndo", textBUndo.contains("完成B") && !textBUndo.contains("完成{N0}"))
     }
+
+    // ─────────────────────────────────────────────────────────
+    // P0 §20：code + import + resource 完整 Undo / Redo
+    // 单 command 内同时改写代码（含 import 注入）并把翻译资源落盘到入口 zh.ts，
+    // 一次 Undo 应整体回滚（代码回原文、资源回空入口），一次 Redo 应整体恢复。
+    // ─────────────────────────────────────────────────────────
+    fun testSingleCommandCodeImportResourceUndoRedo() {
+        val resourcePath = "src/locales/zh.ts"
+        val beforeResource = "export default {}"
+        myFixture.addFileToProject(resourcePath, beforeResource)
+
+        val beforeCode = "<template><div><span>资源中文</span></div></template>"
+        val file = configureFile("src/ResUndo.vue", beforeCode)
+
+        val processors = listOf(I18nProcessor(project, file))
+        processors.forEach { it.collect() }
+        val extracted = LinkedHashMap<String, String>()
+        processors.forEach { extracted.putAll(it.extractedStrings) }
+        assertTrue("应提取到待资源化的中文，got: $extracted", extracted.containsValue("资源中文"))
+
+        val plan = ExtractedStringsDialog.MergePlan(emptyList(), emptyList())
+        val entryVf = myFixture.findFileInTempDir(resourcePath)
+        assertNotNull("资源入口文件应存在", entryVf)
+
+        // 单 command：代码改写 + import 注入 + 资源落盘，三者共享同一 undo 组
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            val finalRes = MergeApplier.apply(processors, extracted, plan)
+            val newResource = com.pan.extractor.TsFileEditor.regenerateTsFileWithNewJson(project, entryVf!!, finalRes)
+            assertNotNull("资源应能重新生成，finalRes=$finalRes", newResource)
+            entryVf.setBinaryContent(newResource!!.toByteArray())
+        }
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+
+        val codeAfter = file.text
+        assertTrue("代码应改写为 \$t 调用，实际:\n$codeAfter", codeAfter.contains("t("))
+        val resAfter = fileText(resourcePath)
+        assertTrue("资源应写入新文案，实际:\n$resAfter", resAfter.contains("资源中文"))
+        assertTrue("资源应保持 export default 入口形态，实际:\n$resAfter", resAfter.contains("export default"))
+
+        // Undo → 代码 + import + 资源全部回滚
+        com.intellij.openapi.command.CommandProcessor.getInstance().runUndoTransparentAction {
+            myFixture.performEditorAction(com.intellij.openapi.actionSystem.IdeActions.ACTION_UNDO)
+        }
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertEquals("Undo 后代码应回到原文，实际:\n${file.text}", beforeCode, file.text)
+        val resUndo = fileText(resourcePath)
+        assertTrue("Undo 后资源应回滚（不含新文案），实际:\n$resUndo", !resUndo.contains("资源中文"))
+        assertEquals("Undo 后资源应还原为空入口，实际:\n$resUndo", "export default {}", normalizeWs(resUndo))
+
+        // Redo → 全部恢复
+        com.intellij.openapi.command.CommandProcessor.getInstance().runUndoTransparentAction {
+            myFixture.performEditorAction(com.intellij.openapi.actionSystem.IdeActions.ACTION_REDO)
+        }
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val resRedo = fileText(resourcePath)
+        assertTrue("Redo 后资源应恢复新文案，实际:\n$resRedo", resRedo.contains("资源中文"))
+        assertTrue("Redo 后代码应恢复 \$t 调用，实际:\n${file.text}", file.text.contains("t("))
+    }
+
+    private fun fileText(path: String): String {
+        val vf = myFixture.findFileInTempDir(path) ?: return ""
+        val f = com.intellij.psi.PsiManager.getInstance(project).findFile(vf) ?: return ""
+        return f.text
+    }
+
+    private fun normalizeWs(s: String) = s.replace("\\s+".toRegex(), " ").trim()
 }
