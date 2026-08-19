@@ -9,8 +9,8 @@ import org.junit.Assert.assertTrue
  * BUG_ANALYSIS 5.4 — Vue Template PSI 覆盖（补充形态）。
  *
  * 与 [I18nVueTemplatePsiTest] 同一思路：`$t('xxx')` 等已国际化调用应进
- * [I18nProcessor.existingStrings]，而**不得**被当作待提取硬编码中文进入
- * [I18nProcessor.extractedStrings]。仅在确实存在硬编码中文时才进 extractedStrings。
+ * [com.pan.extractor.analyzer.I18nAnalyzer.existingStrings]，而**不得**被当作待提取硬编码中文进入
+ * [com.pan.extractor.analyzer.I18nAnalyzer.extractedStrings]。仅在确实存在硬编码中文时才进 extractedStrings。
  *
  * 本文件补充的形态：
  * - script setup + template 并存（script 中文 → extractedStrings；template \$t → existingStrings）
