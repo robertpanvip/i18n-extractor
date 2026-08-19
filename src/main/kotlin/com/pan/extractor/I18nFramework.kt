@@ -6,12 +6,17 @@ import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
+import com.intellij.lang.javascript.psi.JSVarStatement
+import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlText
+import com.pan.extractor.planner.HookInjectPlan
+import com.pan.extractor.planner.HookTarget
+import com.pan.extractor.planner.ImportPlan
 
 /**
  * BUG_ANALYSIS 5.1 — I18nFramework 能力拆分。
@@ -36,7 +41,8 @@ interface I18nFramework :
     TranslationCallStrategy,
     TemplateStrategy,
     ImportStrategy,
-    BootstrapStrategy
+    BootstrapStrategy,
+    ImportBuildStrategy
 
 /**
  * 能力 1 — [DetectionStrategy]：框架检测。
@@ -252,6 +258,33 @@ interface BootstrapStrategy {
 }
 
 /**
+ * 能力 7 — [ImportBuildStrategy]：框架自身产出「import / hook / 全局别名注入计划」。
+ *
+ * §11 收敛点：原 [com.pan.extractor.planner.ImportPlanner] 用 `isVue/isReact/isSolid`
+ * 三岔把注入决策写到同一个方法里，每加一个框架就多一层 if。这里把「这个框架要注入
+ * 哪些 import / alias / hook」下沉为策略自身的实现；Planner 层只做「把决策交给框架，
+ * 再把返回的 [ImportPlan] 数据原样透传」，从而单一策略扩展即可支持新框架，无需改 Planner。
+ *
+ * 具体 [ImportPlan] 内各字段（imports / aliases / hooks / injectIntoSfcScript /
+ * rewriteI18nTCallsToT）由策略自行填写；[fileName] 与 [frameworkId] 由策略沿用框架 id。
+ *
+ * @param file 目标源文件（.vue / .ts / .tsx / .js / .jsx）。
+ * @param tName 注入前已确定的翻译函数名（来自收集期 [CollectionState.tFunctionName]，
+ *              与旧 import 分支 `processor.analyzer.tFunctionName` 完全一致，行为 1:1）。
+ * @param decision 收集期锁定的注入决策（needInject* 标记 + 是否已有提取/已有调用）。
+ * @param injector 只读复用注入工具的去重 / import 文本 / i18n 实例路径解析能力，
+ *                 不调用其写 PSI 方法（本方法是 Planner 层纯决策）。
+ */
+interface ImportBuildStrategy {
+    fun buildImportPlan(
+        file: PsiFile,
+        tName: String,
+        decision: ImportManager.InjectionDecision,
+        injector: ImportManager,
+    ): ImportPlan
+}
+
+/**
  * 框架策略注册表。按优先级匹配首个命中的策略，无命中回退到 [GenericStrategy]。
  *
  * [detect] 委托给现有 [Util.isVue] / [Util.isReact] / [Util.isSolid]，
@@ -356,6 +389,94 @@ object VueI18nStrategy : I18nFramework {
         val method = call.methodExpression as? JSReferenceExpression ?: return null
         val text = method.text
         return if (text == "i18n.global.t" || text == "i18n.global.tc") "i18n.global.t" else null
+    }
+
+    /**
+     * §11 收敛点 — Vue 注入计划。镜像旧 [ImportPlanner] 的 [isVue 分支]，
+     * 把「是否注入全局 i18n 实例 import / $t 别名 / useI18n（SFC / 组件 / Hook）」下沉到本策略。
+     */
+    override fun buildImportPlan(
+        file: PsiFile,
+        tName: String,
+        d: ImportManager.InjectionDecision,
+        injector: ImportManager,
+    ): ImportPlan {
+        val isSfc = file.name.endsWith(".vue", ignoreCase = true)
+        val imports = mutableListOf<String>()
+        val aliases = mutableListOf<String>()
+        val hooks = mutableListOf<HookInjectPlan>()
+
+        val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
+            (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
+        val vueModeNeedsImport = d.needInjectGlobalDollarT && (d.hasExtractedStrings || d.hasExistingStrings)
+        val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance || vueModeNeedsImport
+
+        if (needGlobalI18nImport) {
+            val m1 = d.tFunctionName == "i18n.global.t" ||
+                (d.hasExtractedStrings && d.needInjectGlobalDollarT) || vueModeNeedsImport
+            val m2 = vueModeNeedsImport ||
+                (d.tFunctionName == "i18n.global.t" && d.hasExtractedStrings)
+            if (m1 || m2) {
+                val injectGlobalDollarT =
+                    if (m1) d.needInjectGlobalDollarT
+                    else (d.needInjectGlobalDollarT || d.tFunctionName != "\$t")
+                if (!injector.hasI18nInstanceImported(file)) {
+                    imports += injector.buildVueI18nInstanceImport(file)
+                }
+                if (injectGlobalDollarT && !hasVueGlobalDollarTAliased(file)) {
+                    aliases += "const \$t = i18n.global.t;\n"
+                }
+            }
+        }
+
+        if (d.hasExtractedStrings) {
+            val components = if (isSfc) emptyList() else ProjectStructure.findVueComponentFunctions(file)
+            val hooksInFile = if (isSfc) emptyList() else ProjectStructure.findHookFunctions(file)
+            when {
+                !isSfc && components.isNotEmpty() -> {
+                    if (!hasImportedSpecifierUseI18n(injector, file)) {
+                        imports += "import { useI18n } from 'vue-i18n';\n"
+                    }
+                    hooks += HookInjectPlan(HookTarget.VUE_COMPONENT, "const { t: \$t } = useI18n();")
+                }
+                !isSfc && hooksInFile.isNotEmpty() -> {
+                    if (!hasImportedSpecifierUseI18n(injector, file)) {
+                        imports += "import { useI18n } from 'vue-i18n';\n"
+                    }
+                    hooks += HookInjectPlan(HookTarget.VUE_HOOK, "const { t: \$t } = useI18n();")
+                }
+                isSfc -> {
+                    if (d.tFunctionName != "i18n.global.t") {
+                        if (!hasImportedSpecifierUseI18n(injector, file)) {
+                            imports += "import { useI18n } from 'vue-i18n';\n"
+                        }
+                        hooks += HookInjectPlan(HookTarget.VUE_SFC_SCRIPT, "const { t: \$t } = useI18n();")
+                    }
+                }
+            }
+        }
+
+        return ImportPlan(
+            fileName = file.name,
+            imports = imports.distinct(),
+            aliases = aliases.distinct(),
+            hooks = hooks.distinct(),
+            frameworkId = id,
+            injectIntoSfcScript = isSfc,
+            rewriteI18nTCallsToT = false,
+        )
+    }
+
+    /** vue-i18n 的 `useI18n` 是否已导入。 */
+    private fun hasImportedSpecifierUseI18n(injector: ImportManager, file: PsiElement): Boolean {
+        val imports = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
+        return imports.any { injector.hasImportedSpecifier(it, "vue-i18n", "useI18n") }
+    }
+
+    /** Vue 全局 `const \$t = i18n.global.t` 是否已存在（宽松匹配）。 */
+    private fun hasVueGlobalDollarTAliased(root: PsiElement): Boolean {
+        val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+        return vars.any { it.text.replace("\\s+".toRegex(), "").contains("const\$t=i18n.global.t") }
     }
 
     /**
@@ -494,10 +615,110 @@ object ReactI18nextStrategy : I18nFramework {
             export default i18n;
         """.trimIndent() + "\n"
     }
+
+    /**
+     * §11 收敛点 — React 注入计划。镜像旧 [ImportPlanner] 的 isReact 分支，
+     * 把「全局 i18n 实例 import / $t 别名 / i18n 别名 / useTranslation hook」下沉到本策略。
+     */
+    override fun buildImportPlan(
+        file: PsiFile,
+        tName: String,
+        d: ImportManager.InjectionDecision,
+        injector: ImportManager,
+    ): ImportPlan {
+        val imports = mutableListOf<String>()
+        val aliases = mutableListOf<String>()
+        val hooks = mutableListOf<HookInjectPlan>()
+
+        val hasAnyTCallsNeedingGlobalInstance = d.hasExtractedStrings ||
+            (d.hasExistingStrings && (d.tFunctionName == "i18n.global.t" || d.tFunctionName == "i18n.t"))
+        val reactModeNeedsImport = d.needInjectReactGlobalDollarT && (d.hasExtractedStrings || d.hasExistingStrings)
+        val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance ||
+            reactModeNeedsImport || d.reactI18nTFallbackToDollarT
+
+        if (needGlobalI18nImport) {
+            if (d.tFunctionName == "i18n.t" || d.reactI18nTFallbackToDollarT ||
+                (d.hasExtractedStrings && d.needInjectReactGlobalDollarT) || reactModeNeedsImport
+            ) {
+                val i18nAlreadyImported = injector.hasI18nInstanceImported(file)
+                val alreadyUsesGetI18n = injector.hasReactGetI18nImported(file) || hasReactGetI18nAlias(file)
+                val reactLocaleImport =
+                    if (alreadyUsesGetI18n) null else injector.buildReactI18nInstanceImport(file)
+                val injectReactGlobalDollarT = d.needInjectReactGlobalDollarT || d.reactI18nTFallbackToDollarT
+                val reactDollarTImportSatisfied =
+                    if (reactLocaleImport != null) i18nAlreadyImported else injector.hasReactGetI18nImported(file)
+                val requiredImportAlreadyPresent =
+                    if (injectReactGlobalDollarT) reactDollarTImportSatisfied else i18nAlreadyImported
+
+                val dollarTAliasAlreadyPresent =
+                    if (injectReactGlobalDollarT) hasReactGlobalAllowedAliased(file) else true
+                val reactI18nAliasAlreadyPresent = hasReactI18nGlobalAliased(file)
+                val reactNeedsI18nAlias = !injectReactGlobalDollarT &&
+                    reactLocaleImport == null && !requiredImportAlreadyPresent
+
+                val importText: String? = when {
+                    requiredImportAlreadyPresent -> null
+                    reactLocaleImport != null -> reactLocaleImport
+                    else -> "import { getI18n } from 'react-i18next';\n"
+                }
+                val dollarTText: String? = when {
+                    injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
+                        if (reactLocaleImport != null) "const $tName = i18n.t;\n"
+                        else "const $tName = getI18n().t;\n"
+                    reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
+                    else -> null
+                }
+                if (importText != null) imports += importText
+                if (dollarTText != null) aliases += dollarTText
+            }
+        }
+
+        if (d.hasExtractedStrings) {
+            if (d.tFunctionName != "i18n.t" && !d.needInjectReactGlobalDollarT) {
+                val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
+                if (importsInFile.none { it.text.contains("useTranslation") }) {
+                    imports += "import { useTranslation } from 'react-i18next';\n"
+                }
+                hooks += HookInjectPlan(HookTarget.REACT, "const { t } = useTranslation();")
+            }
+        }
+
+        return ImportPlan(
+            fileName = file.name,
+            imports = imports.distinct(),
+            aliases = aliases.distinct(),
+            hooks = hooks.distinct(),
+            frameworkId = id,
+            injectIntoSfcScript = false,
+            rewriteI18nTCallsToT = d.reactI18nTFallbackToDollarT,
+        )
+    }
+
+    /** React 全局 `const t = i18n.t` / `const t = getI18n().t` 是否已存在（宽松匹配）。 */
+    private fun hasReactGlobalAllowedAliased(root: PsiElement): Boolean {
+        val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+        return vars.any {
+            val compact = it.text.replace("\\s+".toRegex(), "")
+            compact.contains("constt=getI18n().t") ||
+                compact.contains("const\$t=getI18n().t") ||
+                compact.contains("constt=i18n.t")
+        }
+    }
+
+    /** React `const i18n = getI18n()` 别名是否已存在。 */
+    private fun hasReactI18nGlobalAliased(root: PsiElement): Boolean {
+        val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+        return vars.any {
+            it.text.replace("\\s+".toRegex(), "").contains("consti18n=getI18n()")
+        }
+    }
+
+    /** React 是否已在用 getI18n（import 或 const 别名）。 */
+    private fun hasReactGetI18nAlias(root: PsiElement): Boolean =
+        hasReactGlobalAllowedAliased(root) || hasReactI18nGlobalAliased(root)
 }
 
-/**
- * Generic 策略：无 React/Vue 依赖的项目（如纯 Node 工具）。
+/** Generic 策略：无 React/Vue 依赖的项目（如纯 Node 工具）。
  * 占位符 `{0}`、参数 key `0`（加引号）；折叠插值沿用 React 路径
  * （现有代码中 isVue=false 时即走 React 分支，保持一致）。
  */
@@ -521,6 +742,16 @@ object GenericStrategy : I18nFramework {
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String =
         ReactI18nextStrategy.buildInitFile(defaultLocale, entryImport)
+
+    /**
+     * §11 收敛点 — Generic 不注入任何 hook / 全局别名：只描述空计划（fileName / frameworkId）。
+     */
+    override fun buildImportPlan(
+        file: PsiFile,
+        tName: String,
+        d: ImportManager.InjectionDecision,
+        injector: ImportManager,
+    ): ImportPlan = ImportPlan(fileName = file.name, frameworkId = id)
 }
 
 /**
@@ -586,6 +817,92 @@ object SolidI18nStrategy : I18nFramework {
      * 那会改变 isReact 取值，破坏 MergeApplier 的占位符/包装分支）。
      */
     override fun getSiteForm(element: PsiElement): SiteForm = SiteForm.SOLID_BINDING
+
+    /**
+     * §11 收敛点 — Solid 注入计划。镜像旧 [ImportPlanner] 的 isSolid 分支，
+     * 把「全局 i18n 别名 / useI18n hook」下沉到本策略。
+     */
+    override fun buildImportPlan(
+        file: PsiFile,
+        tName: String,
+        d: ImportManager.InjectionDecision,
+        injector: ImportManager,
+    ): ImportPlan {
+        val imports = mutableListOf<String>()
+        val aliases = mutableListOf<String>()
+        val hooks = mutableListOf<HookInjectPlan>()
+
+        if (d.hasExtractedStrings || d.hasExistingStrings) {
+            if (!file.name.endsWith(".vue", ignoreCase = true)) {
+                val componentFuncs = ProjectStructure.findReactComponentFunctions(file)
+                val hookFuncs = ProjectStructure.findHookFunctions(file)
+                val globalMode = d.needInjectSolidGlobalDollarT ||
+                    (componentFuncs.isEmpty() && hookFuncs.isEmpty())
+
+                if (globalMode) {
+                    val importText = solidImportText(file) ?: "import { useI18n } from '@solid-primitives/i18n';\n"
+                    if (!injectorHasSolidImport(file)) {
+                        imports += importText
+                    }
+                    if (!hasSolidDollarTAliased(file)) {
+                        aliases += when {
+                            importText.contains("createAppI18n") -> "const { t: \$t } = createAppI18n();\n"
+                            importText.startsWith("import i18n ") -> "const \$t = i18n.t;\n"
+                            else -> "const [\$t] = useI18n();\n"
+                        }
+                    }
+                } else {
+                    if (!injectorHasSolidImport(file)) {
+                        imports += "import { useI18n } from '@solid-primitives/i18n';\n"
+                    }
+                    hooks += HookInjectPlan(HookTarget.SOLID, "const [t, { locale }] = useI18n();")
+                }
+            }
+        }
+
+        return ImportPlan(
+            fileName = file.name,
+            imports = imports.distinct(),
+            aliases = aliases.distinct(),
+            hooks = hooks.distinct(),
+            frameworkId = id,
+            injectIntoSfcScript = false,
+            rewriteI18nTCallsToT = false,
+        )
+    }
+
+    /** Solid 全局 `\$t` 别名是否已存在。 */
+    private fun hasSolidDollarTAliased(root: PsiElement): Boolean {
+        val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
+        return vars.any {
+            it.text.contains("= useI18n(") || it.text.contains("= createAppI18n(") ||
+                it.text.replace("\\s+".toRegex(), "").contains("const\$t=")
+        }
+    }
+
+    /** Solid 是否已导入 @solid-primitives/i18n 或 i18n 工厂。 */
+    private fun injectorHasSolidImport(file: PsiElement): Boolean {
+        val imports = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
+        return imports.any { Regex("""from\s*['"]@solid-primitives/i18n['"]""").containsMatchIn(it.text) }
+    }
+
+    /** Solid i18n 工厂 / useI18n 导入文本（复用 Locator 只读逻辑）。 */
+    private fun solidImportText(file: PsiElement): String? {
+        val containingFile = file.containingFile ?: return null
+        val projectRoot = ProjectStructure.findProjectRoot(containingFile) ?: return null
+        val initFile = I18nInstanceLocator.findSolidI18nInstanceFileInRoot(projectRoot, containingFile.project)
+            ?: return null
+        val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
+        val initText = try {
+            String(initFile.contentsToByteArray(), Charsets.UTF_8)
+        } catch (_: Exception) { "" }
+        return when {
+            initText.contains("createAppI18n") -> "import { createAppI18n } from '$importPath';\n"
+            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(initText) ->
+                "import i18n from '$importPath';\n"
+            else -> "import { useI18n } from '$importPath';\n"
+        }
+    }
 }
 
 /**
