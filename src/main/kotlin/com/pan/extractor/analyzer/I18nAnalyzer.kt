@@ -271,13 +271,9 @@ class I18nAnalyzer(
             }
         }
 
-        val scanner = when {
-            framework is VueI18nStrategy -> com.pan.extractor.scanner.VueScanner
-            framework is ReactI18nextStrategy -> com.pan.extractor.scanner.ReactScanner
-            framework is SolidI18nStrategy -> com.pan.extractor.scanner.SolidScanner
-            else -> com.pan.extractor.scanner.JsScanner
-        }
-        scanner.scan(root) { handle(it) }
+        // §11 收敛点：扫描器分发已下沉到框架策略（framework.scanner，
+        // Vue/React/Solid/Generic 各自声明单例 Scanner），消除原 is Vue/React/Solid 三岔。
+        framework.scanner.scan(root) { handle(it) }
         return changes
     }
 

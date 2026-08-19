@@ -42,7 +42,8 @@ interface I18nFramework :
     TemplateStrategy,
     ImportStrategy,
     BootstrapStrategy,
-    ImportBuildStrategy
+    ImportBuildStrategy,
+    ScanStrategy
 
 /**
  * 能力 1 — [DetectionStrategy]：框架检测。
@@ -285,6 +286,24 @@ interface ImportBuildStrategy {
 }
 
 /**
+ * 能力 8 — [ScanStrategy]：框架声明自身所需的候选站点扫描器。
+ *
+ * §11 收敛点：原 [com.pan.extractor.analyzer.I18nAnalyzer] 用 `isVue/isReact/isSolid`
+ * 三岔去匹配 [com.pan.extractor.scanner] 下的各扫描器。这里把「这个框架用哪个 Scanner」
+ * 收敛为策略自身的常量 [scanner]；Analyzer 只需 `framework.scanner` 一行，即可消除
+ * 扫描分发层面的又一处 `is Xxx` 三岔（与 [ImportBuildStrategy] 对应注入决策三岔互补）。
+ */
+interface ScanStrategy {
+    /**
+     * 本框架扫描候选站点使用的 [SourceScanner]。
+     * 各策略声明各自单例扫描器；[VueI18nStrategy]/[ReactI18nextStrategy]/
+     * [SolidI18nStrategy] 分别返回 VueScanner/ReactScanner/SolidScanner，
+     * [GenericStrategy] 返回 JsScanner —— 与原 I18nAnalyzer 三岔映射完全一致。
+     */
+    val scanner: com.pan.extractor.scanner.SourceScanner
+}
+
+/**
  * 框架策略注册表。按优先级匹配首个命中的策略，无命中回退到 [GenericStrategy]。
  *
  * [detect] 委托给现有 [Util.isVue] / [Util.isReact] / [Util.isSolid]，
@@ -352,6 +371,8 @@ object VueI18nStrategy : I18nFramework {
     override val hookImport = "import { useI18n } from 'vue-i18n';"
     override val bootstrapDeps = listOf("vue-i18n")
     override val paramKeyNeedsQuote = false
+    override val scanner: com.pan.extractor.scanner.SourceScanner =
+        com.pan.extractor.scanner.VueScanner
     override fun matches(element: PsiElement): Boolean = Util.isVue(element)
 
     /** Vue 占位符前缀（默认 `N`）来自 [I18nSettings]，运行时读取以反映用户配置。 */
@@ -559,6 +580,8 @@ object ReactI18nextStrategy : I18nFramework {
     override val hookImport = "import { useTranslation } from 'react-i18next';"
     override val bootstrapDeps = listOf("i18next", "react-i18next")
     override val paramKeyNeedsQuote = true
+    override val scanner: com.pan.extractor.scanner.SourceScanner =
+        com.pan.extractor.scanner.ReactScanner
     override fun matches(element: PsiElement): Boolean = Util.isReact(element)
 
     override fun placeholderFor(index: Int): String = "{{$index}}"
@@ -728,6 +751,8 @@ object GenericStrategy : I18nFramework {
     override val hookImport = null
     override val bootstrapDeps = emptyList<String>()
     override val paramKeyNeedsQuote = true
+    override val scanner: com.pan.extractor.scanner.SourceScanner =
+        com.pan.extractor.scanner.JsScanner
 
     /** Generic 恒为兜底：匹配语义由 [I18nFrameworkRegistry.detect] 的 fallback 通道兜底。 */
     override fun matches(element: PsiElement): Boolean = true
@@ -767,6 +792,8 @@ object SolidI18nStrategy : I18nFramework {
     override val hookImport = "import { useI18n } from '@solid-primitives/i18n';"
     override val bootstrapDeps = listOf("@solid-primitives/i18n")
     override val paramKeyNeedsQuote = true
+    override val scanner: com.pan.extractor.scanner.SourceScanner =
+        com.pan.extractor.scanner.SolidScanner
     override fun matches(element: PsiElement): Boolean = Util.isSolid(element)
 
     override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)

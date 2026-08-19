@@ -1,7 +1,9 @@
 package com.pan.extractor
 
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.pan.extractor.planner.ImportPlan
 import org.junit.Assert.assertSame
 
 /**
@@ -64,12 +66,20 @@ class I18nFrameworkDetection2Test : BasePlatformTestCase() {
             override val hookImport: String? = null
             override val paramKeyNeedsQuote = true
             override val bootstrapDeps = emptyList<String>()
+            override val scanner: com.pan.extractor.scanner.SourceScanner =
+                com.pan.extractor.scanner.JsScanner
             override fun matches(element: PsiElement): Boolean = true
             override fun placeholderFor(index: Int): String = "{$index}"
             override fun paramKey(index: Int): String = index.toString()
             override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
                 GenericStrategy.interpolatePlaceholders(value, params)
             override fun buildInitFile(defaultLocale: String, entryImport: String?): String = ""
+            override fun buildImportPlan(
+                file: PsiFile,
+                tName: String,
+                decision: ImportManager.InjectionDecision,
+                injector: ImportManager,
+            ): ImportPlan = ImportPlan(fileName = file.name, frameworkId = id)
         }
 
         I18nFrameworkRegistry.register(custom)
@@ -95,12 +105,20 @@ class I18nFrameworkDetection2Test : BasePlatformTestCase() {
             override val hookImport: String? = null
             override val paramKeyNeedsQuote = true
             override val bootstrapDeps = emptyList<String>()
+            override val scanner: com.pan.extractor.scanner.SourceScanner =
+                com.pan.extractor.scanner.JsScanner
             override fun matches(element: PsiElement): Boolean = true
             override fun placeholderFor(index: Int): String = "{$index}"
             override fun paramKey(index: Int): String = index.toString()
             override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
                 GenericStrategy.interpolatePlaceholders(value, params)
             override fun buildInitFile(defaultLocale: String, entryImport: String?): String = ""
+            override fun buildImportPlan(
+                file: PsiFile,
+                tName: String,
+                decision: ImportManager.InjectionDecision,
+                injector: ImportManager,
+            ): ImportPlan = ImportPlan(fileName = file.name, frameworkId = id)
         }
 
         I18nFrameworkRegistry.register(custom)
