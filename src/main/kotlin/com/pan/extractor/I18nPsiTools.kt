@@ -654,6 +654,11 @@ object I18nPsiTools {
      * 纯文本构建 t() 调用，不依赖当前 processor 已探测到的 tFunctionName 注入上下文，
      * 直接按 isVue/isReact 生成最稳妥形式（和现有探测一致：都用 \$t，减少复杂度）。
      * - 若 skeletonKeyOverride 非空：key 用这个覆盖而不是 message.trim()（供合并骨架时使用）
+     *
+     * §架构（CallExpressionStrategy）：传入 [framework] 时，调用表达式的「成型」交给框架策略
+     * （[com.pan.extractor.CallExpressionStrategy]）。默认/其余框架沿用历史 `fn('key'[params])`
+     * 拼法（行为 1:1）；react-intl 覆盖为 `formatMessage({ id: 'key' })`。不传 framework 时
+     * 保持纯 isVue/isReact 旧逻辑，供既有无框架调用点/测试使用。
      */
     fun buildTExprForRawText(
         message: String,
@@ -661,6 +666,7 @@ object I18nPsiTools {
         isVue: Boolean,
         isReact: Boolean,
         skeletonKeyOverride: String? = null,
+        framework: com.pan.extractor.I18nFramework? = null,
     ): String {
         val trimmedMsg = message.trim()
         val escapedMsg = if (trimmedMsg.contains("\n")) {
@@ -671,12 +677,23 @@ object I18nPsiTools {
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
         val key = skeletonKeyOverride?.trim()?.ifBlank { null } ?: trimmedMsg
         // Vue 用 $t，React 用 t；避免长形式 i18n.global.t / i18n.t
-        val fn = if (isReact) "t" else "\$t"
-        val keyEscaped = if (key.contains("\n")) key.replace("`", "\\`") else key.replace("'", "\\'")
-        return if (paramsObject.replace(" ", "") == "{}") {
-            "$fn($quote$keyEscaped$quote)"
+        // react-intl 用其真实函数名 formatMessage（否则 isReact 会把它错写成 t）。
+        val fn = if (framework is com.pan.extractor.ReactIntlStrategy) {
+            framework.tFunctionName
+        } else if (isReact) {
+            "t"
         } else {
-            "$fn($quote$keyEscaped$quote, $paramsObject)"
+            "\$t"
+        }
+        val keyEscaped = if (key.contains("\n")) key.replace("`", "\\`") else key.replace("'", "\\'")
+        val keyLiteral = "$quote$keyEscaped$quote"
+        return if (framework != null) {
+            // 调用形态由框架策略成型（默认 fn('key'[params])，react-intl 为 formatMessage({ id: ... })）
+            framework.buildCallExpression(fn, keyLiteral, paramsObject)
+        } else if (paramsObject.replace(" ", "") == "{}") {
+            "$fn($keyLiteral)"
+        } else {
+            "$fn($keyLiteral, $paramsObject)"
         }
     }
 }

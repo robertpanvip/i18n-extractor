@@ -92,7 +92,9 @@ object ExtractionPlanner {
                 if (diffWillBeKey) diffKeys.putIfAbsent(diffKey, v.diff)
                 // 差分占位表达式：中文→`$t('中文')`（纯文本生成，无 PSI 副作用）；否则字面量
                 val paramsExpr = if (diffWillBeKey) {
-                    com.pan.extractor.I18nPsiTools.buildTExprForRawText(v.diff, "{}", site.isVue, site.isReact)
+                    com.pan.extractor.I18nPsiTools.buildTExprForRawText(
+                        v.diff, "{}", site.isVue, site.isReact, framework = proc.analyzer.framework
+                    )
                 } else {
                     com.pan.extractor.planner.SkeletonPlanner.renderLiteralValue(v.diff)
                 }

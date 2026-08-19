@@ -241,8 +241,7 @@ object MergeApplier {
         })
         val callExprText = I18nPsiTools.buildTExprForRawText(
             rewrittenSkeleton.trim(), paramsObjStr, site.isVue, site.isReact,
-            skeletonKeyOverride = rewrittenSkeletonKey.trim()
-        )
+            skeletonKeyOverride = rewrittenSkeletonKey.trim(), framework = proc.analyzer.framework)
 
         val replacement = when {
             rootPsi is com.intellij.psi.xml.XmlText -> proc.createStringExpressionNode(

@@ -171,4 +171,23 @@ class I18nPsiToolsCoreFunctionTest {
         assertTrue("React 多行应使用反引号模板", out.startsWith("t(`"))
         assertTrue(out.endsWith("`)"))
     }
+
+    @Test
+    fun reactIntlRoutesShapeThroughCallExpressionStrategy() {
+        // 传入 ReactIntlStrategy 时，调用成型下沉给策略：formatMessage({ id: key })，而非 t('key')
+        assertEquals(
+            "formatMessage({ id: '标题' })",
+            I18nPsiTools.buildTExprForRawText(
+                "标题", "{}", isVue = false, isReact = true,
+                framework = com.pan.extractor.ReactIntlStrategy
+            )
+        )
+        assertEquals(
+            "formatMessage({ id: '标题' }, { N0: 'x' })",
+            I18nPsiTools.buildTExprForRawText(
+                "标题", "{ N0: 'x' }", isVue = false, isReact = true,
+                framework = com.pan.extractor.ReactIntlStrategy
+            )
+        )
+    }
 }
