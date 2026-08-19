@@ -1,12 +1,25 @@
 package com.pan.extractor.rewriter
 
+import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
+import com.intellij.lang.javascript.psi.JSBlockStatement
+import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.lang.javascript.psi.JSEmbeddedContent
+import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.lang.javascript.psi.JSProperty
+import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlText
 import com.pan.extractor.I18nPsiTools
+import com.pan.extractor.ProjectStructure
+import com.pan.extractor.planner.HookInjectPlan
+import com.pan.extractor.planner.HookTarget
+import com.pan.extractor.planner.ImportPlan
+import com.pan.extractor.planner.ImportPlanner
 
 /**
  * Rewriter 层 —— 修改源码 PSI（迁移自 [com.pan.extractor.I18nProcessor] /
@@ -101,24 +114,63 @@ object JsRewriter : SourceRewriter {
     }
 }
 
-/** import 重写器：i18n import / hook / 全局 \$t 别名注入（迁移自 I18nImportInjector 的编排层）。 */
+/** import 重写器：消费 [ImportPlan] 执行 i18n import / hook / 全局 \$t 别名注入（迁移自 I18nImportInjector 编排层）。 */
 object ImportRewriter : SourceRewriter {
 
-    /** 为文件注入 i18n import 语句（TODO(迁移)：I18nImportInjector.ensureI18nInstanceImported 系）。 */
-    fun ensureInstanceImported(file: PsiElement) {
-        // TODO(迁移)
+    /**
+     * 消费 [ImportPlan] 完成一次文件的全部注入。Apply 阶段在 Write Action 内调用。
+     *
+     * 迁移自 I18nImportInjector 的 ensureI18nInstanceImported / ensureVueI18nImported /
+     * ensureReactI18nImported / ensureVueHookI18nImported / ensureVueComponentI18nInjected /
+     * ensureSolidUseI18nImported / ensureSolidGlobalDollarTImported 等命令式注入（行为 1:1）。
+     *
+     * 步骤：
+     *  0. 若 [ImportPlan.rewriteI18nTCallsToT]：先把既有 `i18n.t` / `i18n.tc` 改写为 `t`；
+     *  1. 注入 imports（.vue 进 <script> 内容，否则进文件顶部）；
+     *  2. 注入 aliases（位于最后一个 import 之后）；
+     *  3. 依 [HookInjectPlan] 逐类注入函数体 useI18n / useTranslation。
+     */
+    fun applyImportPlan(processor: com.pan.extractor.I18nProcessor, psiFile: PsiElement, plan: ImportPlan) {
+        val containingFile = psiFile.containingFile ?: return
+
+        if (plan.rewriteI18nTCallsToT) {
+            processor.injector.rewriteExistingI18nTCallsToDollarT(psiFile)
+        }
+
+        val container = if (plan.injectIntoSfcScript)
+            getScriptContent(processor, psiFile) ?: return
+        else containingFile
+
+        val injector = processor.injector
+
+        // 1) imports
+        if (plan.imports.isNotEmpty()) {
+            val existing = PsiTreeUtil.findChildrenOfType(container, ES6ImportDeclaration::class.java)
+            val anchor = existing.firstOrNull() ?: injector.findFirstNonWhitespaceChild(container)
+            injectImports(container, plan.imports, anchor, processor)
+        }
+        // 2) aliases（放最后一个 import 之后）
+        for (alias in plan.aliases) {
+            val stmt = processor.createStringExpressionNode(alias, container)
+            val latestImports = PsiTreeUtil.findChildrenOfType(container, ES6ImportDeclaration::class.java)
+            if (latestImports.isNotEmpty()) {
+                val lastImport = latestImports.last()
+                lastImport.parent.addAfter(stmt, lastImport)
+            } else {
+                val firstStatement = injector.findFirstNonWhitespaceChild(container)
+                if (firstStatement != null) container.addBefore(stmt, firstStatement) else container.add(stmt)
+            }
+        }
+        // 3) hooks
+        for (hook in plan.hooks) {
+            injectHook(processor, psiFile, hook)
+        }
     }
 
     /**
-     * P2 统一注入入口：按 [framework] 分发到 Vue/React/Solid 注入逻辑。
-     * 迁移自 [com.pan.extractor.I18nImportInjector.injectForFramework] 的 when 编排（行为 1:1）。
-     *
-     * Solid 不再复用 React 分支——`@solid-primitives/i18n` 的 `useI18n(dict, () => locale)`
-     * 与 react-i18next 的 `useTranslation()` API 形态完全不同（前者返回 `[t, { locale }]`，
-     * 后者返回 `{ t }`），复用会注入错误的 import。Solid 走独立的 Solid 分支。
-     *
-     * 具体分支实现暂留在 [com.pan.extractor.I18nImportInjector]（internal 方法），
-     * 后续按模块继续内迁。
+     * 单点注入入口：由 [ImportPlanner.buildImportPlan] 把 collect 阶段锁定的注入决策转为 [ImportPlan]，
+     * 再由 [applyImportPlan] 统一执行。此方法取代旧 I18nImportInjector.injectForFramework 的 when 编排
+     * （行为 1:1）。
      */
     fun injectForFramework(
         processor: com.pan.extractor.I18nProcessor,
@@ -126,14 +178,150 @@ object ImportRewriter : SourceRewriter {
         framework: com.pan.extractor.I18nFramework,
         decision: com.pan.extractor.I18nImportInjector.InjectionDecision,
     ) {
-        when (framework) {
-            is com.pan.extractor.VueI18nStrategy ->
-                processor.injector.injectVueBranch(processor, psiFile, decision)
-            is com.pan.extractor.ReactI18nextStrategy ->
-                processor.injector.injectReactBranch(processor, psiFile, decision)
-            is com.pan.extractor.SolidI18nStrategy ->
-                processor.injector.injectSolidBranch(processor, psiFile, decision)
-            else -> { /* Generic 不注入 */ }
+        val plan = ImportPlanner.buildImportPlan(processor, psiFile, framework, decision)
+        applyImportPlan(processor, psiFile, plan)
+    }
+
+    // ── 执行辅助 ─────────────────────────────────────────────────────────
+
+    /** 取 .vue <script> 的内容节点（JSEmbeddedContent）；无则返回 null。 */
+    private fun getScriptContent(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+    ): PsiElement? {
+        val scriptTag = processor.getScriptTag() ?: return null
+        return PsiTreeUtil.findChildOfType(scriptTag, JSEmbeddedContent::class.java)
+    }
+
+    /**
+     * 以「不含内嵌换行的独立 Leaf」把 [importTexts] 注入到 [container]，置于首个非空白语句 [anchor]
+     * 之前，保持语句顺序。语句正文与 `\n` 分开成两个节点注入，避免单 Leaf 内嵌换行在 undo/redo
+     * 重排时被重新归一为空格（镜像旧 ensure* 的逐行 Leaf 空白幂等约定，P0/P1）。
+     */
+    private fun injectImports(
+        container: PsiElement,
+        importTexts: List<String>,
+        anchor: PsiElement?,
+        processor: com.pan.extractor.I18nProcessor,
+    ) {
+        var prev: PsiElement? = null
+        for (text in importTexts) {
+            val hasLineBreak = text.endsWith("\n")
+            val body = if (hasLineBreak) text.removeSuffix("\n") else text
+            val leaf = processor.createStringExpressionNode(body, container)
+            prev = when {
+                prev != null -> container.addAfter(leaf, prev)
+                anchor != null -> container.addBefore(leaf, anchor)
+                else -> container.add(leaf)
+            }
+            if (hasLineBreak) {
+                prev = container.addAfter(processor.createStringExpressionNode("\n", container), prev)
+            }
         }
+    }
+
+    /** 依 [hook] 类型定位目标并注入 [HookInjectPlan.statement]。 */
+    private fun injectHook(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+        hook: HookInjectPlan,
+    ) {
+        when (hook.target) {
+            HookTarget.VUE_SFC_SCRIPT -> injectVueSfcScriptConst(processor, psiFile, hook.statement)
+            HookTarget.VUE_HOOK -> injectIntoFunctionBodies(
+                processor, psiFile,
+                ProjectStructure.findHookFunctions(psiFile.containingFile).filterIsInstance<JSFunction>(),
+                hook.statement,
+            )
+            HookTarget.VUE_COMPONENT -> injectIntoVueComponents(processor, psiFile, hook.statement)
+            HookTarget.REACT, HookTarget.SOLID -> {
+                val file = psiFile.containingFile ?: return
+                val funcs = (ProjectStructure.findReactComponentFunctions(file).asSequence() +
+                    ProjectStructure.findHookFunctions(file).asSequence())
+                    .filterIsInstance<JSFunction>().distinct().toList()
+                injectIntoFunctionBodies(processor, psiFile, funcs, hook.statement)
+            }
+        }
+    }
+
+    /** Vue .vue <script> 顶层注入一次 `const { t: \$t } = useI18n()`（镜像 ensureVueI18nImported 的 const 分支）。 */
+    private fun injectVueSfcScriptConst(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+        statement: String,
+    ) {
+        val scriptContent = getScriptContent(processor, psiFile) ?: return
+        val injector = processor.injector
+        if (injector.scopeHasDestructuredCall(scriptContent, callee = "useI18n", destructureNameFrom = "t", destructureAlias = "\$t")) {
+            return
+        }
+        val constNode = processor.createStringExpressionNode(statement, psiFile)
+        // 保持 ensureVueI18nImported 的投放：优先在最后一个 import 之后；无 import 时首位 + 换行。
+        val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
+        if (importStatements.isEmpty()) {
+            val added = scriptContent.addAfter(constNode, scriptContent.firstChild)
+            scriptContent.addAfter(processor.createStringExpressionNode("\n", psiFile), added)
+        } else {
+            val lastImport = importStatements.last()
+            lastImport.parent.addAfter(constNode, lastImport)
+        }
+    }
+
+    /** 给一组函数体首行注入 [statement]（从后往前插入，避免 offset 偏移；镜像 ensure* 的逐体注入）。 */
+    private fun injectIntoFunctionBodies(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+        funcs: List<JSFunction>,
+        statement: String,
+    ) {
+        for (func in funcs.asReversed()) {
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.any { it.text.contains("useTranslation") || it.text.contains("useI18n") }) continue
+            val hookStmt = processor.createJSStatementFromText("\n    $statement", func)
+            val openingBrace = body.firstChild ?: continue
+            body.addAfter(hookStmt, openingBrace)
+        }
+    }
+
+    /** Vue TSX 组件（defineComponent / setup / 函数式组件）函数体注入（镜像 ensureVueComponentI18nInjected）。 */
+    private fun injectIntoVueComponents(
+        processor: com.pan.extractor.I18nProcessor,
+        psiFile: PsiElement,
+        statement: String,
+    ) {
+        val file = psiFile.containingFile ?: return
+        val targetBodies = mutableListOf<JSBlockStatement>()
+        for (cand in ProjectStructure.findVueComponentFunctions(file)) {
+            when {
+                cand is JSFunction -> PsiTreeUtil.findChildOfType(cand, JSBlockStatement::class.java)?.let(targetBodies::add)
+                cand is JSCallExpression -> {
+                    val setupProp = PsiTreeUtil.findChildrenOfType(cand, JSProperty::class.java)
+                        .firstOrNull { it.name == "setup" } ?: continue
+                    val setupFunc = PsiTreeUtil.findChildOfType(setupProp, JSFunction::class.java)
+                    val body: JSBlockStatement =
+                        (if (setupFunc != null) findDirectBlockIn(setupFunc) else null)
+                            ?: findDirectBlockIn(setupProp) ?: continue
+                    targetBodies.add(body)
+                }
+            }
+        }
+        for (body in targetBodies.asReversed()) {
+            val existingVars = PsiTreeUtil.findChildrenOfType(body, JSVarStatement::class.java)
+            if (existingVars.any { it.text.contains("useI18n") }) continue
+            val hookStmt = processor.createJSStatementFromText("\n    $statement", body)
+            val openingBrace = body.firstChild ?: continue
+            body.addAfter(hookStmt, openingBrace)
+        }
+    }
+
+    /** 从 [ancestor] 的第一层直接后代路径里取 JSBlockStatement（避免深入 setup 内嵌回调）。 */
+    private fun findDirectBlockIn(ancestor: PsiElement): JSBlockStatement? {
+        for (child in ancestor.children) {
+            if (child is JSBlockStatement) return child
+            val found = findDirectBlockIn(child)
+            if (found != null) return found
+        }
+        return null
     }
 }

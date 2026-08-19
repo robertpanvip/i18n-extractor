@@ -43,16 +43,44 @@ data class RewritePlan(
     val params: List<Pair<String, String>> = emptyList(),
 )
 
-/** import 计划：为文件注入 i18n import / hook / 全局 \$t 别名。 */
+/** 函数体注入目标类型（对应各框架的组件 / hook 定位方式）。 */
+enum class HookTarget {
+    /** Vue `.vue` 的 <script> 顶层注入一次（SFC 级 useI18n）。 */
+    VUE_SFC_SCRIPT,
+    /** Vue 纯 TS 中 use 开头的自定义 hook 函数体。 */
+    VUE_HOOK,
+    /** Vue 纯 TS(X) 组件（defineComponent / setup / 函数式组件）函数体。 */
+    VUE_COMPONENT,
+    /** React 组件函数 + 自定义 hook 函数体。 */
+    REACT,
+    /** Solid 组件函数 + 自定义 hook 函数体。 */
+    SOLID,
+}
+
+/** 单个函数体注入描述：去哪找目标 + 注入什么语句。 */
+data class HookInjectPlan(
+    /** 目标定位方式。 */
+    val target: HookTarget,
+    /** 注入的函数体首行语句（不含引导缩进，如 `const { t } = useTranslation();`）。 */
+    val statement: String,
+)
+
+/** import 计划：为文件注入 i18n import / hook / 全局 \$t 别名（纯数据描述，Rewrite 阶段消费）。 */
 data class ImportPlan(
     /** 目标文件。 */
     val fileName: String,
     /** 需要追加的 import 语句（已去重判断过）。 */
     val imports: List<String> = emptyList(),
-    /** 需要追加的别名语句（如 `const \$t = i18n.global.t;`）。 */
+    /** 需要追加的全局别名语句（如 `const \$t = i18n.global.t;`）。 */
     val aliases: List<String> = emptyList(),
+    /** 需要追加的函数体注入。 */
+    val hooks: List<HookInjectPlan> = emptyList(),
     /** 框架注入类型（vue / react / solid / generic）。 */
     val frameworkId: String = "generic",
+    /** true：imports/aliases 注入到 `.vue` 的 <script> 内容；false：注入到文件顶部。 */
+    val injectIntoSfcScript: Boolean = false,
+    /** true：先把已有 `i18n.t` / `i18n.tc` 调用改写为 `t`（React i18n.t 回落用）。 */
+    val rewriteI18nTCallsToT: Boolean = false,
 )
 
 /** 资源计划：翻译资源（JSON / TS 对象）的合并写回。 */

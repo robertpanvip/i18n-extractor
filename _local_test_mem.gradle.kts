@@ -3,8 +3,8 @@
 allprojects {
     afterEvaluate {
         tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
-            maxHeapSize = "1500m"
-            jvmArgs("-Xms512m", "-Xmx1500m", "-XX:MaxMetaspaceSize=384m", "-XX:+UseSerialGC")
+            maxHeapSize = "700m"
+            jvmArgs("-Xms256m", "-Xmx700m", "-XX:MaxMetaspaceSize=256m", "-XX:+UseSerialGC")
             forkEvery = 0
         }
     }
