@@ -6,13 +6,11 @@ package com.pan.extractor.staticparser
  * 把 [com.pan.extractor.TsFileEditor] 中**纯文本级**的静态解析逻辑抽离到此处，
  * 形成独立的、可纯单元测试的解析模块（不依赖 IntelliJ PSI / Application）。
  *
- * 职责拆分（5 个对象，各司其职）：
- *  - [ExportAnchorFinder]：定位 export 对象字面量起点（6 种 export 模式）+ 推断缩进；
- *  - [StringUnquoter]：字符串字面量反引用（\n \t \uXXXX \xXX 等转义）；
- *  - [NumericLiteralParser]：数字字面量解析（进制/BigInt/科学计数/分隔符）；
- *  - [TemplateLiteralEvaluator]：模板字面量带静态插值 + 字符串拼接求值；
- *  - [StaticObjectParser]：对象字面量结构解析（属性/key/数组元素拆分）；
- *  - [StaticValueParser]：静态值编排入口（字面量 + 一元 + 类型断言）。
+ * 职责：
+ *  - [StaticObjectParser.parseTsExportedObject]：从 TS/JS 文件文本找到 export default/const/module.exports
+ *    对应的对象字面量，抽取其中的静态 KV（嵌套 Map / List / 字面量）；
+ *  - [StaticObjectParser.parseObjectLiteralBody]：解析对象字面量内部的静态 KV；
+ *  - [StaticValueParser.tryParseStaticValue]：把单个表达式片段解析为静态值（覆盖所有字面量形态）。
  *
  * 写回（合并 + 重新生成 + 写盘）仍在 [com.pan.extractor.resource] 层；
  * 本包只做"读"侧的静态识别，是 Resource 层与 LocaleMessages 的共享底层。
@@ -34,28 +32,102 @@ data class TsExportedObjectInfo(
 )
 
 /**
- * 对象字面量结构解析器（无状态，线程安全）。
- *
- * 职责：解析 { ... } 内部的属性/key/数组元素拆分。
- * export 起点定位委托 [ExportAnchorFinder]；字符串反引用委托 [StringUnquoter]。
+ * 静态对象字面量解析器（无状态，线程安全）。
+ * 迁移自 [com.pan.extractor.TsFileEditor] 的解析方法群（行为 1:1，TsFileEditor 改为委托）。
  */
 object StaticObjectParser {
+
+    private data class ExportAnchor(
+        val objBraceStart: Int,
+        val exportType: String,
+        val indentUnit: String,
+    )
 
     /**
      * 从 TS/JS 文件内容中找到 export default / export const / module.exports 对应的
      * 对象字面量，并抽取其中的静态 key-value。
      */
     fun parseTsExportedObject(text: String): TsExportedObjectInfo? {
-        val anchor = ExportAnchorFinder.find(text) ?: return null
-        val objEnd = findBalancedCloseBrace(text, anchor.objBraceStart) ?: return null
-        val objBody = text.substring(anchor.objBraceStart, objEnd)
+        val (objStart, exportType, indentUnit) = findExportedObjectStart(text) ?: return null
+        val objEnd = findBalancedCloseBrace(text, objStart) ?: return null
+        val objBody = text.substring(objStart, objEnd)
         val staticKV = parseObjectLiteralBody(objBody)
         return TsExportedObjectInfo(
-            objectRange = anchor.objBraceStart until objEnd,
+            objectRange = objStart until objEnd,
             staticKV = staticKV,
-            exportType = anchor.exportType,
-            indentUnit = anchor.indentUnit,
+            exportType = exportType,
+            indentUnit = indentUnit,
         )
+    }
+
+    private fun findExportedObjectStart(text: String): ExportAnchor? {
+        // 模式 1：export default {
+        run {
+            val re = Regex("""export\s+default\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.range.last
+                return ExportAnchor(braceIdx, "default", inferIndent(text, braceIdx))
+            }
+        }
+        // 模式 2：export default <name> = {
+        run {
+            val re = Regex("""export\s+default\s+[\w$][\w$]*\s*=\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
+                return ExportAnchor(braceIdx, "default", inferIndent(text, braceIdx))
+            }
+        }
+        // 模式 3：export const <name> = { / export let / export var（含可选类型标注）
+        run {
+            val re = Regex("""export\s+(const|let|var)\s+([\w$][\w$]*)\s*(?::[^=\n]+)?\s*=\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val name = m.groupValues[2]
+                val eqLocal = m.value.lastIndexOf('=')
+                var i = m.range.first + eqLocal + 1
+                while (i < text.length && text[i] != '{') i++
+                if (i >= text.length) return@run
+                return ExportAnchor(i, "named:$name", inferIndent(text, i))
+            }
+        }
+        // 模式 4：module.exports = {
+        run {
+            val re = Regex("""module\.exports\s*=\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
+                return ExportAnchor(braceIdx, "module.exports", inferIndent(text, braceIdx))
+            }
+        }
+        // 模式 5：exports = {
+        run {
+            val re = Regex("""(^|;)\s*exports\s*=\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
+                return ExportAnchor(braceIdx, "exports", inferIndent(text, braceIdx))
+            }
+        }
+        // 模式 6：export default defineXxx({ ... }) —— i18n 常用包裹函数
+        run {
+            val re = Regex("""export\s+default\s+([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*\(\s*\{""")
+            val m = re.find(text)
+            if (m != null) {
+                val braceIdx = m.value.indexOfLast { it == '{' } + m.range.first
+                return ExportAnchor(braceIdx, "default:${m.groupValues[1]}", inferIndent(text, braceIdx))
+            }
+        }
+        return null
+    }
+
+    private fun inferIndent(text: String, braceIdx: Int): String {
+        var lineStart = braceIdx
+        while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
+        val wsPrefix = text.substring(lineStart, braceIdx).takeWhile { it == ' ' || it == '\t' }
+        if (wsPrefix.isNotEmpty()) return wsPrefix
+        return "  "
     }
 
     /** 找到与 [openIdx] 处 `{` 配对的闭合 `}`（含字符串/注释/嵌套）；不配对返回 null。 */
@@ -104,7 +176,8 @@ object StaticObjectParser {
             stripped.substring(1, stripped.length - 1)
         } else stripped
         val result = LinkedHashMap<String, Any?>()
-        for (prop in splitTopLevelProperties(body)) {
+        val props = splitTopLevelProperties(body)
+        for (prop in props) {
             val (k, vExpr) = parseOneProperty(prop) ?: continue
             val value = StaticValueParser.tryParseStaticValue(vExpr) ?: continue
             result[k] = value
@@ -212,7 +285,7 @@ object StaticObjectParser {
                 (inner.startsWith("\"") && inner.endsWith("\"")) ||
                         (inner.startsWith("'") && inner.endsWith("'")) ||
                         (inner.startsWith("`") && inner.endsWith("`")) ->
-                    StringUnquoter.unquote(inner)
+                    unquoteString(inner)
                 inner.toIntOrNull() != null -> inner
                 inner.toDoubleOrNull() != null -> inner
                 else -> null
@@ -221,7 +294,7 @@ object StaticObjectParser {
         if ((keyPart.startsWith("\"") && keyPart.endsWith("\"")) ||
             (keyPart.startsWith("'") && keyPart.endsWith("'")) ||
             (keyPart.startsWith("`") && keyPart.endsWith("`"))) {
-            return StringUnquoter.unquote(keyPart)
+            return unquoteString(keyPart)
         }
         if (keyPart.matches(UNICODE_IDENTIFIER_RE)) return keyPart
         return null
@@ -230,8 +303,62 @@ object StaticObjectParser {
     /** 允许任意 Unicode 字母开头的裸 key 标识符（中日韩/法语/德语/俄语/阿拉伯语等）。 */
     private val UNICODE_IDENTIFIER_RE = Regex("""[\p{L}_$][\p{L}\p{N}\p{M}_$]*""")
 
-    /** 去掉字符串两侧成对的引号并解析转义（委托 [StringUnquoter]）。 */
-    fun unquoteString(s: String): String = StringUnquoter.unquote(s)
+    /** 去掉字符串两侧成对的引号并解析转义。 */
+    fun unquoteString(s: String): String {
+        if (s.length < 2) return s
+        val inner = s.substring(1, s.length - 1)
+        val sb = StringBuilder(inner.length)
+        var i = 0
+        while (i < inner.length) {
+            val c = inner[i]
+            if (c == '\\' && i + 1 < inner.length) {
+                when (val nc = inner[i + 1]) {
+                    'n' -> sb.append('\n')
+                    't' -> sb.append('\t')
+                    'r' -> sb.append('\r')
+                    'b' -> sb.append('\b')
+                    'f' -> sb.append('\u000c')
+                    '0' -> sb.append('\u0000')
+                    '\\' -> sb.append('\\')
+                    '\'' -> sb.append('\'')
+                    '"' -> sb.append('"')
+                    '`' -> sb.append('`')
+                    'u' -> {
+                        // \uXXXX 形式的 Unicode 转义
+                        if (i + 6 <= inner.length) {
+                            val hex = inner.substring(i + 2, i + 6)
+                            val code = hex.toIntOrNull(16)
+                            if (code != null) {
+                                sb.append(Char(code))
+                                i += 6
+                                continue
+                            }
+                        }
+                        sb.append('u'); i += 2
+                    }
+                    'x' -> {
+                        // \xXX 形式的十六进制转义
+                        if (i + 4 <= inner.length) {
+                            val hex = inner.substring(i + 2, i + 4)
+                            val code = hex.toIntOrNull(16)
+                            if (code != null) {
+                                sb.append(Char(code))
+                                i += 4
+                                continue
+                            }
+                        }
+                        sb.append('x'); i += 2
+                    }
+                    else -> sb.append(nc)
+                }
+                i += 2
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return sb.toString()
+    }
 
     /** 拆分数组字面量顶层元素（按逗号切，处理嵌套与字符串）。 */
     fun splitTopLevelArrayElements(body: String): List<String> {
