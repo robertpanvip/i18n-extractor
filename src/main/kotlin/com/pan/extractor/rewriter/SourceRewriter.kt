@@ -70,8 +70,14 @@ object VueRewriter : SourceRewriter {
      * @param isJSX JSX 属性（大括号表达式形态）
      * @param isDirective Vue 指令（`:title` 等，不加 `:` 前缀）
      */
-    fun rewriteAttribute(attrValue: XmlAttributeValue, newText: String, isJSX: Boolean, isDirective: Boolean) {
+    fun rewriteAttribute(attrValue: XmlAttributeValue, newText: String, isJSX: Boolean, isDirective: Boolean, isAngular: Boolean = false) {
         val attr = attrValue.parent as? XmlAttribute ?: return
+        if (isAngular) {
+            // Angular 属性插值 `title="{{ 'key' | translate }}"`：双花括号包裹管道表达式，
+            // 不加 Vue 的 `:` 前缀、也不用 JSX 的 `{ }` 单花括号。
+            attr.setValue("{{ $newText }}")
+            return
+        }
         var quote = if (attrValue.text.startsWith('"')) "" else "'"
         val prefix = if (isJSX || isDirective) "" else ":"
         var endQuote = quote

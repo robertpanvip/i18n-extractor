@@ -364,6 +364,7 @@ class I18nAnalyzer(
         val originalText = attrValue.value.trim()
         val isJSX = ProjectStructure.isJSX(attrValue) ||
             framework.getSiteForm(attrValue) == SiteForm.SVELTE_BINDING
+        val isAngular = framework.getSiteForm(attrValue) == SiteForm.ANGULAR_BINDING
         if (isJSX && I18nPsiTools.isBlock(originalText)) return
         if (originalText.isEmpty()) return
         if (!contract.containsTargetLanguage(originalText, SiteKind.ATTRIBUTE)) return
@@ -406,6 +407,7 @@ class I18nAnalyzer(
                 newText = newText,
                 isJSX = isJSX,
                 isDirective = I18nPsiTools.isVueDirective(attr.name),
+                isAngular = isAngular,
             )
         }
     }

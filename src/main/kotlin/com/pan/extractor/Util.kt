@@ -153,4 +153,6 @@ object Util {
     fun isSolid(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSolid(element)
 
     fun isSvelte(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSvelte(element)
+
+    fun isAngular(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isAngular(element)
 }

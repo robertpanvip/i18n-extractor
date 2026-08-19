@@ -33,6 +33,8 @@ object ProjectStructure {
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
     private val SOLID_KEY_RE = Regex(""""solid-js"\s*:\s*"""")
     private val SVELTE_KEY_RE = Regex(""""svelte"\s*:\s*"""")
+    private val NGX_TRANSLATE_KEY_RE = Regex(""""@ngx-translate/core"\s*:\s*"""")
+    private val ANGULAR_CORE_KEY_RE = Regex(""""@angular/core"\s*:\s*""")
 
     /**
      * 提取 package.json 中所有依赖段（dependencies/devDependencies/peerDependencies/optionalDependencies）
@@ -134,6 +136,7 @@ object ProjectStructure {
         // （`(hasReact, hasVue, hasSolid, parsed)`），新字段须追加在最后，否则会错位。
         val parsed: Boolean,
         val hasSvelte: Boolean,
+        val hasAngular: Boolean,
     )
 
     /**
@@ -142,8 +145,9 @@ object ProjectStructure {
      *
      * parsed=false 表示根本没找到 package.json，调用方需要 fallback 到其他策略。
      */
+    private val sixFalse = PackageDeps(false, false, false, false, false, false)
     private fun readPackageJsonDependencies(psiFile: PsiFile): PackageDeps {
-        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return PackageDeps(false, false, false, false, false)
+        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return sixFalse
         while (dir != null) {
             val pkgFile = dir.findChild("package.json")
             if (pkgFile != null) {
@@ -156,14 +160,15 @@ object ProjectStructure {
                         hasSolid = deps.contains(SOLID_KEY_RE),
                         parsed = true,
                         hasSvelte = deps.contains(SVELTE_KEY_RE),
+                        hasAngular = deps.contains(NGX_TRANSLATE_KEY_RE) || deps.contains(ANGULAR_CORE_KEY_RE),
                     )
                 } catch (e: Exception) {
-                    PackageDeps(false, false, false, false, false)
+                    sixFalse
                 }
             }
             dir = dir.parent
         }
-        return PackageDeps(false, false, false, false, false)
+        return sixFalse
     }
 
     /**
@@ -235,6 +240,29 @@ object ProjectStructure {
             readPackageJsonDependencies(containingFile)
         return if (parsed) {
             hasSvelte && !hasVue && !hasSolid
+        } else {
+            false
+        }
+    }
+
+    /**
+     * 判断当前元素是否处于 Angular 上下文（面向 `ngx-translate`）。
+     *
+     * 判定逻辑（与 React/Solid/Svelte 的"依赖像素级"判定一致）：
+     * 依赖 `@angular/core` 或 `@ngx-translate/core`，且不依赖 vue / solid-js / svelte
+     * → 按 Angular 处理（.ts / .html 等）。找不到 package.json → false。
+     */
+    fun isAngular(element: PsiElement): Boolean {
+        val containingFile = element.containingFile ?: return false
+        if (containingFile.name.endsWith(".vue", ignoreCase = true) ||
+            containingFile.name.endsWith(".svelte", ignoreCase = true)
+        ) {
+            return false
+        }
+        val (hasReact, hasVue, hasSolid, parsed, hasSvelte, hasAngular) =
+            readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasAngular && !hasVue && !hasSolid && !hasSvelte
         } else {
             false
         }
