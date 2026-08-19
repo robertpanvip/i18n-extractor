@@ -119,15 +119,15 @@ class I18nProcessor(
      * =============== React 版本 needInjectReactGlobalDollarT ===============
      * - true：run() 调 ensureI18nInstanceImported(isVue=false) 时，会在
      *   `import { getI18n } from 'react-i18next'` 之后追加
-     *   `const \$t = getI18n().t;`（并去重保证只出现一次）。
+     *   `const t = getI18n().t;`（并去重保证只出现一次，React 约定统一用 t）。
      *
      * 预判："React 项目 + 既没有 React 组件也没有自定义 hook（纯工具函数）"
      * → 旧实现是切 `tFunctionName="i18n.t"` + 注入 `import i18n from 'i18next'`，
-     *   用户觉得长调用 i18n.t('key') 麻烦，要求统一写 $t('key')：
-     *   仍然保持 tFunctionName 为默认 \$t，只需要在顶部写 2 行代码：
+     *   用户觉得长调用 i18n.t('key') 麻烦，要求统一写短 t('key')：
+     *   保持 tFunctionName 为 "t"，在顶部写 2 行代码：
      *       import { getI18n } from 'react-i18next';
-     *       const $t = getI18n().t;
-     *   之后文件里所有替换仍然是短写法 \$t('xxx')，与 Vue/组件/Hook 内部一致。
+     *       const t = getI18n().t;
+     *   之后文件里所有替换都是短写法 t('xxx')，与组件/Hook 内部一致。
      */
     private var needInjectGlobalDollarT: Boolean = false
     private var needInjectReactGlobalDollarT: Boolean = false
@@ -142,10 +142,10 @@ class I18nProcessor(
     private var needInjectSolidGlobalDollarT: Boolean = false
 
     /**
-     * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 \$t 别名：
-     * 顶部注入 `import { getI18n } from 'react-i18next'` + `const \$t = getI18n().t;`，
-     * 并把文件里已有的 i18n.t('...') 调用改写为 \$t('...')（否则 i18n 标识符会悬空）。
-     * 命中后在 collect 阶段锁死 tFunctionName=\$t。
+     * React i18n.t 语义 + locale 初始化不可用 → 统一回退 getI18n 的 t 别名：
+     * 顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t;`，
+     * 并把文件里已有的 i18n.t('...') 调用改写为 t('...')（否则 i18n 标识符会悬空）。
+     * 命中后在 collect 阶段锁死 tFunctionName="t"。
      */
     private var reactI18nTFallbackToDollarT: Boolean = false
     private var reactFallbackChecked: Boolean = false
@@ -536,9 +536,9 @@ class I18nProcessor(
                     // React / Solid 文件统一短 t；老 i18n.t 调用保留不管，新提取用 t
                     tFunctionName = "t"
                 } else if (reactFallsBackToGetI18n()) {
-                    // 非 React 场景且 i18n.t 语义 + locale 不可用 → 回退 getI18n 的 $t 别名
+                    // React 场景且 i18n.t 语义 + locale 不可用 → 回退 getI18n 的 t 别名
                     reactI18nTFallbackToDollarT = true
-                    tFunctionName = "\$t"
+                    tFunctionName = "t"
                 } else {
                     tFunctionName = "i18n.t"
                 }

@@ -466,9 +466,9 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         val dollarTText: String? = when {
             isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
             // React $t 别名：locale → i18n.t；回退 → getI18n().t
-            // 注入名必须与 collect 阶段锁死的 tFunctionName 一致
-            // （needInjectReactGlobalDollarT → "t"；reactI18nTFallbackToDollarT → "$t"），
-            // 否则新提取 `t('...')` 或改写后的 `$t('...')` 会出现运行时未定义（P0）。
+            // React $t 别名：注入名必须与 collect 阶段锁死的 tFunctionName 一致
+            // （needInjectReactGlobalDollarT/fallback → "t"；React 约定统一用 t 而非 $t），
+            // 否则新提取 `t('...')` 或改写后的调用会出现运行时未定义（P0）。
             !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
                 if (reactLocaleImport != null) "const ${processor.tFunctionName} = i18n.t;\n"
                 else "const ${processor.tFunctionName} = getI18n().t;\n"
@@ -550,7 +550,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         } else {
             // —— React: 注入到文件顶部
             // 旧模式：只有 import i18n from 'i18next'（dollarTText=null，因为 tFunctionName 是 i18n.t）
-            // 新模式：import { getI18n } from 'react-i18next' + const $t = getI18n().t;
+            // 新模式：import { getI18n } from 'react-i18next' + const t = getI18n().t;（React 约定用 t）
             val containingFile = psiFile.containingFile ?: return
             val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
             val dollarTAlreadyAliased = hasReactGlobalDollarTAliased(containingFile)
@@ -704,12 +704,12 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     }
 
     /**
-     * React i18n.t 语义 + locale 不可用（回退 getI18n 的 \$t 别名）时，
-     * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `$t('...')`，
-     * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const \$t = getI18n().t`）。
-     * 必须在 WriteCommandAction 内调用；老调用改写为 $t 与 collect 阶段锁死的 tFunctionName=$t 保持一致。
+     * React i18n.t 语义 + locale 不可用（回退 getI18n 的 t 别名）时，
+     * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `t('...')`，
+     * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const t = getI18n().t`）。
+     * 必须在 WriteCommandAction 内调用；老调用改写为 t 与 collect 阶段锁死的 tFunctionName=t 保持一致。
      *
-     * 从 I18nProcessor 搬入：纯 React 逻辑（把 i18n.t/i18n.tc 调用改写为 $t），
+     * 从 I18nProcessor 搬入：纯 React 逻辑（把 i18n.t/i18n.tc 调用改写为 t），
      * project 通过 [processor] 引用获取。
      */
     internal fun rewriteExistingI18nTCallsToDollarT(root: PsiElement) {
@@ -719,7 +719,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
             if (method !is JSReferenceExpression) continue
             val text = method.text
             if (text != "i18n.t" && text != "i18n.tc") continue
-            val newExpr = JSChangeUtil.tryCreateExpressionFromText(processor.project, "\$t", null, false) ?: continue
+            val newExpr = JSChangeUtil.tryCreateExpressionFromText(processor.project, "t", null, false) ?: continue
             method.replace(newExpr.psi)
         }
     }
