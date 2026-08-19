@@ -8,8 +8,12 @@ import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.JSVarStatement
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
@@ -378,8 +382,18 @@ object SymbolAnalyzer {
         val text = decl.text
         val src = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
             ?.groupValues?.get(1)?.trim()?.lowercase() ?: return false
-        if (src !in I18N_FRAMEWORK_MODULES) return false
-        return importLocalNameMatches(text, localName)
+        if (src in I18N_FRAMEWORK_MODULES) {
+            return importLocalNameMatches(text, localName)
+        }
+        // 非框架模块：可能是 barrel / re-export 中转（`@/i18n` 再 `export { t } from 'vue-i18n'`）。
+        // 只在可能与 i18n 相关的名字上做代价有限的跟随，避免对每个普通 import 都扫描全项目。
+        if (localName !in TRANSLATION_LIKE_NAMES &&
+            localName !in I18N_HOOK_OR_FACTORY_NAMES &&
+            localName !in CONVENTIONAL_INSTANCE_NAMES
+        ) {
+            return false
+        }
+        return importIsBarrelReExportFromFramework(decl, localName)
     }
 
     /** 判断 [importText] 是否把某个 specifier 绑定成了本地名 [name]（含 `X as <name>` 别名与直接 `X`）。 */
@@ -397,4 +411,113 @@ object SymbolAnalyzer {
     /** 供测试 / 调试：判断模块名是否属于已知 i18n 框架。 */
     fun isI18nFrameworkModule(moduleName: String): Boolean =
         moduleName.trim().lowercase() in I18N_FRAMEWORK_MODULES
+
+    // ───────────────────────────────────────────────
+    // barrel / re-export 跟随
+    // ───────────────────────────────────────────────
+
+    /** 从非框架 import 出发，跟随 barrel / re-export 链，判定其是否最终来自 i18n 框架。 */
+    private fun importIsBarrelReExportFromFramework(decl: ES6ImportDeclaration, localName: String): Boolean {
+        val srcMatch = Regex("""from\s*['"]([^'"]+)['"]""").find(decl.text)
+            ?.groupValues?.get(1)?.trim() ?: return false
+        val target = resolveSourceFile(decl.containingFile, srcMatch) ?: return false
+        return fileReExportsNameFromFramework(target, localName, mutableSetOf())
+    }
+
+    /**
+     * 把一个模块引用字符串解析为项目内的 PSI 文件。
+     * 支持 `./` / `../`（相对声明文件目录）与 `@/`（相对源码根）形态；
+     * 失败时回退到全目录后缀扫描（覆盖别名差异分发到不同源码根的项目）。
+     */
+    private fun resolveSourceFile(baseFile: PsiFile?, rawSrc: String): PsiFile? {
+        val project = baseFile?.project ?: return null
+        val norm = rawSrc.trim()
+        if (norm.lowercase() in I18N_FRAMEWORK_MODULES) return null // 框架包不是本地文件
+        val baseDir = baseFile?.virtualFile?.parent
+        val suffixes: List<String>
+        if (norm.startsWith("./") || norm.startsWith("../")) {
+            val rel = norm.removePrefix("./")
+            suffixes = listOf(rel, "$rel.ts", "$rel.ts.tsx", "$rel.ts.ts", "$rel.ts.js")
+            val local = baseDir?.findFileByRelativePath(rel)
+            if (local != null) return toPsi(project, local)
+        } else {
+            val rel = norm.removePrefix("@/")
+            suffixes = listOf(rel, "$rel.ts", "$rel.tsx", "$rel.js", "$rel/index.ts")
+        }
+        // 后缀扫描（覆盖 @/ 与 './' 的多种扩展名差异）
+        for (suffix in suffixes) {
+            var file: VirtualFile? = null
+            file = ReadAction.compute<VirtualFile?, Throwable> {
+                findSiblingSuffix(project, suffix)
+            } ?: continue
+            return toPsi(project, file)
+        }
+        return toPsi(project, baseDir?.findFileByRelativePath(suffixes.first()) ?: return null) as? PsiFile
+    }
+
+    private fun toPsi(project: Project, vf: VirtualFile?): PsiFile? =
+        if (vf == null) null else PsiManager.getInstance(project).findFile(vf)
+
+    /** 从项目内容根递归查找以 [suffix]（如 `src/i18n.ts`）结尾的文件。 */
+    private fun findSiblingSuffix(project: Project, suffix: String): VirtualFile? {
+        val contentRoots = com.intellij.openapi.roots.ProjectRootManager.getInstance(project).contentRoots
+        for (root in contentRoots) {
+            walkFind(root, suffix)?.let { return it }
+        }
+        return null
+    }
+
+    private fun walkFind(dir: VirtualFile, suffix: String): VirtualFile? {
+        if (!dir.isDirectory || !dir.isValid) return null
+        for (child in dir.children) {
+            if (child.isDirectory) {
+                walkFind(child, suffix)?.let { return it }
+            } else if (child.path.endsWith(suffix)) {
+                return child
+            }
+        }
+        return null
+    }
+
+    /**
+     * 判定 barrel 文件是否把 [localName] re-export 自 i18n 框架（可跨一层或多层）。
+     * 覆盖三种形态：
+     *  1. `export { localName } from '<framework>'`（具名直转）；
+     *  2. `export * from '<framework>'`（星号全量）；
+     *  3. `export { localName }`（先 import 自框架再具名导出）—— 递归跟随其 import 源。
+     */
+    private fun fileReExportsNameFromFramework(
+        barrel: PsiFile,
+        localName: String,
+        visited: MutableSet<String>,
+    ): Boolean {
+        val key = barrel.virtualFile?.path ?: barrel.name
+        if (!visited.add(key)) return false
+        val text = barrel.text
+        val name = Regex.escape(localName)
+
+        val namedFrom = Regex("""export\s*\{[^}]*\b$name\b[^}]*\}\s*from\s*['"]([^'"]+)['"]""")
+        val starFrom = Regex("""export\s*\*\s*from\s*['"]([^'"]+)['"]""")
+
+        // 形态 1 / 2：直接 re-export
+        for (m in namedFrom.findAll(text) + starFrom.findAll(text)) {
+            val src = m.groupValues[1].trim()
+            if (src.lowercase() in I18N_FRAMEWORK_MODULES) return true
+            val nested = resolveSourceFile(barrel, src) ?: continue
+            if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+        }
+
+        // 形态 3：`export { localName }`（无 from）—— 该名字需在本文件 import 自框架
+        if (Regex("""export\s*\{[^}]*\b$name\b[^}]*\}""").containsMatchIn(text)) {
+            for (imp in PsiTreeUtil.findChildrenOfType(barrel, ES6ImportDeclaration::class.java)) {
+                if (!importLocalNameMatches(imp.text, localName)) continue
+                val impSrc = Regex("""from\s*['"]([^'"]+)['"]""").find(imp.text)
+                    ?.groupValues?.get(1)?.trim() ?: continue
+                if (impSrc.lowercase() in I18N_FRAMEWORK_MODULES) return true
+                val nested = resolveSourceFile(barrel, impSrc) ?: continue
+                if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+            }
+        }
+        return false
+    }
 }
