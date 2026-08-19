@@ -261,12 +261,12 @@ UndoManager
 
 ## TODO
 
-- [ ] P0：多文件 ChangePlan 原子 apply
-- [ ] P0：统一 IntelliJ Command 组织修改
-- [ ] P0：Apply 前完成所有可失败操作的 validation
-- [ ] P0：失败时避免留下部分修改
-- [ ] P1：增加 multi-file failure regression test
-- [ ] P1：增加 code + import + JSON 同时修改测试
+- [x] P0：多文件 ChangePlan 原子 apply —— `orchestrator.I18nExtractionOrchestrator.apply` 以单 WriteCommandAction 收敛 import/$t/骨架/资源写回
+- [x] P0：统一 IntelliJ Command 组织修改 —— `MergeApplier.apply(…, edtRunner=null)` 所有写入在当前 command 内同步执行
+- [x] P0：Apply 前完成所有可失败操作的 validation —— `MergeApplier.apply` 首行调用 `ChangeValidator.validateAllModifiableSites`
+- [x] P0：失败时避免留下部分修改 —— 单 command 整体回滚；`testApplyThrowsBeforeAnyWriteWhenSiteInvalid` 验证校验失败前不产生任何写入
+- [x] P1：增加 multi-file failure regression test —— `MergeApplierTest.testApplyThrowsBeforeAnyWriteWhenSiteInvalid`（校验失败零写入）
+- [x] P1：增加 code + import + JSON 同时修改测试 —— `MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`（代码+import+资源同组 undo/redo 通过）
 
 > 注意：真正的“事务”不能只依赖异常捕获。应尽可能在进入 Write Action 前完成路径、pointer、resource、import collision 等验证；对于无法提前验证的操作，需要设计回滚或恢复策略。
 
@@ -1048,6 +1048,12 @@ class I18nProcessor(
       注入业务已收敛至 `planner.ImportPlanner + rewriter.ImportRewriter`（`injectForFramework` 只做转发）。
 - [x] `JsStringCollector` / `I18nImportInjector` 不再接收 `I18nProcessor` 整个对象
       —— 二者统一以窄接口 `I18nProcessorContract` 注入，反向依赖收敛为接口契约能力。
-- [ ] `extract()` 全部自动修改进入同一个 `WriteCommandAction`
+- [x] `extract()` 全部自动修改进入同一个 `WriteCommandAction`
+      —— 多文件路径 `orchestrator.I18nExtractionOrchestrator.apply` 把「import 注入 + \$t 替换 + 骨架合并 +
+      资源写回」统一收敛进【单个】`WriteCommandAction.runWriteCommandAction(project){…}`，且 `MergeApplier.apply`
+      传 `edtRunner=null`（所有 PSI 写入在当前 command 内同步执行，无异步 EDT 破坏原子性）；
+      单文件路径 `I18nProcessor.runWithUndo` 同样以 `CommandProcessor + runWriteCommandAction` 包裹一次 commit。
+      收集阶段（`extract/collect`）保持只读、在 Write Action 之外，符合「分析不改、Plan 只描述、Apply 才写」原则。
+      证据：`MergeApplierTest.testSingleCommandCodeImportResourceUndoRedo`（代码+import+资源同组 undo/redo 通过）。
 - [x] 现有 `I18nProcessorTest / SolidI18nProcessorTest / I18nVueTemplatePsi2Test / I18nRegexFallbackBoundaryTest / I18nImportInjectorMoreTest` 全绿
       —— 另有 `I18nImportsTest / MergeApplierTest / ReactI18nProcessorTest / VueI18nProcessorTest` 一并验证无回归。
