@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.pan.extractor.model.ExtractionContext
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.JSTokenTypes
@@ -428,7 +429,8 @@ class I18nProcessor @JvmOverloads constructor(
      * 【中央调度入口 · Phase A：收集】执行 Scanner/Analyzer 段，返回待应用改写列表。
      * 兼容壳：`collect()` 转发到这里。调用方（如 UI）在 collect 之后可中断进入合并计划确认。
      */
-    fun extract(): MutableList<CollectedChange> = orchestrator.collect(this)
+    fun extract(context: ExtractionContext = ExtractionContext(project, psiFile)): MutableList<CollectedChange> =
+        orchestrator.collect(this, context)
 
     /** 兼容入口：等价于 [extract]。旧调用方（MergeApplier / 测试）继续使用。 */
     fun collect(): MutableList<CollectedChange> = extract()
@@ -558,8 +560,8 @@ class I18nProcessor @JvmOverloads constructor(
      * 【中央调度入口 · Phase B：应用】执行 Rewriter/Injector 段，改写源码 + 注入 import/hook。
      * 兼容入口：`run()` 转发到这里。
      */
-    fun apply() {
-        orchestrator.run(this)
+    fun apply(context: ExtractionContext = ExtractionContext(project, psiFile)) {
+        orchestrator.run(this, context)
     }
 
     /** 兼容入口：等价于 [apply]。旧调用方（runWithUndo / 测试）继续使用。 */

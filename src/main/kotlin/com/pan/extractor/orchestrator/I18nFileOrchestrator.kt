@@ -7,6 +7,7 @@ import com.pan.extractor.I18nProcessor
 import com.pan.extractor.ReactI18nextStrategy
 import com.pan.extractor.SolidI18nStrategy
 import com.pan.extractor.VueI18nStrategy
+import com.pan.extractor.model.ExtractionContext
 import com.intellij.psi.PsiFile
 
 /**
@@ -33,18 +34,18 @@ open class I18nFileOrchestrator {
     }
 
     /** 编排 [I18nProcessor.collect]：返回待应用改写列表，与旧实现 1:1。 */
-    open fun collect(processor: I18nProcessor): MutableList<I18nProcessor.CollectedChange> {
+    open fun collect(processor: I18nProcessor, context: ExtractionContext): MutableList<I18nProcessor.CollectedChange> {
         processor.resetState()
         // Bug 2: 语言包/翻译资源文件本身跳过整个提取与注入流程。
-        val containingFile = processor.rootElement.containingFile
+        val containingFile = context.psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
             return processor.pendingChanges
         }
 
-        processor.framework = I18nFrameworkRegistry.detect(processor.rootElement.containingFile ?: processor.rootElement)
+        processor.framework = I18nFrameworkRegistry.detect(context.psiFile.containingFile ?: context.psiFile)
         processor.tFunctionName = processor.framework.tFunctionName
 
-        val f = containingFile ?: (processor.rootElement as? PsiFile)
+        val f = containingFile ?: (context.psiFile as? PsiFile)
         // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
         if (f != null && processor.framework is ReactI18nextStrategy && processor.tFunctionName == "\$t") {
             processor.tFunctionName = "t"
@@ -63,15 +64,15 @@ open class I18nFileOrchestrator {
 
         processor.collectExistingTKeys()
         // collectExistingTKeys 可能基于现有调用把 tFunctionName 改成 i18n.t —— 不要覆盖回去。
-        val changes = processor.collectFromPsi(processor.rootElement)
+        val changes = processor.collectFromPsi(context.psiFile)
         processor.pendingChanges = changes
         return processor.pendingChanges
     }
 
     /** 编排 [I18nProcessor.run]：执行改写 + 按框架注入，与旧实现 1:1。 */
-    open fun run(processor: I18nProcessor) {
+    open fun run(processor: I18nProcessor, context: ExtractionContext) {
         // Bug 2（双重保险）：翻译资源文件不做任何 import/hook 注入
-        val containingFile = processor.rootElement.containingFile
+        val containingFile = context.psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
 
         processor.pendingChanges.forEach { if (it.siteId !in processor.blockedSiteIds) it.run() }
@@ -79,7 +80,7 @@ open class I18nFileOrchestrator {
         // 注入分支按框架拆到 I18nImportInjector，本层只做派发。
         processor.injector.injectForFramework(
             processor = processor,
-            psiFile = processor.rootElement,
+            psiFile = context.psiFile,
             framework = processor.framework,
             decision = I18nImportInjector.InjectionDecision(
                 needInjectGlobalDollarT = processor.needInjectGlobalDollarT,
