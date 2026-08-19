@@ -145,7 +145,7 @@ object I18nExtractionOrchestrator {
 
     private fun firstProcessorFile(processors: List<I18nProcessor>): PsiFile? =
         processors.firstOrNull()?.let { p ->
-            (p.targetPsiFile as? PsiFile) ?: p.targetPsiFile.containingFile
+            (p.rootElement as? PsiFile) ?: p.rootElement.containingFile
         }
 
     // ─────────────────────────────────────────────────────────────

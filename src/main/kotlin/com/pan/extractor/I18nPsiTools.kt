@@ -37,7 +37,7 @@ import com.intellij.psi.xml.XmlTokenType
  * 依赖实例状态的方法，因此被安全地抽到此处。I18nProcessor 内保留同名的一行委托，
  * 保证 class 内外的调用点与行为 100% 不变。
  */
-internal object I18nPsiTools {
+object I18nPsiTools {
 
     fun isMustache(text: String): Boolean {
         return text.contains("{{") && text.contains("}}")
@@ -430,24 +430,37 @@ internal object I18nPsiTools {
         com.pan.extractor.analyzer.TranslationAnalyzer.isTranslationCall(call)
 
     /**
+     * 字符串字面量在其 t/$t/i18n.t 调用上下文中的语义分档（由 [detectTSemantic] 返回），
+     * 收集/替换阶段据不同档位选择策略：
+     *   - NONE：完全不在任何 t 调用里 → 正常提取 + 替换为 $t('key')
+     *   - DIRECT_ARG：直接作为某条 t(...) 的第一个参数 → 完全跳过（已翻译）
+     *   - OUTER_T_EXPRESSION：嵌套在外层 t 调用的参数表达式里（如三元分支内的字符串）→
+     *     仍提取到 extractedStrings，但替换时只把字面量换成 'key'，不再包一层 $t，避免双重 $t
+     *   - INSIDE_UNKNOWN：位于无法证明来源的调用参数内部 → 保守跳过（零误改）
+     *
+     * 原定义于 [I18nProcessor]，随「薄 Orchestrator」收敛迁移至本工具类（与 [detectTSemantic] 同处）。
+     */
+    enum class TSem { NONE, DIRECT_ARG, OUTER_T_EXPRESSION, INSIDE_UNKNOWN }
+
+    /**
      * 【新判定模型】字符串字面量在其外层调用上下文中的位置（提取 / 替换策略依据）。
      *
      * 委托 [com.pan.extractor.analyzer.TranslationAnalyzer.contextOf] 并映射回兼容的
-     * [I18nProcessor.TSem]：新增 [I18nProcessor.TSem.INSIDE_UNKNOWN]——字面量位于
+     * [I18nPsiTools.TSem]：新增 [I18nPsiTools.TSem.INSIDE_UNKNOWN]——字面量位于
      * 无法证明来源的调用参数内部时，调用方应保守跳过（既不提取也不改写，零误改）。
      */
-    fun detectTSemantic(stringExpr: JSLiteralExpression): I18nProcessor.TSem {
+    fun detectTSemantic(stringExpr: JSLiteralExpression): I18nPsiTools.TSem {
         return when (com.pan.extractor.analyzer.TranslationAnalyzer.contextOf(stringExpr)) {
-            com.pan.extractor.analyzer.StringContext.DIRECT_TRANSLATION_ARG -> I18nProcessor.TSem.DIRECT_ARG
-            com.pan.extractor.analyzer.StringContext.INSIDE_TRANSLATION_EXPRESSION -> I18nProcessor.TSem.OUTER_T_EXPRESSION
-            com.pan.extractor.analyzer.StringContext.INSIDE_UNKNOWN_CALL -> I18nProcessor.TSem.INSIDE_UNKNOWN
-            com.pan.extractor.analyzer.StringContext.NONE -> I18nProcessor.TSem.NONE
+            com.pan.extractor.analyzer.StringContext.DIRECT_TRANSLATION_ARG -> I18nPsiTools.TSem.DIRECT_ARG
+            com.pan.extractor.analyzer.StringContext.INSIDE_TRANSLATION_EXPRESSION -> I18nPsiTools.TSem.OUTER_T_EXPRESSION
+            com.pan.extractor.analyzer.StringContext.INSIDE_UNKNOWN_CALL -> I18nPsiTools.TSem.INSIDE_UNKNOWN
+            com.pan.extractor.analyzer.StringContext.NONE -> I18nPsiTools.TSem.NONE
         }
     }
 
     /** 旧名兼容：DIRECT_ARG（已翻译直接参数）与 INSIDE_UNKNOWN（无法证明）都跳过处理。 */
     fun isTransformedCalled(stringExpr: JSLiteralExpression): Boolean =
-        detectTSemantic(stringExpr).let { it == I18nProcessor.TSem.DIRECT_ARG || it == I18nProcessor.TSem.INSIDE_UNKNOWN }
+        detectTSemantic(stringExpr).let { it == I18nPsiTools.TSem.DIRECT_ARG || it == I18nPsiTools.TSem.INSIDE_UNKNOWN }
 
     /**
      * 提取 XmlText 中的纯文本（过滤注释、空白符、换行符）

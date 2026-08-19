@@ -36,7 +36,7 @@ object ChangeValidator {
                 invalid += "${ref.originalMessage}@${ref.containingFile?.name}（processor 索引 ${ref.processorIndex} 缺失）"
                 return
             }
-            val site = proc.collectedSites.firstOrNull { it.id == ref.siteId }
+            val site = proc.analyzer.collectedSites.firstOrNull { it.id == ref.siteId }
             if (site == null) {
                 invalid += "${ref.originalMessage}@${ref.containingFile?.name}（site ${ref.siteId} 缺失）"
                 return

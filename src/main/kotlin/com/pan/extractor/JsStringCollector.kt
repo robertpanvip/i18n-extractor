@@ -235,7 +235,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
      *                        但替换时只替换字符串字面量为 'key'，不再包一层 $t('key')，
      *                        避免出现双重 $t：$t(isPinned ? $t(...) : $t(...))。
      */
-    fun detectTSemantic(stringExpr: JSLiteralExpression): I18nProcessor.TSem =
+    fun detectTSemantic(stringExpr: JSLiteralExpression): I18nPsiTools.TSem =
         I18nPsiTools.detectTSemantic(stringExpr)
 
     /** 旧名兼容：其他地方只需要「DIRECT_ARG 就跳过」——保留 true/false 语义：
@@ -402,7 +402,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
 
         // ── 先检查是否处于 i18n 翻译调用作用域（三态判定）──
         val tSem = detectTSemantic(ele)
-        if (tSem == I18nProcessor.TSem.DIRECT_ARG || tSem == I18nProcessor.TSem.INSIDE_UNKNOWN) {
+        if (tSem == I18nPsiTools.TSem.DIRECT_ARG || tSem == I18nPsiTools.TSem.INSIDE_UNKNOWN) {
             // DIRECT_ARG：字符串直接是 $t('x') 的参数 → 已完成过 i18n，跳过
             // INSIDE_UNKNOWN：位于无法证明来源的调用参数内部 → 保守跳过，零误改（名字不是语义证明）
             return
@@ -413,7 +413,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         // Bug4 修复：外层祖先有 $t(...)，但参数是表达式不是字符串字面量，
         //  内层字符串不能再包一层 $t(...)，否则出现 $t(isPinned ? $t(...) : $t(...))。
         //  正确：直接把字符串字面量替换为 'key' 文本 → $t(isPinned ? 'key1' : 'key2')
-        val newExprText: String = if (tSem == I18nProcessor.TSem.OUTER_T_EXPRESSION) {
+        val newExprText: String = if (tSem == I18nPsiTools.TSem.OUTER_T_EXPRESSION) {
             val quote = if (raw.startsWith("'")) "'" else "\""
             "$quote$key$quote"
         } else {

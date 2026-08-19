@@ -194,7 +194,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val extractedStr = processor.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         val existingStr = processor.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         if (processor.extractedStrings.isNotEmpty()) {
-            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.pendingChanges.size}")
+            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.analyzer.pendingChanges.size}")
         }
     }
 
@@ -673,12 +673,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val file = myFixture.configureByText("test.ts", "")
         val processor = I18nProcessor(project, file)
 
-        assertTrue(processor.containsTargetLanguage("你好"))
-        assertFalse(processor.containsTargetLanguage("hello"))
-        assertTrue(processor.containsTargetLanguage("hello你好"))
-        assertFalse(processor.containsTargetLanguage(""))
-        assertFalse(processor.containsTargetLanguage("123"))
-        assertTrue(processor.containsTargetLanguage("一"))
+        assertTrue(I18nPsiTools.containsTargetLanguage("你好"))
+        assertFalse(I18nPsiTools.containsTargetLanguage("hello"))
+        assertTrue(I18nPsiTools.containsTargetLanguage("hello你好"))
+        assertFalse(I18nPsiTools.containsTargetLanguage(""))
+        assertFalse(I18nPsiTools.containsTargetLanguage("123"))
+        assertTrue(I18nPsiTools.containsTargetLanguage("一"))
     }
 
     /**
@@ -714,22 +714,22 @@ class I18nProcessorTest : BasePlatformTestCase() {
         // 基本用法
         assertEquals(
             "\$t('你好')",
-            processor.buildTFunctionExpr("你好", "{}")
+            processor.jsCollector.buildTFunctionExpr("你好", "{}")
         )
 
         // 带参数
         assertEquals(
             "\$t('你好{0}', { \"0\": name })",
-            processor.buildTFunctionExpr("你好{0}", "{ \"0\": name }")
+            processor.jsCollector.buildTFunctionExpr("你好{0}", "{ \"0\": name }")
         )
 
         // 含单引号的文本应转义
-        val result = processor.buildTFunctionExpr("它's", "{}")
+        val result = processor.jsCollector.buildTFunctionExpr("它's", "{}")
         assertTrue("Should escape single quote, got: $result", result.contains("\\'"))
 
         // 含换行符的文本应使用反引号模板字符串（修复：普通字符串跨行导致的解析截断 bug）
         val newlineMsg = "1. 隔离库存\n2. 在线筛选\n3. 客户沟通"
-        val newlineResult = processor.buildTFunctionExpr(newlineMsg, "{}")
+        val newlineResult = processor.jsCollector.buildTFunctionExpr(newlineMsg, "{}")
         assertTrue(
             "含换行符应使用反引号，got: $newlineResult",
             newlineResult.startsWith("\$t(`") && newlineResult.endsWith("`)")

@@ -3,6 +3,9 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
+### JVM dump（测试 OOM 产生的堆转储，禁止提交）###
+*.hprof
+*.jfr
 
 ### IntelliJ IDEA ###
 .idea/modules.xml

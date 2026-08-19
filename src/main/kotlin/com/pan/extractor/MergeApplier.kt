@@ -46,7 +46,7 @@ object MergeApplier {
     ): Pair<List<AffixGroupCandidate>, List<DigitGroupCandidate>> {
         val siteRefs = mutableListOf<SiteRef>()
         for ((pIdx, proc) in processors.withIndex()) {
-            for (site in proc.collectedSites) {
+            for (site in proc.analyzer.collectedSites) {
                 siteRefs += SiteRef(
                     processorIndex = pIdx,
                     siteId = site.id,
@@ -105,20 +105,20 @@ object MergeApplier {
         for (g in mergePlan.selectedAffix) {
             if (g.isExactDuplicate) continue
             for (v in g.variants) for (ref in v.sites)
-                processors[ref.processorIndex].blockedSiteIds.add(ref.siteId)
+                processors[ref.processorIndex].analyzer.blockedSiteIds.add(ref.siteId)
         }
         for (g in mergePlan.selectedDigit) {
             for (ps in g.perSites)
-                processors[ps.site.processorIndex].blockedSiteIds.add(ps.site.siteId)
+                processors[ps.site.processorIndex].analyzer.blockedSiteIds.add(ps.site.siteId)
         }
 
         // ② 逐文件常规写入：import 注入 + 未被阻塞句替换为 $t
         indicator?.text = "写入 \$t：import 注入 + 硬编码替换（跳过被合并句）"
         val writeTotal = processors.size
         processors.forEachIndexed { idx, processor ->
-            val pf = (processor.targetPsiFile as? PsiFile)
+            val pf = (processor.rootElement as? PsiFile)
             indicator?.text2 = pf?.name
-                ?: (processor.targetPsiFile.containingFile?.name ?: "文件 ${idx + 1}")
+                ?: (processor.rootElement.containingFile?.name ?: "文件 ${idx + 1}")
             indicator?.fraction = 0.02 + (idx.toDouble() / writeTotal.coerceAtLeast(1)) * 0.58
             indicator?.checkCanceled()
             val r = { processor.run() }
@@ -136,7 +136,7 @@ object MergeApplier {
             .buildRewritePlans(mergePlan, processors, finalExtracted)
         for (plan in skeletonPlans) {
             val proc = processors[plan.processorIndex]
-            val site = proc.collectedSites.firstOrNull { it.id == plan.siteId } ?: continue
+            val site = proc.analyzer.collectedSites.firstOrNull { it.id == plan.siteId } ?: continue
             val root = site.replaceRootPointer?.element ?: continue
             if (!root.isValid) continue
             val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
@@ -173,7 +173,7 @@ object MergeApplier {
         // 整理 finalExtracted / 写回入口文件时，删除被完全承载的整句 key。
         val messageToSiteIds = HashMap<String, MutableSet<String>>()  // 原句 trim → 命中该句的所有 siteId
         for (proc in processors) {
-            for (site in proc.collectedSites) {
+            for (site in proc.analyzer.collectedSites) {
                 messageToSiteIds.getOrPut(site.originalMessage.trim()) { mutableSetOf() }.add(site.id)
             }
         }
@@ -239,7 +239,7 @@ object MergeApplier {
             val (_, keyInObject) = placeholderMap[k] ?: error("object key missing for $k")
             keyInObject to vExpr
         })
-        val callExprText = proc.buildTExprForRawText(
+        val callExprText = I18nPsiTools.buildTExprForRawText(
             rewrittenSkeleton.trim(), paramsObjStr, site.isVue, site.isReact,
             skeletonKeyOverride = rewrittenSkeletonKey.trim()
         )
@@ -252,7 +252,7 @@ object MergeApplier {
             rootPsi is com.intellij.psi.xml.XmlAttributeValue -> {
                 val attr = rootPsi.parent as? com.intellij.psi.xml.XmlAttribute
                 val jsx = ProjectStructure.isJSX(rootPsi)
-                val vDir = proc.isVueDirective(attr?.name ?: "")
+                val vDir = I18nPsiTools.isVueDirective(attr?.name ?: "")
                 val prefix = if (jsx || vDir) "" else ":"
                 if (attr != null) {
                     // 非 JSX（Vue 普通/指令属性）：直接写入表达式文本即可，XmlAttributeValue

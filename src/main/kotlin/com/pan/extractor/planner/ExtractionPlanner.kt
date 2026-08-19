@@ -86,13 +86,13 @@ object ExtractionPlanner {
             if (g.isExactDuplicate) continue
             for (v in g.variants) for (ref in v.sites) {
                 val proc = procs.getOrNull(ref.processorIndex) ?: continue
-                val site = proc.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
+                val site = proc.analyzer.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
                 val diffKey = v.diff.trim()
                 val diffWillBeKey = com.pan.extractor.Util.containsTargetLanguage(v.diff)
                 if (diffWillBeKey) diffKeys.putIfAbsent(diffKey, v.diff)
                 // 差分占位表达式：中文→`$t('中文')`（纯文本生成，无 PSI 副作用）；否则字面量
                 val paramsExpr = if (diffWillBeKey) {
-                    proc.buildTExprForRawText(v.diff, "{}", site.isVue, site.isReact)
+                    com.pan.extractor.I18nPsiTools.buildTExprForRawText(v.diff, "{}", site.isVue, site.isReact)
                 } else {
                     com.pan.extractor.planner.SkeletonPlanner.renderLiteralValue(v.diff)
                 }

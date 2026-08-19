@@ -389,17 +389,17 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
 
         // 第一次 collect
         processor.collect()
-        val sites1 = processor.collectedSites.map { it.id }
+        val sites1 = processor.analyzer.collectedSites.map { it.id }
         val extracted1 = LinkedHashMap(processor.extractedStrings)
         val existing1 = LinkedHashMap(processor.existingStrings)
-        val siteId1 = processor.collectedSites.map { it.id }.toSet()
+        val siteId1 = processor.analyzer.collectedSites.map { it.id }.toSet()
         assertEquals("重复执行前 site 数应为 2", 2, sites1.size)
 
         // 第二次 collect：结果必须与第一次完全一致（不累积、不重复追加）
         processor.collect()
         assertEquals(
             "重复 collect 不应累积 collectedSites",
-            sites1, processor.collectedSites.map { it.id }
+            sites1, processor.analyzer.collectedSites.map { it.id }
         )
         assertTrue(
             "重复 collect 不应重复提取 extractedStrings",
@@ -410,11 +410,11 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
             "重复 collect 不应改变 existingStrings",
             processor.existingStrings.keys == existing1.keys
         )
-        assertEquals("重复 collect 后 siteId 应仍从 S1 开始稳定生成", siteId1, processor.collectedSites.map { it.id }.toSet())
+        assertEquals("重复 collect 后 siteId 应仍从 S1 开始稳定生成", siteId1, processor.analyzer.collectedSites.map { it.id }.toSet())
 
         // 第三次同幂等校验
         processor.collect()
-        assertEquals("三次 collect 后 site 数仍应为 2", 2, processor.collectedSites.size)
+        assertEquals("三次 collect 后 site 数仍应为 2", 2, processor.analyzer.collectedSites.size)
         assertEquals("三次 collect 后 extracted key 不变", extracted1.keys, processor.extractedStrings.keys)
     }
 
@@ -430,12 +430,12 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
 
         processor.collect()
-        val pending1 = processor.pendingChanges.size
+        val pending1 = processor.analyzer.pendingChanges.size
         assertTrue("第一次 collect 应产生 pendingChanges", pending1 > 0)
 
         processor.collect()
-        assertEquals("重复 collect 后 pendingChanges 应被重置到同一大小", pending1, processor.pendingChanges.size)
-        assertEquals("blockedSiteIds 应被清空", 0, processor.blockedSiteIds.size)
+        assertEquals("重复 collect 后 pendingChanges 应被重置到同一大小", pending1, processor.analyzer.pendingChanges.size)
+        assertEquals("blockedSiteIds 应被清空", 0, processor.analyzer.blockedSiteIds.size)
     }
 
     /**

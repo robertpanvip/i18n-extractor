@@ -132,7 +132,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         processor.collect()
 
         // 手工构造：只让 site1 进入数字组，site2/site3 保持独立
-        val sites = processor.collectedSites.toList()
+        val sites = processor.analyzer.collectedSites.toList()
         val site1: com.pan.extractor.model.ExtractionSite = sites.firstOrNull { it.originalMessage == "权限0755" }
             ?: throw IllegalStateException("未找到 site1")
         val site1Ref = SiteRef(
@@ -468,7 +468,7 @@ class MergeApplierTest : BasePlatformTestCase() {
             .first { it.processorIndex == 1 }
         assertTrue("应能定位到 B.vue 的待改写站点", targetSite.processorIndex == 1)
         val targetProc = processors[targetSite.processorIndex]
-        val targetCollected = targetProc.collectedSites.first { it.id == targetSite.siteId }
+        val targetCollected = targetProc.analyzer.collectedSites.first { it.id == targetSite.siteId }
         val targetElement = targetCollected.replaceRootPointer?.element!!
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             targetElement.delete()

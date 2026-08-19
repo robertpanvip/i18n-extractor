@@ -35,38 +35,38 @@ open class I18nFileOrchestrator {
 
     /** 编排 [I18nProcessor.collect]：返回待应用改写列表，与旧实现 1:1。 */
     open fun collect(processor: I18nProcessor, context: ExtractionContext): MutableList<I18nProcessor.CollectedChange> {
-        processor.resetState()
+        processor.analyzer.resetState()
         // Bug 2: 语言包/翻译资源文件本身跳过整个提取与注入流程。
         val containingFile = context.psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
-            return processor.pendingChanges
+            return processor.analyzer.pendingChanges
         }
 
-        processor.framework = I18nFrameworkRegistry.detect(context.psiFile.containingFile ?: context.psiFile)
-        processor.tFunctionName = processor.framework.tFunctionName
+        processor.analyzer.framework = I18nFrameworkRegistry.detect(context.psiFile.containingFile ?: context.psiFile)
+        processor.tFunctionName = processor.analyzer.framework.tFunctionName
 
         val f = containingFile ?: (context.psiFile as? PsiFile)
         // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
-        if (f != null && processor.framework is ReactI18nextStrategy && processor.tFunctionName == "\$t") {
+        if (f != null && processor.analyzer.framework is ReactI18nextStrategy && processor.tFunctionName == "\$t") {
             processor.tFunctionName = "t"
         }
-        if (f != null && processor.framework.detectGlobalDollarTNeeded(f)) {
+        if (f != null && processor.analyzer.framework.detectGlobalDollarTNeeded(f)) {
             // React/Vue/Solid 纯工具文件注入全局别名标记的预判（见 I18nProcessor 处详注）。
-            when (processor.framework) {
-                is ReactI18nextStrategy -> processor.needInjectReactGlobalDollarT = true
+            when (processor.analyzer.framework) {
+                is ReactI18nextStrategy -> processor.analyzer.needInjectReactGlobalDollarT = true
                 is SolidI18nStrategy -> {
-                    processor.needInjectSolidGlobalDollarT = true
+                    processor.analyzer.needInjectSolidGlobalDollarT = true
                     processor.tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
                 }
-                is VueI18nStrategy -> processor.needInjectGlobalDollarT = true
+                is VueI18nStrategy -> processor.analyzer.needInjectGlobalDollarT = true
             }
         }
 
-        processor.collectExistingTKeys()
+        processor.analyzer.collectExistingTKeys(context.psiFile)
         // collectExistingTKeys 可能基于现有调用把 tFunctionName 改成 i18n.t —— 不要覆盖回去。
-        val changes = processor.collectFromPsi(context.psiFile)
-        processor.pendingChanges = changes
-        return processor.pendingChanges
+        val changes = processor.analyzer.collectFromPsi(context.psiFile)
+        processor.analyzer.pendingChanges = changes
+        return processor.analyzer.pendingChanges
     }
 
     /** 编排 [I18nProcessor.run]：执行改写 + 按框架注入，与旧实现 1:1。 */
@@ -75,18 +75,19 @@ open class I18nFileOrchestrator {
         val containingFile = context.psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
 
-        processor.pendingChanges.forEach { if (it.siteId !in processor.blockedSiteIds) it.run() }
+        val analyzer = processor.analyzer
+        analyzer.pendingChanges.forEach { if (it.siteId !in analyzer.blockedSiteIds) it.run() }
 
         // 注入分支按框架拆到 I18nImportInjector，本层只做派发。
         processor.injector.injectForFramework(
             processor = processor,
             psiFile = context.psiFile,
-            framework = processor.framework,
+            framework = analyzer.framework,
             decision = I18nImportInjector.InjectionDecision(
-                needInjectGlobalDollarT = processor.needInjectGlobalDollarT,
-                needInjectReactGlobalDollarT = processor.needInjectReactGlobalDollarT,
-                needInjectSolidGlobalDollarT = processor.needInjectSolidGlobalDollarT,
-                reactI18nTFallbackToDollarT = processor.reactI18nTFallbackToDollarT,
+                needInjectGlobalDollarT = analyzer.needInjectGlobalDollarT,
+                needInjectReactGlobalDollarT = analyzer.needInjectReactGlobalDollarT,
+                needInjectSolidGlobalDollarT = analyzer.needInjectSolidGlobalDollarT,
+                reactI18nTFallbackToDollarT = analyzer.reactI18nTFallbackToDollarT,
                 tFunctionName = processor.tFunctionName,
                 hasExtractedStrings = processor.extractedStrings.isNotEmpty(),
                 hasExistingStrings = processor.existingStrings.isNotEmpty(),

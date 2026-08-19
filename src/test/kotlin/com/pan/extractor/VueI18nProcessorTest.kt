@@ -2667,11 +2667,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         // 1) sites 确实被采集到
-        val msgs = processor.collectedSites.map { it.originalMessage }
+        val msgs = processor.analyzer.collectedSites.map { it.originalMessage }
         assertTrue("采集到的原句应含 测试1/测试2，实际: $msgs", msgs.contains("测试1") && msgs.contains("测试2"))
 
         // 2) 按 transform() 同款方式构建 SiteRef 并 factorize
-        val siteRefs = processor.collectedSites.map { site ->
+        val siteRefs = processor.analyzer.collectedSites.map { site ->
             SiteRef(
                 processorIndex = 0,
                 siteId = site.id,
@@ -2705,10 +2705,10 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        val msgs = processor.collectedSites.map { it.originalMessage }
+        val msgs = processor.analyzer.collectedSites.map { it.originalMessage }
         assertTrue("采集到的原句应含 测试1/测试2，实际: $msgs", msgs.contains("测试1") && msgs.contains("测试2"))
 
-        val siteRefs = processor.collectedSites.map { site ->
+        val siteRefs = processor.analyzer.collectedSites.map { site ->
             SiteRef(
                 processorIndex = 0,
                 siteId = site.id,
