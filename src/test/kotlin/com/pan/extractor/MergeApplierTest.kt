@@ -662,4 +662,18 @@ class MergeApplierTest : BasePlatformTestCase() {
             .computeFullyConsumedMessages(msgToSites, blocked)
         assertEquals("完全承载的整句应被删除，实际:$consumed", setOf("请选择", "权限不足"), consumed)
     }
+
+    fun testResourceApplierBuildPlanMapsFields() {
+        myFixture.addFileToProject("src/locales/zh.ts", "export default {}")
+        val vf = com.intellij.psi.PsiManager.getInstance(project).findFile(
+            myFixture.findFileInTempDir("src/locales/zh.ts")
+        )?.virtualFile ?: error("缺 zh.ts vf")
+        val plan = com.pan.extractor.resource.ResourceApplier.buildPlan(
+            vf, mapOf("key" to "值"), setOf("旧句"),
+        )
+        assertTrue("targetPath 应指向入口文件，实际:${plan.targetPath}", plan.targetPath.endsWith("src/locales/zh.ts"))
+        assertEquals("format 应由扩展名映射为 ts", "ts", plan.format)
+        assertEquals("entries 应透传", "值", plan.entries["key"])
+        assertTrue("dropKeys 应透传", plan.dropKeys.contains("旧句"))
+    }
 }

@@ -80,20 +80,9 @@ class I18nExtractorAction : AnAction() {
 
         if (mode == OutputDestination.FILE && entryVf != null) {
             val ext = entryVf.extension?.lowercase()
-            val writes: List<Pair<VirtualFile, String>>? = try {
-                when (ext) {
-                    "json" -> TsFileEditor.regenerateJsonFileWithNewJson(entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
-                    "ts", "tsx", "js", "jsx" -> {
-                        // 优先尝试 spread 路由（把新 key 写进 ...common 指向的文件）
-                        val spread = TsFileEditor.regenerateTsFileWithSpreadRouting(project, entryVf, finalFlatJson, dropExistingKeys)
-                        if (spread != null) spread
-                        else TsFileEditor.regenerateTsFileWithNewJson(project, entryVf, finalFlatJson, dropExistingKeys)?.let { listOf(entryVf to it) }
-                    }
-                    else -> null
-                }
-            } catch (t: Throwable) {
-                null
-            }
+            // Resource 层统一写回：组装 ResourcePlan，由 ResourceApplier 按格式分发（json / ts spread / ts）
+            val plan = com.pan.extractor.resource.ResourceApplier.buildPlan(entryVf, finalFlatJson, dropExistingKeys)
+            val writes: List<Pair<VirtualFile, String>>? = com.pan.extractor.resource.ResourceApplier.apply(project, plan)
             if (writes != null) {
                 try {
                     for ((vf, newText) in writes) {
