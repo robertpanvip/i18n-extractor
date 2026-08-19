@@ -611,4 +611,43 @@ class MergeApplierTest : BasePlatformTestCase() {
     }
 
     private fun normalizeWs(s: String) = s.replace("\\s+".toRegex(), " ").trim()
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 4：Planner 纯函数 —— ExtractionPlanner.computeBlockedSiteIds
+    // 不接触 PSI、不写文件，可在任意 fixture（此处空 fixture 即可）上测。
+    // ─────────────────────────────────────────────────────────
+    fun testComputeBlockedSiteIdsCollectsMergeSites() {
+        val a = SiteRef(0, "S1", "全选", null, false, false, 1)
+        val b = SiteRef(0, "S2", "全选", null, false, false, 2)
+        // 公共前后缀组：命中 a、b → 两个都进阻塞
+        val affix = AffixGroupCandidate(
+            id = "AG_1", skeleton = "全选{N0}", prefix = "全选", suffix = "", isExactDuplicate = false,
+            variants = listOf(AffixVariant("菜单", listOf(a))),
+            skeletonKey = "全选{N0}",
+        )
+        // 数字组：命中 c
+        val cSite = SiteRef(1, "S3", "权限0755", null, false, false, 3)
+        val digit = DigitGroupCandidate(
+            id = "DG_1", skeleton = "权限{N0}", digits = listOf(DigitSlot(0)),
+            perSites = listOf(DigitPerSite(cSite, listOf("0755"), true)),
+            selected = true, skeletonKey = "权限{N0}",
+        )
+        val blocked = com.pan.extractor.planner.ExtractionPlanner
+            .computeBlockedSiteIds(ExtractedStringsDialog.MergePlan(listOf(affix), listOf(digit)))
+        assertTrue("合并承载的 affix site 应进阻塞集合，实际:$blocked", blocked.contains("S1"))
+        assertTrue("合并承载的 digit site 应进阻塞集合，实际:$blocked", blocked.contains("S3"))
+    }
+
+    fun testComputeBlockedSiteIdsExcludesExactDuplicate() {
+        val dup = SiteRef(0, "S9", "全选", null, false, false, 9)
+        // 完全相同文本的提示组（isExactDuplicate=true）：不进阻塞，避免自引用
+        val exact = AffixGroupCandidate(
+            id = "AG_EXACT_DUP_1", skeleton = "全选", prefix = "全选", suffix = "", isExactDuplicate = true,
+            variants = listOf(AffixVariant("全选", listOf(dup))),
+            skeletonKey = "全选",
+        )
+        val blocked = com.pan.extractor.planner.ExtractionPlanner
+            .computeBlockedSiteIds(ExtractedStringsDialog.MergePlan(listOf(exact), emptyList()))
+        assertTrue("完全相同文本提示组不应进阻塞集合，实际:$blocked", "S9" !in blocked)
+    }
 }

@@ -99,6 +99,9 @@ object MergeApplier {
         // ① 填 blockedSiteIds：被合并承载的句子不再走普通 $t 单句替换
         //    完全相同文本的提示组（isExactDuplicate）骨架里没有 {N0} 占位，勾选也不做骨架重写，
         //    其站点本就由普通 $t('全选') 单句替换承载，因此既不阻塞也不重写，直接跳过以免自引用。
+        //    （Planner 层决定：由 ExtractionPlanner.computeBlockedSiteIds 纯函数产出，
+        //    见 ExtractionPlan.blockedSiteIds。）
+        val blockedByMerge = com.pan.extractor.planner.ExtractionPlanner.computeBlockedSiteIds(mergePlan)
         for (g in mergePlan.selectedAffix) {
             if (g.isExactDuplicate) continue
             for (v in g.variants) for (ref in v.sites)
@@ -193,19 +196,14 @@ object MergeApplier {
         //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，
         //    才删除该句对应的 key；若仍存在未被合并的独立站点（同名文本），其 key 必须保留。
         indicator?.text = "整理最终翻译资源（移除被合并承载的冗余句子）"
-        val consumedByMerge = HashSet<String>()          // 被合并承载的 siteId
+        // 被合并承载的 siteId 集合由 Planner 层已算出（见 ①，同一份 blockedByMerge）：
+        // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的。
+        val consumedByMerge = blockedByMerge
         val messageToSiteIds = HashMap<String, MutableSet<String>>()  // 原句 trim → 命中该句的所有 siteId
         for (proc in processors) {
             for (site in proc.collectedSites) {
                 messageToSiteIds.getOrPut(site.originalMessage.trim()) { mutableSetOf() }.add(site.id)
             }
-        }
-        for (g in mergePlan.selectedAffix) {
-            if (g.isExactDuplicate) continue   // 提示组不产生骨架，站点不被合并承载
-            for (v in g.variants) for (ref in v.sites) consumedByMerge.add(ref.siteId)
-        }
-        for (g in mergePlan.selectedDigit) {
-            for (ps in g.perSites) consumedByMerge.add(ps.site.siteId)
         }
         // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的
         val fullyConsumedMessages = messageToSiteIds.filterValues { ids -> ids.isNotEmpty() && ids.all { it in consumedByMerge } }.keys
