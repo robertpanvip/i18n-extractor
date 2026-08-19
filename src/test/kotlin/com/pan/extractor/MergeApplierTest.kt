@@ -650,4 +650,16 @@ class MergeApplierTest : BasePlatformTestCase() {
             .computeBlockedSiteIds(ExtractedStringsDialog.MergePlan(listOf(exact), emptyList()))
         assertTrue("完全相同文本提示组不应进阻塞集合，实际:$blocked", "S9" !in blocked)
     }
+
+    fun testComputeFullyConsumedMessagesOnlyFullyBlockedSentences() {
+        val msgToSites = mapOf(
+            "请选择" to setOf("S1", "S2"),   // 全部被合并 → 冗余，应删除
+            "正在加载" to setOf("S3", "S4"), // 仅 S3 被合并 → 保留（有独立站点）
+            "权限不足" to setOf("S5"),        // 全部被合并 → 冗余，应删除
+        )
+        val blocked = setOf("S1", "S2", "S3", "S5")
+        val consumed = com.pan.extractor.planner.ExtractionPlanner
+            .computeFullyConsumedMessages(msgToSites, blocked)
+        assertEquals("完全承载的整句应被删除，实际:$consumed", setOf("请选择", "权限不足"), consumed)
+    }
 }

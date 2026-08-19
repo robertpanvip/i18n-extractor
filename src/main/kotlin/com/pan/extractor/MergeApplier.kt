@@ -196,17 +196,17 @@ object MergeApplier {
         //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，
         //    才删除该句对应的 key；若仍存在未被合并的独立站点（同名文本），其 key 必须保留。
         indicator?.text = "整理最终翻译资源（移除被合并承载的冗余句子）"
-        // 被合并承载的 siteId 集合由 Planner 层已算出（见 ①，同一份 blockedByMerge）：
-        // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的。
-        val consumedByMerge = blockedByMerge
+        // 被合并承载的 siteId 集合由 Planner 层已算出（见 ①，同一份 blockedByMerge）。
+        // 「某原句的所有命中站点全部被合并」这一整句冗余判定也由 Planner 纯函数完成：
+        // 整理 finalExtracted / 写回入口文件时，删除被完全承载的整句 key。
         val messageToSiteIds = HashMap<String, MutableSet<String>>()  // 原句 trim → 命中该句的所有 siteId
         for (proc in processors) {
             for (site in proc.collectedSites) {
                 messageToSiteIds.getOrPut(site.originalMessage.trim()) { mutableSetOf() }.add(site.id)
             }
         }
-        // 只有「该文本的所有命中站点全部被合并」的句子才是真正冗余的
-        val fullyConsumedMessages = messageToSiteIds.filterValues { ids -> ids.isNotEmpty() && ids.all { it in consumedByMerge } }.keys
+        val fullyConsumedMessages = com.pan.extractor.planner.ExtractionPlanner
+            .computeFullyConsumedMessages(messageToSiteIds, blockedByMerge)
         // 供写回入口文件时清理历史整句 key（Bug：zh.ts 整句 key 与骨架 key 重复）
         dropExistingKeysOut?.addAll(fullyConsumedMessages)
         val iter = finalExtracted.entries.iterator()

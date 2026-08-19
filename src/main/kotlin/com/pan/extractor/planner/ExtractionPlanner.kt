@@ -39,4 +39,22 @@ object ExtractionPlanner {
         }
         return blocked
     }
+
+    /**
+     * 计算「被完全合并承载」的**整句原句 trim 文本**集合（对应资源清理：写回入口文件 / 整理
+     * finalExtracted 时删除这些整句 key，Bug：zh.ts 整句 key 与骨架 key 重复）。
+     *
+     * 以「站点」粒度判定，而不是按文本值：只有某个原句的**所有**命中站点都进了
+     * [blockedSiteIds]（被合并承载）时，该句才是真正冗余的；若仍存在未被合并的独立站点
+     * （同名文本），其 key 必须保留（MergeApplier ⑤ 语义 1:1）。
+     *
+     * @param messageToSiteIds 原句 trim → 命中该句的所有 siteId（由调用方从 collectedSites 聚拢）。
+     */
+    fun computeFullyConsumedMessages(
+        messageToSiteIds: Map<String, Set<String>>,
+        blockedSiteIds: Set<String>,
+    ): Set<String> =
+        messageToSiteIds
+            .filterValues { ids -> ids.isNotEmpty() && ids.all { it in blockedSiteIds } }
+            .keys
 }
