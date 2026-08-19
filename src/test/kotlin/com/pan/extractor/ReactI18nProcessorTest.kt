@@ -32,6 +32,50 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * §架构验证：用户选「react-intl」时，只需 ReactIntlStrategy 一个策略文件即可生效——
+     * 检测（I18nFrameworkRegistry）→ 调用表达式（CallExpressionStrategy.buildCallExpression）
+     * → 注入计划（buildImportPlan）全链路应生成 react-intl 调用形态，且不破坏默认 i18next。
+     */
+    fun testReactIntlLibraryGeneratesFormatMessage() {
+        val settings = com.pan.extractor.ui.I18nSettings.getInstance()
+        val original = settings.reactLibrary()
+        try {
+            settings.setReactLibrary(com.pan.extractor.ui.ReactLibrary.REACT_INTL)
+            val file = myFixture.configureByText(
+                "App.tsx",
+                """
+                import React from 'react';
+                export default function App() {
+                    return <div title="提示信息">你好</div>
+                }
+                """.trimIndent()
+            )
+
+            val processor = I18nProcessor(project, file)
+            processor.collect()
+            processor.runWithUndo()
+
+            val resultText = file.text
+            val compact = resultText.replace("\\s+".toRegex(), "")
+            assertTrue(
+                "react-intl 应注入 useIntl 并解构 formatMessage, got:\n$resultText",
+                compact.contains("import{useIntl}from'react-intl'") &&
+                    compact.contains("const{formatMessage}=useIntl()")
+            )
+            assertTrue(
+                "react-intl 调用形态应为 formatMessage({ id: 'key' }), got:\n$resultText",
+                compact.contains("formatMessage({id:")
+            )
+            assertFalse(
+                "react-intl 不应出现 react-i18next 的 t('key') 形态, got:\n$resultText",
+                compact.contains("const{t}=useTranslation()")
+            )
+        } finally {
+            settings.setReactLibrary(original)
+        }
+    }
+
+    /**
      * 与 VueI18nProcessorTest 一致：支持带路径（src/xxx.ts）文件名的配置。
      * configureByText 不接受含 "/" 文件名会抛 Invalid file name，因此先
      * addFileToProject 再 configureFromExistingVirtualFile。

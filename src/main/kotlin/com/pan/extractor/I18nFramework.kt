@@ -43,7 +43,8 @@ interface I18nFramework :
     ImportStrategy,
     BootstrapStrategy,
     ImportBuildStrategy,
-    ScanStrategy
+    ScanStrategy,
+    CallExpressionStrategy
 
 /**
  * 能力 1 — [DetectionStrategy]：框架检测。
@@ -304,6 +305,39 @@ interface ScanStrategy {
 }
 
 /**
+ * 能力 9 — [CallExpressionStrategy]：翻译调用「表达式」的组装。
+ *
+ * §react-intl 收敛点：原 [com.pan.extractor.JsStringCollector.buildTFunctionExpr] 把翻译调用
+ * **硬编码**成 `fn('key'[, params])` 形态——函数名 + 裸字符串首参。这无法承载 react-intl 的
+ * `formatMessage({ id: 'key' }, values)`（首参是对象描述符而非裸字符串），属于「表达式生成」
+ * 未被策略化。本能力把"如何把 key + 参数对象拼成调用表达式"下沉为策略自身实现：
+ *
+ *  - 默认（Vue / react-i18next / Solid）沿用历史拼法 `fn('key'[params])`，行为 1:1；
+ *  - react-intl 覆盖为 `formatMessage({ id: 'key' }, values)`，从而**只用策略文件**就能切换调用形态。
+ *
+ * 该接口紧邻 [TranslationCallStrategy] 的 `tFunctionName` 语义：默认形态即用它做函数名，
+ * 但首参结构差异由本能力承载——这正是"函数名 vs 调用形态"的拆分。
+ */
+interface CallExpressionStrategy {
+    /**
+     * 把翻译 key 与参数对象组装成完整调用表达式文本（不含调用方的引号/转义，key 已按引号类型包装）。
+     *
+     * @param fn 已确定的翻译函数名（如 `t` / `$t` / `formatMessage`）。
+     * @param keyLiteral 已按引号类型包装好的 key 字面量（如 `'你好'` 或 `` `你好` ``）。
+     * @param paramsLiteral 参数对象字面量（可能为 `{}`）。
+     * @return 完整调用表达式，如 `t('你好')`、`t('你好', { "0": x })`、
+     *         `formatMessage({ id: '你好' })`、`formatMessage({ id: '你好' }, { "0": x })`。
+     */
+    fun buildCallExpression(fn: String, keyLiteral: String, paramsLiteral: String): String {
+        return if (paramsLiteral.trim().replace("\\s+".toRegex(), "") == "{}") {
+            "$fn($keyLiteral)"
+        } else {
+            "$fn($keyLiteral, $paramsLiteral)"
+        }
+    }
+}
+
+/**
  * 框架策略注册表。按优先级匹配首个命中的策略，无命中回退到 [GenericStrategy]。
  *
  * [detect] 委托给现有 [Util.isVue] / [Util.isReact] / [Util.isSolid]，
@@ -317,6 +351,11 @@ object I18nFrameworkRegistry {
         // 注册顺序即优先级顺序；detect 按此顺序首个 matches 命中即返回。
         register(VueI18nStrategy)
         register(SolidI18nStrategy)
+        // react-intl 与 react-i18next 共存：两者都靠 Util.isReact 识别，靠用户设置
+        // （React 多语言库 → react-intl）区分。注册顺序放 react-i18next 之前，
+        // 使「选了 react-intl」时 detect 优先命中 ReactIntlStrategy；默认 i18next 时
+        // ReactIntlStrategy.matches 恒 false → 落到 ReactI18nextStrategy。
+        register(ReactIntlStrategy)
         register(ReactI18nextStrategy)
         register(GenericStrategy)
     }

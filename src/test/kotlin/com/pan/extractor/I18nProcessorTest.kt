@@ -717,22 +717,22 @@ class I18nProcessorTest : BasePlatformTestCase() {
         // 基本用法
         assertEquals(
             "\$t('你好')",
-            processor.jsCollector.buildTFunctionExpr("你好", "{}")
+            processor.jsCollector.buildTFunctionExpr(GenericStrategy, "你好", "{}")
         )
 
         // 带参数
         assertEquals(
             "\$t('你好{0}', { \"0\": name })",
-            processor.jsCollector.buildTFunctionExpr("你好{0}", "{ \"0\": name }")
+            processor.jsCollector.buildTFunctionExpr(GenericStrategy, "你好{0}", "{ \"0\": name }")
         )
 
         // 含单引号的文本应转义
-        val result = processor.jsCollector.buildTFunctionExpr("它's", "{}")
+        val result = processor.jsCollector.buildTFunctionExpr(GenericStrategy, "它's", "{}")
         assertTrue("Should escape single quote, got: $result", result.contains("\\'"))
 
         // 含换行符的文本应使用反引号模板字符串（修复：普通字符串跨行导致的解析截断 bug）
         val newlineMsg = "1. 隔离库存\n2. 在线筛选\n3. 客户沟通"
-        val newlineResult = processor.jsCollector.buildTFunctionExpr(newlineMsg, "{}")
+        val newlineResult = processor.jsCollector.buildTFunctionExpr(GenericStrategy, newlineMsg, "{}")
         assertTrue(
             "含换行符应使用反引号，got: $newlineResult",
             newlineResult.startsWith("\$t(`") && newlineResult.endsWith("`)")

@@ -29,6 +29,23 @@ enum class OutputDestination(val label: String) {
 }
 
 /**
+ * React 项目使用的多语言库（决定命中 React 时启用哪个策略）。
+ *  - [I18NEXT]：react-i18next（默认，`t('key')` + `{{0}}` 占位）。
+ *  - [REACT_INTL]：react-intl（`formatMessage({ id: 'key' })` + ICU `{0}` 占位）。
+ */
+enum class ReactLibrary(val label: String) {
+    I18NEXT("react-i18next（默认）"),
+    REACT_INTL("react-intl");
+
+    companion object {
+        fun safeValueOf(raw: String?): ReactLibrary = when (raw?.trim()) {
+            "REACT_INTL" -> REACT_INTL
+            else -> I18NEXT
+        }
+    }
+}
+
+/**
  * 插件全局设置（应用级，跨项目共享）。
  * 目前存“目标语言集合”与“输出去向”（默认每次询问）。
  */
@@ -141,6 +158,14 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
     fun setFoldDisplayLanguage(id: String) {
         state.foldDisplayLanguage = if (LanguageRegistry.byId(id) != null) id else DEFAULT_LANG
     }
+
+    /** React 项目使用的多语言库（默认 react-i18next，向后兼容）。 */
+    fun reactLibrary(): ReactLibrary = ReactLibrary.safeValueOf(state.reactLibrary)
+
+    /** 更新 React 多语言库。 */
+    fun setReactLibrary(lib: ReactLibrary) {
+        state.reactLibrary = lib.name
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
@@ -154,4 +179,5 @@ class I18nSettingsState {
     var customTranslationDirs: MutableList<String> = mutableListOf()
     var vuePlaceholderPrefix: String = "N"
     var foldDisplayLanguage: String = "zh"
+    var reactLibrary: String = ReactLibrary.I18NEXT.name
 }

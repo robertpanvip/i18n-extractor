@@ -122,13 +122,23 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
             // 目标架构 Rewriter 层：JsRewriter 纯文本节点替换（行为与原闭包 1:1）
             // 注意用消毒后的 key（而非原始 message.trim()）作为 $t(...) 实参：与 extractedStrings
             // 中的资源键保持一致，否则含 @/|/句末点 的文案会因键失配而在运行时查不到翻译（P0）。
-            val newExprText = buildTFunctionExpr(key, paramsObject)
+            val newExprText = buildTFunctionExpr(fw, key, paramsObject)
             val text = creator(newExprText)
             com.pan.extractor.rewriter.JsRewriter.rewriteWithStringNode(ele, text)
         }
     }
 
-    fun buildTFunctionExpr(message: String, paramsObject: String): String {
+    /**
+     * 拼装最终翻译调用表达式。
+     *
+     * §架构（CallExpressionStrategy）：这里的「如何把 key + 参数对象拼成完整调用」不再是
+     * 硬编码的 `fn('key'[params])`，而是下沉给 [fw]（[com.pan.extractor.CallExpressionStrategy]）。
+     * 默认策略沿用历史拼法（行为 1:1）；react-intl 覆盖为 `formatMessage({ id: 'key' }[, values])`。
+     * 本方法只负责：解析 key 文本 → 按换行/引号转义打包成 key 字面量 → 交给 [fw] 完成成型。
+     *
+     * @param fw 当前文件命中的框架策略（由调用方用 [com.pan.extractor.I18nFrameworkRegistry.detect] 得到）。
+     */
+    fun buildTFunctionExpr(fw: I18nFramework, message: String, paramsObject: String): String {
         // 步骤1：处理 message（trim 并转义特殊字符）
         val trimmedMsg = message.trim()
 
@@ -143,14 +153,10 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
 
         // 步骤3：判断是否包含换行符，选择引号类型
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
+        val keyLiteral = "$quote$escapedMsg$quote"
 
-        // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
-        val fn = state.tFunctionName
-        return if (paramsObject.trim().replace("\\s+".toRegex(), "") == "{}") {
-            "$fn($quote$escapedMsg$quote)"
-        } else {
-            "$fn($quote$escapedMsg$quote, $paramsObject)"
-        }
+        // 步骤4：使用检测到的函数名，把「key 字面量 + 参数对象」交给框架策略成型调用表达式
+        return fw.buildCallExpression(state.tFunctionName, keyLiteral, paramsObject)
     }
 
     /**
@@ -202,7 +208,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
             if (paramKeyNeedsQuote) "\"$k\": $v" else "$k: $v"
         }
 
-        return buildTFunctionExpr(key, paramsObject)
+        return buildTFunctionExpr(fw, key, paramsObject)
     }
 
     fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
@@ -421,7 +427,8 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
             "$quote$key$quote"
         } else {
             // 使用 buildTFunctionExpr：含换行符时自动切换为反引号模板字符串，避免普通字符串跨行导致的解析截断
-            buildTFunctionExpr(key, "{}")
+            // 框架由 ele 检测，保证 react-intl（formatMessage({ id: ... })）等策略的调用形态生效。
+            buildTFunctionExpr(I18nFrameworkRegistry.detect(ele), key, "{}")
         }
         if (ele.text == newExprText) return
 

@@ -40,6 +40,7 @@ class I18nSettingsConfigurable : Configurable {
     private var customDirsField: JTextField? = null
     private var vuePrefixField: JTextField? = null
     private var foldLangCombo: JComboBox<String>? = null
+    private var reactLibraryCombo: JComboBox<String>? = null
 
     override fun getDisplayName(): String = "I18n Extractor"
 
@@ -92,6 +93,13 @@ class I18nSettingsConfigurable : Configurable {
         foldLangCombo!!.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
         center.add(foldLangCombo!!)
 
+        center.add(JLabel("React 多语言库:"))
+        reactLibraryCombo = JComboBox(
+            ReactLibrary.entries.map { it.label }.toTypedArray()
+        )
+        reactLibraryCombo!!.selectedIndex = ReactLibrary.entries.indexOf(settings.reactLibrary())
+        center.add(reactLibraryCombo!!)
+
         root.add(center, BorderLayout.CENTER)
 
         // ── 下半：输出去向单选 ──
@@ -129,7 +137,8 @@ class I18nSettingsConfigurable : Configurable {
             splitList(customDirsField?.text) != settings.customTranslationDirs().toSet()
         val prefixChanged = vuePrefixField?.text?.trim()?.takeIf { it.isNotEmpty() } != settings.vuePlaceholderPrefix()
         val foldChanged = selectedFoldLangId() != settings.foldDisplayLanguage()
-        return langChanged || outChanged || numChanged || listChanged || prefixChanged || foldChanged
+        val reactLibraryChanged = selectedReactLibrary() != settings.reactLibrary()
+        return langChanged || outChanged || numChanged || listChanged || prefixChanged || foldChanged || reactLibraryChanged
     }
 
     override fun apply() {
@@ -144,6 +153,7 @@ class I18nSettingsConfigurable : Configurable {
         settings.setCustomTranslationDirs(splitList(customDirsField?.text))
         vuePrefixField?.text?.let { settings.setVuePlaceholderPrefix(it) }
         selectedFoldLangId()?.let { settings.setFoldDisplayLanguage(it) }
+        selectedReactLibrary()?.let { settings.setReactLibrary(it) }
     }
 
     override fun reset() {
@@ -158,6 +168,7 @@ class I18nSettingsConfigurable : Configurable {
         customDirsField?.text = settings.customTranslationDirs().joinToString(",")
         vuePrefixField?.text = settings.vuePlaceholderPrefix()
         foldLangCombo?.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
+        reactLibraryCombo?.selectedIndex = ReactLibrary.entries.indexOf(settings.reactLibrary())
     }
 
     override fun disposeUIResources() {
@@ -170,6 +181,7 @@ class I18nSettingsConfigurable : Configurable {
         customDirsField = null
         vuePrefixField = null
         foldLangCombo = null
+        reactLibraryCombo = null
     }
 
     /** 配置项 "显示名 (id)" → id。 */
@@ -184,6 +196,12 @@ class I18nSettingsConfigurable : Configurable {
         val m = Regex("""\(([a-z]{2})\)\s*$""").find(item)
         val id = m?.groupValues?.get(1) ?: return null
         return if (LanguageRegistry.byId(id) != null) id else null
+    }
+
+    /** 从下拉当前选中项解析出 React 多语言库；无法解析返回 null。 */
+    private fun selectedReactLibrary(): ReactLibrary? {
+        val idx = reactLibraryCombo?.selectedIndex ?: return null
+        return ReactLibrary.entries.getOrNull(idx)
     }
 
     /** 把逗号分隔的文本拆成去空白后的集合。 */

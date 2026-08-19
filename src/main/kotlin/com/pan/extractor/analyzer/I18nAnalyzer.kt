@@ -350,8 +350,11 @@ class I18nAnalyzer(
             anchor = first,
             changes = changes,
         ) {
+            // 调用形态由框架策略决定（CallExpressionStrategy）：Vue/react-i18next/Solid 沿用
+            // `fn(`key`)`；react-intl 覆盖为 `formatMessage({ id: `key` })`。
+            val callExpr = framework.buildCallExpression(tFunctionName, "`$key`", "{}")
             val newContent =
-                if (!isJSX) "{{ ${tFunctionName}(`$key`) }}" else "{ ${tFunctionName}(`$key`) }"
+                if (!isJSX) "{{ $callExpr }}" else "{ $callExpr }"
             com.pan.extractor.rewriter.VueRewriter.rewriteXmlTextNodes(nodes, newContent)
         }
     }
@@ -382,7 +385,9 @@ class I18nAnalyzer(
                 } else {
                     extracted.replace("'", "\\'")
                 }
-                newText = "${tFunctionName}('$escaped')"
+                // 调用形态由框架策略决定（CallExpressionStrategy）：默认 `fn('key')`；
+                // react-intl 覆盖为 `formatMessage({ id: 'key' })`。
+                newText = framework.buildCallExpression(tFunctionName, "'$escaped'", "{}")
             }
         }
 
