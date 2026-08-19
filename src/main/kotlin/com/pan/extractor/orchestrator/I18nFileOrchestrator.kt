@@ -25,10 +25,15 @@ import com.intellij.psi.PsiFile
  * [I18nProcessor] 仍作为持有收集期状态（[com.pan.extractor.planner.CollectedPlan]）
  * 与提供原语操作的宿主，公共 API 不变。
  */
-object I18nFileOrchestrator {
+open class I18nFileOrchestrator {
+
+    companion object {
+        /** 默认单例：生产环境唯一编排器；测试或自定义管道可传子类/新实例覆盖。 */
+        val Default: I18nFileOrchestrator = I18nFileOrchestrator()
+    }
 
     /** 编排 [I18nProcessor.collect]：返回待应用改写列表，与旧实现 1:1。 */
-    fun collect(processor: I18nProcessor): MutableList<I18nProcessor.CollectedChange> {
+    open fun collect(processor: I18nProcessor): MutableList<I18nProcessor.CollectedChange> {
         processor.resetState()
         // Bug 2: 语言包/翻译资源文件本身跳过整个提取与注入流程。
         val containingFile = processor.rootElement.containingFile
@@ -64,7 +69,7 @@ object I18nFileOrchestrator {
     }
 
     /** 编排 [I18nProcessor.run]：执行改写 + 按框架注入，与旧实现 1:1。 */
-    fun run(processor: I18nProcessor) {
+    open fun run(processor: I18nProcessor) {
         // Bug 2（双重保险）：翻译资源文件不做任何 import/hook 注入
         val containingFile = processor.rootElement.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return

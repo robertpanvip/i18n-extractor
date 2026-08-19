@@ -33,9 +33,15 @@ import com.intellij.psi.xml.*
 import kotlin.collections.forEach
 import kotlin.text.replace
 
-class I18nProcessor(
+class I18nProcessor @JvmOverloads constructor(
     internal val project: Project,
     private var psiFile: PsiElement,
+    /**
+     * 单文件流水线调度器（DI 注入，§21.4 第 2 步）。
+     * 默认使用 [I18nFileOrchestrator.Default]；测试或自定义管道可传入子类覆盖，保持行为可插拔。
+     */
+    private val orchestrator: com.pan.extractor.orchestrator.I18nFileOrchestrator =
+        com.pan.extractor.orchestrator.I18nFileOrchestrator.Default,
 ) {
     /** 编排访问器：把私有文件根暴露给 [com.pan.extractor.orchestrator.I18nFileOrchestrator]。 */
     internal val rootElement: PsiElement get() = psiFile
@@ -418,10 +424,14 @@ class I18nProcessor(
         jsCollector.clearProcessedEnums()
     }
 
-    fun collect(): MutableList<CollectedChange> {
-        // 单文件流水线的调度已收敛到 I18nFileOrchestrator；本入口仅供外部消费方直接调用。
-        return com.pan.extractor.orchestrator.I18nFileOrchestrator.collect(this)
-    }
+    /**
+     * 【中央调度入口 · Phase A：收集】执行 Scanner/Analyzer 段，返回待应用改写列表。
+     * 兼容壳：`collect()` 转发到这里。调用方（如 UI）在 collect 之后可中断进入合并计划确认。
+     */
+    fun extract(): MutableList<CollectedChange> = orchestrator.collect(this)
+
+    /** 兼容入口：等价于 [extract]。旧调用方（MergeApplier / 测试）继续使用。 */
+    fun collect(): MutableList<CollectedChange> = extract()
 
     /**
      * 扫描文件中已有的 $t() / t() / i18n.global.t() / i18n.t() 调用，收集其 key 到 existingStrings。
@@ -544,10 +554,16 @@ class I18nProcessor(
     private fun extractStringArgText(expr: PsiElement): String? =
         I18nPsiTools.extractStringArgText(expr)
 
-    fun run() {
-        // 改写 + 注入的调度已收敛到 I18nFileOrchestrator；本入口仅供外部消费方直接调用。
-        com.pan.extractor.orchestrator.I18nFileOrchestrator.run(this)
+    /**
+     * 【中央调度入口 · Phase B：应用】执行 Rewriter/Injector 段，改写源码 + 注入 import/hook。
+     * 兼容入口：`run()` 转发到这里。
+     */
+    fun apply() {
+        orchestrator.run(this)
     }
+
+    /** 兼容入口：等价于 [apply]。旧调用方（runWithUndo / 测试）继续使用。 */
+    fun run() = apply()
 
     /** 处理整个 Vue/React 文件：包裹 Command + 写操作以支持 undo。 */
     fun runWithUndo() {
