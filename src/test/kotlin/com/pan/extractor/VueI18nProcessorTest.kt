@@ -106,8 +106,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("你好", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("你好", processor.analyzer.extractedStrings.values.first())
     }
 
     // ============================================================
@@ -133,12 +133,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
         assertTrue(
-            "existingStrings should contain '确定' but got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("确定")
+            "existingStrings should contain '确定' but got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("确定")
         )
     }
 
@@ -166,12 +166,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             processor.collect()
 
             assertTrue(
-                "[$name] extractedStrings should be empty but got: ${processor.extractedStrings}",
-                processor.extractedStrings.isEmpty()
+                "[$name] extractedStrings should be empty but got: ${processor.analyzer.extractedStrings}",
+                processor.analyzer.extractedStrings.isEmpty()
             )
             assertTrue(
-                "[$name] existingStrings should contain '确定' but got: ${processor.existingStrings}",
-                processor.existingStrings.containsValue("确定")
+                "[$name] existingStrings should contain '确定' but got: ${processor.analyzer.existingStrings}",
+                processor.analyzer.existingStrings.containsValue("确定")
             )
         }
     }
@@ -197,8 +197,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for variable expression, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for variable expression, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -219,8 +219,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for member expression, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for member expression, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -241,8 +241,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for array index expression, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for array index expression, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -267,8 +267,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for function call, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for function call, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -289,8 +289,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '你好世界' but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好世界")
+            "extractedStrings should contain '你好世界' but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好世界")
         )
     }
 
@@ -311,8 +311,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '提示信息' but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
+            "extractedStrings should contain '提示信息' but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
     }
 
@@ -337,17 +337,17 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertEquals(
-            "Should extract 2 strings from ternary, but got: ${processor.extractedStrings}",
+            "Should extract 2 strings from ternary, but got: ${processor.analyzer.extractedStrings}",
             2,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
         assertTrue(
-            "Should contain '会员专享', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("会员专享")
+            "Should contain '会员专享', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("会员专享")
         )
         assertTrue(
-            "Should contain '普通用户', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("普通用户")
+            "Should contain '普通用户', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("普通用户")
         )
     }
 
@@ -368,13 +368,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertEquals(
-            "Should extract 1 string from ternary, but got: ${processor.extractedStrings}",
+            "Should extract 1 string from ternary, but got: ${processor.analyzer.extractedStrings}",
             1,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
         assertTrue(
-            "Should contain '已启用', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("已启用")
+            "Should contain '已启用', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("已启用")
         )
     }
 
@@ -395,8 +395,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for existing ${'$'}t() in ternary, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for existing ${'$'}t() in ternary, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -417,13 +417,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertEquals(
-            "Should extract 3 strings from nested ternary, but got: ${processor.extractedStrings}",
+            "Should extract 3 strings from nested ternary, but got: ${processor.analyzer.extractedStrings}",
             3,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
-        assertTrue(processor.extractedStrings.containsValue("高级"))
-        assertTrue(processor.extractedStrings.containsValue("中级"))
-        assertTrue(processor.extractedStrings.containsValue("初级"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("高级"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("中级"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("初级"))
     }
 
     // ============================================================
@@ -450,13 +450,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '你好{N0}'（vue-i18n 不支持 {0} 数字占位）but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{N0}")
+            "extractedStrings should contain '你好{N0}'（vue-i18n 不支持 {0} 数字占位）but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{N0}")
         )
         // 不应当出现旧格式 {0}
         assertFalse(
-            "extractedStrings 不应出现 Vue 不支持的数字占位 {0}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{0}")
+            "extractedStrings 不应出现 Vue 不支持的数字占位 {0}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
     }
 
@@ -477,8 +477,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '前缀中间文本后缀' but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("前缀中间文本后缀")
+            "extractedStrings should contain '前缀中间文本后缀' but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("前缀中间文本后缀")
         )
     }
 
@@ -506,15 +506,15 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         assertFalse(
             "extractedStrings should not contain '确定'",
-            processor.extractedStrings.containsValue("确定")
+            processor.analyzer.extractedStrings.containsValue("确定")
         )
         assertTrue(
-            "extractedStrings should contain '其他文本' but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("其他文本")
+            "extractedStrings should contain '其他文本' but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("其他文本")
         )
         assertTrue(
             "existingStrings should contain '确定'",
-            processor.existingStrings.containsValue("确定")
+            processor.analyzer.existingStrings.containsValue("确定")
         )
     }
 
@@ -540,14 +540,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         // '已保存' 是已有 $t()，不应提取
-        assertFalse(processor.extractedStrings.containsValue("已保存"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("已保存"))
         // '静态文本' 应提取
-        assertTrue(processor.extractedStrings.containsValue("静态文本"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("静态文本"))
         // '成功' 和 '失败' 应提取
-        assertTrue(processor.extractedStrings.containsValue("成功"))
-        assertTrue(processor.extractedStrings.containsValue("失败"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("成功"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("失败"))
         // '已保存' 应在 existingStrings 中
-        assertTrue(processor.existingStrings.containsValue("已保存"))
+        assertTrue(processor.analyzer.existingStrings.containsValue("已保存"))
     }
 
     // ============================================================
@@ -571,8 +571,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '提示信息' but got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
+            "extractedStrings should contain '提示信息' but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
     }
 
@@ -594,8 +594,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "非指令属性 title='提示信息' 应提取，但 got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
+            "非指令属性 title='提示信息' 应提取，但 got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
         processor.runWithUndo()
         val result = file.text
@@ -623,11 +623,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         assertFalse(
             "extractedStrings should not contain '提示信息' for existing ${'$'}t()",
-            processor.extractedStrings.containsValue("提示信息")
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
         assertTrue(
             "existingStrings should contain '提示信息'",
-            processor.existingStrings.containsValue("提示信息")
+            processor.analyzer.existingStrings.containsValue("提示信息")
         )
     }
 
@@ -649,8 +649,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         // 只有 '点击' 按钮文本应被提取，@click 中的 handleClick() 不应提取
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("点击"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("点击"))
     }
 
     // ============================================================
@@ -674,9 +674,9 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("真实文本"))
-        assertFalse(processor.extractedStrings.containsValue("这是注释，不应被提取"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("真实文本"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("这是注释，不应被提取"))
     }
 
     /**
@@ -700,8 +700,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("真实文本"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("真实文本"))
     }
 
     // ============================================================
@@ -734,20 +734,20 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // 模板字面量变量插值应使用 Vue 的单括号命名格式 {N0}，而不是 React 的 {{0}}
         // vue-i18n 不支持 `$t('{0}', { '0': val })`，必须是命名占位 + 标识符 key。
         assertTrue(
-            "Vue 项目中 TSX 的模板字面量插值应使用单括号命名格式 {N0}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{N0}")
+            "Vue 项目中 TSX 的模板字面量插值应使用单括号命名格式 {N0}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{N0}")
         )
         assertFalse(
-            "Vue 项目中 TSX 的模板字面量插值不应使用 Vue 不支持的数字占位 {0}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{0}")
+            "Vue 项目中 TSX 的模板字面量插值不应使用 Vue 不支持的数字占位 {0}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
         assertFalse(
-            "Vue 项目中 TSX 的模板字面量插值不应使用双括号格式 {{0}}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{{0}}")
+            "Vue 项目中 TSX 的模板字面量插值不应使用双括号格式 {{0}}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{{0}}")
         )
         assertFalse(
-            "Vue 项目中 TSX 的模板字面量插值不应使用双括号命名格式 {{N0}}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{{N0}}")
+            "Vue 项目中 TSX 的模板字面量插值不应使用双括号命名格式 {{N0}}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{{N0}}")
         )
     }
 
@@ -803,8 +803,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "全是 HTML 注释的 div 不应提取任何内容, got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "全是 HTML 注释的 div 不应提取任何内容, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -828,12 +828,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "应提取实际文本 '这是实际文本', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("这是实际文本")
+            "应提取实际文本 '这是实际文本', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("这是实际文本")
         )
         assertFalse(
-            "不应提取注释内容 '这是注释', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("这是注释")
+            "不应提取注释内容 '这是注释', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("这是注释")
         )
     }
 
@@ -861,8 +861,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertFalse(
-            "{{ //新增按钮 }} 中的 JS 注释不应被提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("//新增按钮")
+            "{{ //新增按钮 }} 中的 JS 注释不应被提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("//新增按钮")
         )
     }
 
@@ -895,25 +895,25 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // 所有字符串已在 $t() 中，不应被重复提取
         assertFalse(
-            "'已于' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("已于")
+            "'已于' 已在 \$t() 中，不应重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("已于")
         )
         assertFalse(
-            "'发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("发布")
+            "'发布' 已在 \$t() 中，不应重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("发布")
         )
         assertFalse(
-            "'未发布' 已在 \$t() 中，不应重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("未发布")
+            "'未发布' 已在 \$t() 中，不应重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("未发布")
         )
         // 应在 existingStrings 中
         assertTrue(
-            "'已于' 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("已于")
+            "'已于' 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("已于")
         )
         assertTrue(
-            "'未发布' 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("未发布")
+            "'未发布' 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("未发布")
         )
     }
 
@@ -946,13 +946,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // "已有文本" 应在 existingStrings 中
         assertTrue(
-            "'已有文本' 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("已有文本")
+            "'已有文本' 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("已有文本")
         )
         // "新提取文本" 应被提取
         assertTrue(
-            "'新提取文本' 应被提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("新提取文本")
+            "'新提取文本' 应被提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("新提取文本")
         )
         // 新提取的应使用 i18n.global.t
         assertTrue(
@@ -989,26 +989,26 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // 两种形式都应识别为已翻译
         assertTrue(
-            "'vue文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("vue文本")
+            "'vue文本' (via \$t) 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("vue文本")
         )
         assertTrue(
-            "'全局文本' (via i18n.global.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("全局文本")
+            "'全局文本' (via i18n.global.t) 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("全局文本")
         )
         // 新提取的应存在
         assertTrue(
-            "'待提取' 应被提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("待提取")
+            "'待提取' 应被提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("待提取")
         )
         // 不应重复提取已有文本
         assertFalse(
-            "'vue文本' 不应被重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("vue文本")
+            "'vue文本' 不应被重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("vue文本")
         )
         assertFalse(
-            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("全局文本")
+            "'全局文本' 不应被重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("全局文本")
         )
     }
 
@@ -1351,8 +1351,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
         assertEquals(
-            "无中文 Vue 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.extractedStrings}",
-            0, processor.extractedStrings.size
+            "无中文 Vue 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.analyzer.extractedStrings}",
+            0, processor.analyzer.extractedStrings.size
         )
         assertFalse(
             "无中文 Vue 文件不应出现任何全局 i18n import（i18n from locales / vue-i18n 都不行）, got:\n$resultText",
@@ -1400,7 +1400,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
         // existingStrings 必须收录 4 个调用里的中文
         val expected = setOf("新增", "删除", "保存", "确认")
-        val values = processor.existingStrings.values.toSet()
+        val values = processor.analyzer.existingStrings.values.toSet()
         assertTrue(
             "已存在 t 调用的中文必须进 existingStrings，\nexpected=$expected\ngot=$values",
             values.containsAll(expected)
@@ -1465,13 +1465,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        val existingValues = processor.existingStrings.values.toSet()
+        val existingValues = processor.analyzer.existingStrings.values.toSet()
         assertTrue("existingStrings 应收录已写调用的「已翻译」, got=$existingValues",
             existingValues.contains("已翻译"))
         // extractedStrings 存的是 <字符串字面量原文, key>（因为 extractedStrings: MutableMap<String,String>）
         // 这里只要确认处理器提取到 ≥1 个中文即可
-        assertTrue("应该有至少 1 个新提取（「提示」）, extractedSize=${processor.extractedStrings.size}",
-            processor.extractedStrings.size >= 1)
+        assertTrue("应该有至少 1 个新提取（「提示」）, extractedSize=${processor.analyzer.extractedStrings.size}",
+            processor.analyzer.extractedStrings.size >= 1)
 
         processor.runWithUndo()
         val resultText = file.text
@@ -1531,11 +1531,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         val expectedExisting = setOf("删除", "新增", "确认")
-        val existingValues = processor.existingStrings.values.toSet()
+        val existingValues = processor.analyzer.existingStrings.values.toSet()
         assertTrue("Vue SFC 混合场景：existingStrings 应收录 删除/新增/确认 3 个, expect=$expectedExisting, got=$existingValues",
             existingValues.containsAll(expectedExisting))
-        assertTrue("Vue SFC 混合场景：应该有新提取的中文（保存 + 提示 ≥ 2 个）, got size=${processor.extractedStrings.size}",
-            processor.extractedStrings.size >= 2)
+        assertTrue("Vue SFC 混合场景：应该有新提取的中文（保存 + 提示 ≥ 2 个）, got size=${processor.analyzer.extractedStrings.size}",
+            processor.analyzer.extractedStrings.size >= 2)
 
         processor.runWithUndo()
         val resultText = file.text
@@ -1600,8 +1600,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("新提取应该有「操作成功」1 个, got size=${processor.extractedStrings.size}",
-            processor.extractedStrings.size == 1)
+        assertTrue("新提取应该有「操作成功」1 个, got size=${processor.analyzer.extractedStrings.size}",
+            processor.analyzer.extractedStrings.size == 1)
         processor.runWithUndo()
         // 连跑两遍
         I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
@@ -1654,7 +1654,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         val expected = setOf("项目", "文件", "记录", "用户")
-        val values = processor.existingStrings.values.toSet()
+        val values = processor.analyzer.existingStrings.values.toSet()
         assertTrue(
             "Vue tc/\$tc/i18n.global.tc 的中文必须进 existingStrings，\nexpect=$expected\ngot=$values",
             values.containsAll(expected)
@@ -1698,8 +1698,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertTrue(
-            "应提取 2 个新中文：欢迎使用 + 国际化指南, got size=${processor.extractedStrings.size}",
-            processor.extractedStrings.size == 2
+            "应提取 2 个新中文：欢迎使用 + 国际化指南, got size=${processor.analyzer.extractedStrings.size}",
+            processor.analyzer.extractedStrings.size == 2
         )
         processor.runWithUndo()
 
@@ -1756,8 +1756,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val p = I18nProcessor(project, file)
         p.collect()
         assertTrue(
-            "纯工具 TSX 应提取 2 个新中文：手机号格式错误 + 此字段必填, got=${p.extractedStrings.size}",
-            p.extractedStrings.size == 2
+            "纯工具 TSX 应提取 2 个新中文：手机号格式错误 + 此字段必填, got=${p.analyzer.extractedStrings.size}",
+            p.analyzer.extractedStrings.size == 2
         )
         p.runWithUndo()
         val result = file.text
@@ -1850,8 +1850,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         p.collect()
         // 新中文至少有 2 个
         assertTrue(
-            "至少提取 2 个新中文（工厂提示 + 另外的提示）, got size=${p.extractedStrings.size}",
-            p.extractedStrings.size >= 2
+            "至少提取 2 个新中文（工厂提示 + 另外的提示）, got size=${p.analyzer.extractedStrings.size}",
+            p.analyzer.extractedStrings.size >= 2
         )
         p.runWithUndo()
         val result = file.text
@@ -1903,10 +1903,10 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // 必须至少有 2 个被提取（label、sayHello 里的拼接中文），
         // 索引键相关的 7 处（P['中文']/拼接/obj/嵌套/arr/链式/括号）绝对不能出现在 extractedStrings
         assertTrue(
-            "至少有 2 个普通中文要被提取（label=欢迎使用 / 你好世界）, got size=${p.extractedStrings.size}",
-            p.extractedStrings.size >= 2
+            "至少有 2 个普通中文要被提取（label=欢迎使用 / 你好世界）, got size=${p.analyzer.extractedStrings.size}",
+            p.analyzer.extractedStrings.size >= 2
         )
-        val allValues = p.extractedStrings.values.toSet()
+        val allValues = p.analyzer.extractedStrings.values.toSet()
         val notAllowed = setOf(
             "中文", "姓", "名", "姓名", "出生日期", "第1个", "中文值键", "中文括号"
         )
@@ -1982,7 +1982,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // ① 索引键位置的中文不应被当作 i18n 提取；但「中文」这个词同时出现在
         //    `label === '中文'` 的值位置（应该被提取 1 次），所以用 List（不是 Set）
         //    统计出现次数来准确判断是否泄漏。
-        val extractedList = p.extractedStrings.values.toList()
+        val extractedList = p.analyzer.extractedStrings.values.toList()
         val indexKeyLeaks = listOf(
             "姓名" to 0,
             "状态" to 0,
@@ -2007,7 +2007,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         required.forEach { word ->
             assertTrue(
                 "Vue 模板中「$word」应被提取或作为值，got extractedList=$extractedList",
-                extractedList.contains(word) || p.extractedStrings.isEmpty().not()
+                extractedList.contains(word) || p.analyzer.extractedStrings.isEmpty().not()
             )
         }
 
@@ -2118,23 +2118,23 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         // extractedStrings 是 Map<key,value>，下面断言 value 侧（实际提取的 i18n 文本）
-        val extractedValues: Collection<String> = processor.extractedStrings.values
+        val extractedValues: Collection<String> = processor.analyzer.extractedStrings.values
 
         // ① 资源文案：不能出现数字占位 {0}、{1}、{2}
         val numericPlaceholderPattern = Regex("\\{\\d+\\}")
         val badMsg = extractedValues.filter { numericPlaceholderPattern.containsMatchIn(it) }
         assertTrue(
-            "提取出的资源文案不能包含 Vue 不支持的数字占位 {0}/{1}…，违规项: $badMsg\n全部: ${processor.extractedStrings}",
+            "提取出的资源文案不能包含 Vue 不支持的数字占位 {0}/{1}…，违规项: $badMsg\n全部: ${processor.analyzer.extractedStrings}",
             badMsg.isEmpty()
         )
 
         // ② 资源文案：应当包含命名占位 {N0}、{N1}
         assertTrue(
-            "应提取出带 {N0} 命名占位的拼接/模板文案，got: ${processor.extractedStrings}",
+            "应提取出带 {N0} 命名占位的拼接/模板文案，got: ${processor.analyzer.extractedStrings}",
             extractedValues.any { it.contains("{N0}") }
         )
         assertTrue(
-            "多占位符的拼接/模板文案里应出现 {N1}，got: ${processor.extractedStrings}",
+            "多占位符的拼接/模板文案里应出现 {N1}，got: ${processor.analyzer.extractedStrings}",
             extractedValues.any { it.contains("{N1}") }
         )
 
@@ -2159,16 +2159,16 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         // ⑤ 新文案开头不应出现错误的数字占位
         assertFalse(
-            "提取文案里不应包含「默认模型配置{0}子{N1}」（应当是 N 前缀命名占位），got: ${processor.extractedStrings}",
+            "提取文案里不应包含「默认模型配置{0}子{N1}」（应当是 N 前缀命名占位），got: ${processor.analyzer.extractedStrings}",
             extractedValues.contains("默认模型配置{0}子{N1}")
         )
         assertTrue(
-            "提取文案里应包含「默认模型配置{N0}子{N1}」（模板字面量两变量插值），got: ${processor.extractedStrings}",
+            "提取文案里应包含「默认模型配置{N0}子{N1}」（模板字面量两变量插值），got: ${processor.analyzer.extractedStrings}",
             extractedValues.contains("默认模型配置{N0}子{N1}")
         )
         // 拼接形式：greeting + "默认模型配置" + suffix → {N0}默认模型配置{N1}
         assertTrue(
-            "字符串拼接的两占位拼接场景应提取出「{N0}默认模型配置{N1}」，got: ${processor.extractedStrings}",
+            "字符串拼接的两占位拼接场景应提取出「{N0}默认模型配置{N1}」，got: ${processor.analyzer.extractedStrings}",
             extractedValues.contains("{N0}默认模型配置{N1}")
         )
     }
@@ -2188,13 +2188,13 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             )
             val processor = I18nProcessor(project, file)
             processor.collect()
-            val extractedValues: Collection<String> = processor.extractedStrings.values
+            val extractedValues: Collection<String> = processor.analyzer.extractedStrings.values
             assertTrue(
-                "使用配置前缀 arg 后应提取出 {arg0}/{arg1} 命名占位，got: ${processor.extractedStrings}",
+                "使用配置前缀 arg 后应提取出 {arg0}/{arg1} 命名占位，got: ${processor.analyzer.extractedStrings}",
                 extractedValues.any { it.contains("{arg0}") && it.contains("{arg1}") }
             )
             assertFalse(
-                "不应再出现默认前缀 {N0}/{N1}，got: ${processor.extractedStrings}",
+                "不应再出现默认前缀 {N0}/{N1}，got: ${processor.analyzer.extractedStrings}",
                 extractedValues.any { it.contains("{N0}") || it.contains("{N1}") }
             )
             processor.runWithUndo()
@@ -2271,31 +2271,31 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         //   模板中 欢迎回来，... 那一段也是中文
         assertTrue(
             "ref('个人信息面板') 应提取",
-            processor.extractedStrings.containsValue("个人信息面板")
+            processor.analyzer.extractedStrings.containsValue("个人信息面板")
         )
         assertTrue(
             "ref('请输入昵称') 应提取",
-            processor.extractedStrings.containsValue("请输入昵称")
+            processor.analyzer.extractedStrings.containsValue("请输入昵称")
         )
         assertTrue(
             "confirmLabel 保存修改 应提取",
-            processor.extractedStrings.containsValue("保存修改")
+            processor.analyzer.extractedStrings.containsValue("保存修改")
         )
         assertTrue(
             "confirmLabel 关闭面板 应提取",
-            processor.extractedStrings.containsValue("关闭面板")
+            processor.analyzer.extractedStrings.containsValue("关闭面板")
         )
         assertTrue(
             "hintTip 提示： 应提取",
-            processor.extractedStrings.containsValue("提示：")
+            processor.analyzer.extractedStrings.containsValue("提示：")
         )
         assertTrue(
             "hintTip 修改后记得点保存按钮 应提取",
-            processor.extractedStrings.containsValue("修改后记得点保存按钮")
+            processor.analyzer.extractedStrings.containsValue("修改后记得点保存按钮")
         )
         assertTrue(
             "hintTip 点击右上角编辑按钮开始修改 应提取",
-            processor.extractedStrings.containsValue("点击右上角编辑按钮开始修改")
+            processor.analyzer.extractedStrings.containsValue("点击右上角编辑按钮开始修改")
         )
 
         processor.runWithUndo()
@@ -2374,14 +2374,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("data 旧版标题 应提取", processor.extractedStrings.containsValue("旧版标题"))
-        assertTrue("data intro 应提取", processor.extractedStrings.containsValue("这是一个使用 defineComponent 的旧写法组件"))
-        assertTrue("data submitText 立即提交 应提取", processor.extractedStrings.containsValue("立即提交"))
-        assertTrue("computed welcomeMsg 欢迎来到旧页面 应提取", processor.extractedStrings.containsValue("欢迎来到旧页面"))
-        assertTrue("methods onSubmit confirm 确定要提交吗？ 应提取", processor.extractedStrings.containsValue("确定要提交吗？"))
-        assertTrue("success 消息 提交成功提示 应提取", processor.extractedStrings.containsValue("提交成功提示"))
-        assertTrue("warning 消息 已取消提交 应提取", processor.extractedStrings.containsValue("已取消提交"))
-        assertTrue("created 初始化旧版视图 应提取", processor.extractedStrings.containsValue("初始化旧版视图"))
+        assertTrue("data 旧版标题 应提取", processor.analyzer.extractedStrings.containsValue("旧版标题"))
+        assertTrue("data intro 应提取", processor.analyzer.extractedStrings.containsValue("这是一个使用 defineComponent 的旧写法组件"))
+        assertTrue("data submitText 立即提交 应提取", processor.analyzer.extractedStrings.containsValue("立即提交"))
+        assertTrue("computed welcomeMsg 欢迎来到旧页面 应提取", processor.analyzer.extractedStrings.containsValue("欢迎来到旧页面"))
+        assertTrue("methods onSubmit confirm 确定要提交吗？ 应提取", processor.analyzer.extractedStrings.containsValue("确定要提交吗？"))
+        assertTrue("success 消息 提交成功提示 应提取", processor.analyzer.extractedStrings.containsValue("提交成功提示"))
+        assertTrue("warning 消息 已取消提交 应提取", processor.analyzer.extractedStrings.containsValue("已取消提交"))
+        assertTrue("created 初始化旧版视图 应提取", processor.analyzer.extractedStrings.containsValue("初始化旧版视图"))
 
         processor.runWithUndo()
         val result = file.text
@@ -2445,16 +2445,16 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("searchPlaceholder 请输入关键字搜索 应提取", processor.extractedStrings.containsValue("请输入关键字搜索"))
-        assertTrue(":aria-label='搜索输入框' 应提取", processor.extractedStrings.containsValue("搜索输入框"))
-        assertTrue(":data-hint='输入最少3位' 应提取", processor.extractedStrings.containsValue("输入最少3位"))
-        assertTrue("select :title='切换搜索方式' 应提取", processor.extractedStrings.containsValue("切换搜索方式"))
-        assertTrue("v-html 提示：支持按姓名/手机号搜索... 应提取", processor.extractedStrings.containsValue("提示：支持按姓名/手机号搜索，回车确认"))
-        assertTrue("button 无效输入 分支应提取", processor.extractedStrings.containsValue("无效输入"))
-        assertTrue("button 确认搜索 分支应提取", processor.extractedStrings.containsValue("确认搜索"))
-        assertTrue("modes[0] 按姓名搜索 应提取", processor.extractedStrings.containsValue("按姓名搜索"))
-        assertTrue("modes[1] 按手机号搜索 应提取", processor.extractedStrings.containsValue("按手机号搜索"))
-        assertTrue("modes[2] 按工号搜索 应提取", processor.extractedStrings.containsValue("按工号搜索"))
+        assertTrue("searchPlaceholder 请输入关键字搜索 应提取", processor.analyzer.extractedStrings.containsValue("请输入关键字搜索"))
+        assertTrue(":aria-label='搜索输入框' 应提取", processor.analyzer.extractedStrings.containsValue("搜索输入框"))
+        assertTrue(":data-hint='输入最少3位' 应提取", processor.analyzer.extractedStrings.containsValue("输入最少3位"))
+        assertTrue("select :title='切换搜索方式' 应提取", processor.analyzer.extractedStrings.containsValue("切换搜索方式"))
+        assertTrue("v-html 提示：支持按姓名/手机号搜索... 应提取", processor.analyzer.extractedStrings.containsValue("提示：支持按姓名/手机号搜索，回车确认"))
+        assertTrue("button 无效输入 分支应提取", processor.analyzer.extractedStrings.containsValue("无效输入"))
+        assertTrue("button 确认搜索 分支应提取", processor.analyzer.extractedStrings.containsValue("确认搜索"))
+        assertTrue("modes[0] 按姓名搜索 应提取", processor.analyzer.extractedStrings.containsValue("按姓名搜索"))
+        assertTrue("modes[1] 按手机号搜索 应提取", processor.analyzer.extractedStrings.containsValue("按手机号搜索"))
+        assertTrue("modes[2] 按工号搜索 应提取", processor.analyzer.extractedStrings.containsValue("按工号搜索"))
 
         processor.runWithUndo()
         val result = file.text
@@ -2534,15 +2534,15 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // actual: 8 个提取（除了预期的 7 条，还单独把拼接表达式的整体骨架按 Vue 模板字面量合成规则提了 1 次
         //          或把 computed 中 prefix.value + 字符串 先被按字符串 + 字符串合成 1 条；
         //          不管具体哪条多提，只要我们明确指定的 7 条中文都存在，且总量 == 8 即可）。
-        assertTrue("okText 默认 立即执行 应提取", processor.extractedStrings.containsValue("立即执行"))
-        assertTrue("cancelText 默认 再想想 应提取", processor.extractedStrings.containsValue("再想想"))
-        assertTrue("prefix 提示： 应提取", processor.extractedStrings.containsValue("提示："))
-        assertTrue("msg computed 正在执行操作，请稍候 应提取", processor.extractedStrings.containsValue("正在执行操作，请稍候"))
-        assertTrue("actionLabels.retry 重试一下 应提取", processor.extractedStrings.containsValue("重试一下"))
-        assertTrue("stop(ok=true) 操作完成提示 应提取", processor.extractedStrings.containsValue("操作完成提示"))
-        assertTrue("stop(ok=false) 操作已取消提示 应提取", processor.extractedStrings.containsValue("操作已取消提示"))
+        assertTrue("okText 默认 立即执行 应提取", processor.analyzer.extractedStrings.containsValue("立即执行"))
+        assertTrue("cancelText 默认 再想想 应提取", processor.analyzer.extractedStrings.containsValue("再想想"))
+        assertTrue("prefix 提示： 应提取", processor.analyzer.extractedStrings.containsValue("提示："))
+        assertTrue("msg computed 正在执行操作，请稍候 应提取", processor.analyzer.extractedStrings.containsValue("正在执行操作，请稍候"))
+        assertTrue("actionLabels.retry 重试一下 应提取", processor.analyzer.extractedStrings.containsValue("重试一下"))
+        assertTrue("stop(ok=true) 操作完成提示 应提取", processor.analyzer.extractedStrings.containsValue("操作完成提示"))
+        assertTrue("stop(ok=false) 操作已取消提示 应提取", processor.analyzer.extractedStrings.containsValue("操作已取消提示"))
         // 兼容：7 条明确指定 + 1 条 computed 拼接骨架 = 总共 8 条
-        assertEquals(8, processor.extractedStrings.size)
+        assertEquals(8, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text
@@ -2578,7 +2578,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("没有中文 → 提取数量为 0", 0, processor.extractedStrings.size)
+        assertEquals("没有中文 → 提取数量为 0", 0, processor.analyzer.extractedStrings.size)
         processor.runWithUndo()
         val result = file.text
         assertFalse(
@@ -2626,7 +2626,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("title 用户列表 应提取", processor.extractedStrings.containsValue("用户列表"))
+        assertTrue("title 用户列表 应提取", processor.analyzer.extractedStrings.containsValue("用户列表"))
         processor.runWithUndo()
         val result = file.text
         val destructureRe = Regex("const\\s*\\{\\s*t\\s*:\\s*\\${'$'}t\\s*\\}\\s*=\\s*useI18n\\s*\\(")

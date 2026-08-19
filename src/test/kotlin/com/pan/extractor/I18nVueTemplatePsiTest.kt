@@ -60,9 +60,9 @@ class I18nVueTemplatePsiTest : BasePlatformTestCase() {
         )
         assertTrue(
             "mustache 插值中的 ${'$'}t(key) 应进 existingStrings",
-            p.existingStrings.containsKey("interp.hello")
+            p.analyzer.existingStrings.containsKey("interp.hello")
         )
-        assertFalse("插值中的已国际化调用不得被当作待提取", p.extractedStrings.isNotEmpty())
+        assertFalse("插值中的已国际化调用不得被当作待提取", p.analyzer.extractedStrings.isNotEmpty())
     }
 
     // ── 5.4.b: directive `:title="$t('hello')"` ──────────────────
@@ -78,11 +78,11 @@ class I18nVueTemplatePsiTest : BasePlatformTestCase() {
         )
         assertTrue(
             ":title=\"${'$'}t(key)\" 应进 existingStrings",
-            p.existingStrings.containsKey("dir.title")
+            p.analyzer.existingStrings.containsKey("dir.title")
         )
         // "正文"是真实中文硬编码，应被提取；但 $t('dir.title') 不能再次进入 extractedStrings
-        assertTrue("中文正文应被提取", p.extractedStrings.containsValue("正文"))
-        assertFalse("指令中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("dir.title"))
+        assertTrue("中文正文应被提取", p.analyzer.extractedStrings.containsValue("正文"))
+        assertFalse("指令中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("dir.title"))
     }
 
     // ── 5.4.c: component prop `<MyComponent :title="$t('hello')" />` ──
@@ -98,9 +98,9 @@ class I18nVueTemplatePsiTest : BasePlatformTestCase() {
         )
         assertTrue(
             "组件 prop :title=\"${'$'}t(key)\" 应进 existingStrings",
-            p.existingStrings.containsKey("comp.title")
+            p.analyzer.existingStrings.containsKey("comp.title")
         )
-        assertFalse("组件 prop 中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("comp.title"))
+        assertFalse("组件 prop 中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("comp.title"))
     }
 
     // ── 5.4.d: template comment `<!-- {{ $t('hello') }} -->` ─────
@@ -116,9 +116,9 @@ class I18nVueTemplatePsiTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         // 注释本身必须被忽略：注释里的 $t('comment.key') 不应进入 existingStrings 或 extractedStrings
-        assertFalse("注释中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("comment.key"))
+        assertFalse("注释中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("comment.key"))
         // 但可见中文仍应被提取
-        assertTrue("注释外可见中文应被提取", p.extractedStrings.containsValue("可见文本"))
+        assertTrue("注释外可见中文应被提取", p.analyzer.extractedStrings.containsValue("可见文本"))
     }
 
     // ── 5.4.e: slot `{{ $t('hello') }}` ──────────────────────────
@@ -136,8 +136,8 @@ class I18nVueTemplatePsiTest : BasePlatformTestCase() {
         )
         assertTrue(
             "slot 中 mustache 插值 \$t(key) 应进 existingStrings",
-            p.existingStrings.containsKey("slot.key")
+            p.analyzer.existingStrings.containsKey("slot.key")
         )
-        assertFalse("slot 插值中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("slot.key"))
+        assertFalse("slot 插值中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("slot.key"))
     }
 }

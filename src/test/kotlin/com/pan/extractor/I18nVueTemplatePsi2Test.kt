@@ -61,15 +61,15 @@ class I18nVueTemplatePsi2Test : BasePlatformTestCase() {
         )
         assertTrue(
             "template 中 ${'$'}t('template.key') 应进 existingStrings",
-            p.existingStrings.containsKey("template.key")
+            p.analyzer.existingStrings.containsKey("template.key")
         )
         assertFalse(
             "template 中已国际化的 key 不得进入 extractedStrings",
-            p.extractedStrings.containsKey("template.key")
+            p.analyzer.extractedStrings.containsKey("template.key")
         )
         assertTrue(
             "script setup 里的硬编码中文应进 extractedStrings",
-            p.extractedStrings.containsValue("脚本中文")
+            p.analyzer.extractedStrings.containsValue("脚本中文")
         )
     }
 
@@ -86,15 +86,15 @@ class I18nVueTemplatePsi2Test : BasePlatformTestCase() {
         )
         assertTrue(
             "三目 true 分支 ${'$'}t('a') 应进 existingStrings",
-            p.existingStrings.containsKey("a")
+            p.analyzer.existingStrings.containsKey("a")
         )
         assertTrue(
             "三目 false 分支 ${'$'}t('b') 应进 existingStrings",
-            p.existingStrings.containsKey("b")
+            p.analyzer.existingStrings.containsKey("b")
         )
-        assertFalse("三目分支里的 \$t(key) 都不得进入 extractedStrings", p.extractedStrings.containsKey("a"))
-        assertFalse("三目分支里的 \$t(key) 都不得进入 extractedStrings", p.extractedStrings.containsKey("b"))
-        assertEquals("无硬编码中文，extractedStrings 应为空", 0, p.extractedStrings.size)
+        assertFalse("三目分支里的 \$t(key) 都不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("a"))
+        assertFalse("三目分支里的 \$t(key) 都不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("b"))
+        assertEquals("无硬编码中文，extractedStrings 应为空", 0, p.analyzer.extractedStrings.size)
     }
 
     // ── 5.4.h: 多行 directive `:title="\n $t('ml.key')\n"` ────────
@@ -112,9 +112,9 @@ class I18nVueTemplatePsi2Test : BasePlatformTestCase() {
         )
         assertTrue(
             "多行 :title=\"...\$t('ml.key')...\" 应进 existingStrings",
-            p.existingStrings.containsKey("ml.key")
+            p.analyzer.existingStrings.containsKey("ml.key")
         )
-        assertFalse("多行 directive 中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("ml.key"))
+        assertFalse("多行 directive 中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("ml.key"))
     }
 
     // ── 5.4.i: template literal（反引号）形态 {{ $t(`tpl.key`) }} ──
@@ -132,9 +132,9 @@ class I18nVueTemplatePsi2Test : BasePlatformTestCase() {
         // T_CALL_PATTERN 明确支持反引号 ([`"'] ... \1)，因此 `tpl.key` 应被识别为已国际化 key。
         assertTrue(
             "反引号模板 ${'$'}t(`tpl.key`) 应进 existingStrings",
-            p.existingStrings.containsKey("tpl.key")
+            p.analyzer.existingStrings.containsKey("tpl.key")
         )
-        assertFalse("反引号模板中的 \$t(key) 不得进入 extractedStrings", p.extractedStrings.containsKey("tpl.key"))
+        assertFalse("反引号模板中的 \$t(key) 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("tpl.key"))
     }
 
     // ── 5.4.j: 转义花括号对照组（非翻译调用）──────────────────────
@@ -151,15 +151,15 @@ class I18nVueTemplatePsi2Test : BasePlatformTestCase() {
         // 这是普通字符串字面量，没有任何 $t(...) / i18n(.global).t(...) 调用，
         // 不应被误判为「已国际化的 t 调用」进入 existingStrings。
         assertEquals(
-            "字面花括号字符串不是翻译调用，existingStrings 应为空, got: ${p.existingStrings}",
+            "字面花括号字符串不是翻译调用，existingStrings 应为空, got: ${p.analyzer.existingStrings}",
             0,
-            p.existingStrings.size
+            p.analyzer.existingStrings.size
         )
         // 同样不含目标语言（中文），也不应进入 extractedStrings。
         assertEquals(
-            "字面花括号字符串不含中文，extractedStrings 应为空, got: ${p.extractedStrings}",
+            "字面花括号字符串不含中文，extractedStrings 应为空, got: ${p.analyzer.extractedStrings}",
             0,
-            p.extractedStrings.size
+            p.analyzer.extractedStrings.size
         )
     }
 }

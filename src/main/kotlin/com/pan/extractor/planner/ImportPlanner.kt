@@ -52,7 +52,7 @@ object ImportPlanner {
         val isReact = framework is com.pan.extractor.ReactI18nextStrategy
         val isSolid = framework is com.pan.extractor.SolidI18nStrategy
         val isSfc = file.name.endsWith(".vue", ignoreCase = true)
-        val tName = processor.tFunctionName
+        val tName = processor.analyzer.tFunctionName
 
         // ── Vue：全局 i18n 实例导入 + 函数体 useI18n 注入 ─────────────────────────
         if (isVue) buildVuePlan(file, tName, injector, d, imports, aliases, hooks)

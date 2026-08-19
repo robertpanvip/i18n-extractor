@@ -59,14 +59,18 @@ class I18nProcessor @JvmOverloads constructor(
     /** 「JS 字符串收集 与 $t 表达式生成」辅助类。 */
     internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
 
-    /** 单文件收集与分析宿主：拥有收集期状态，是 [extractedStrings] / [tFunctionName] 等的事实来源。 */
+    /** 单文件收集与分析宿主：拥有收集期状态，是 collectedSites / extractedStrings / tFunctionName 等的唯一事实来源。
+     *  懒初始化时为两个收集/注入器回填 [CollectionState]（能力面经构造函数注入，状态面经此关联）。 */
     internal val analyzer: com.pan.extractor.analyzer.I18nAnalyzer by lazy {
         com.pan.extractor.analyzer.I18nAnalyzer(
             project = project,
             contract = this,
             jsCollector = jsCollector,
             injector = injector,
-        )
+        ).also {
+            jsCollector.state = it
+            injector.state = it
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -102,21 +106,8 @@ class I18nProcessor @JvmOverloads constructor(
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 结果数据（契约 + 下游消费所需的只读转发，见 §I18nAnalyzer）
-    // ─────────────────────────────────────────────────────────────
-    /** 新提取的 key -> 原文本（契约要求，委托 Analyzer）。 */
-    override val extractedStrings: MutableMap<String, String> get() = analyzer.extractedStrings
-
-    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换，委托 Analyzer）。 */
-    val existingStrings: MutableMap<String, String> get() = analyzer.existingStrings
-
-    /** 检测到的翻译函数名（例如 $t / t / i18n.t），默认 $t（契约要求，委托 Analyzer）。 */
-    override var tFunctionName: String
-        get() = analyzer.tFunctionName
-        set(value) { analyzer.tFunctionName = value }
-
-    // ─────────────────────────────────────────────────────────────
     // I18nProcessorContract 覆写（收集器经此接口访问宿主的能力面）
+    // 结果/状态（extractedStrings / existingStrings / tFunctionName）不在本类，统一经 [analyzer] 读取。
     // ─────────────────────────────────────────────────────────────
     override fun getScriptTag(): XmlTag? {
         return PsiTreeUtil.findChildrenOfType(psiFile, XmlTag::class.java)

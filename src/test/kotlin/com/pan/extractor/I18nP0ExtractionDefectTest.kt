@@ -62,11 +62,11 @@ class I18nP0ExtractionDefectTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertFalse(
-            "class=\"main container\" 属非文案属性，不应被提取；实际 extracted=${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("main container")
+            "class=\"main container\" 属非文案属性，不应被提取；实际 extracted=${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("main container")
         )
         // TEXT 节点的英文整句仍应正常提取
-        assertTrue("文本节点英文句子仍应提取", processor.extractedStrings.containsValue("Hello world"))
+        assertTrue("文本节点英文句子仍应提取", processor.analyzer.extractedStrings.containsValue("Hello world"))
     }
 
     // ── #38：本地 const i18n = { t: … } 不是真实 i18n 实例，参数中文应被提取 ──
@@ -84,8 +84,8 @@ class I18nP0ExtractionDefectTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertTrue(
-            "本地对象 i18n.t() 的参数应被提取，而非误判为已翻译；实际 extracted=${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("这是一段要被提取的本地对象中文")
+            "本地对象 i18n.t() 的参数应被提取，而非误判为已翻译；实际 extracted=${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("这是一段要被提取的本地对象中文")
         )
     }
 
@@ -117,13 +117,13 @@ class I18nP0ExtractionDefectTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertTrue(
-            "中文属性（含撇号）应被提取；实际 extracted=${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("唐's 工具提示")
+            "中文属性（含撇号）应被提取；实际 extracted=${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("唐's 工具提示")
         )
         processor.runWithUndo()
         val result = file.text
         // 期望转义撇号：:title="$t('唐\'s 工具提示')"
-        val escapedForm = ":title=\"${processor.tFunctionName}('唐\\'s 工具提示')\""
+        val escapedForm = ":title=\"${processor.analyzer.tFunctionName}('唐\\'s 工具提示')\""
         assertTrue("属性改写应转义撇号，生成合法代码；实际:\n$result", result.contains(escapedForm))
         // 不得再出现未转义的 $t('唐's …（撇号直接闭合字符串导致语法破坏）
         assertFalse("不得产生未转义 \$t('唐's …)；实际:\n$result", result.contains("\$t('唐's"))

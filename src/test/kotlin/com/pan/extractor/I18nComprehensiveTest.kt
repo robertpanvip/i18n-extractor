@@ -70,8 +70,8 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         // 跨行 $t() 调用应被 collectTKeysFromRawText 的 multiline 正则命中
         assertTrue(
             "跨行 ${'$'}t() 调用的 key 应被提取",
-            processor.existingStrings.containsKey("hello") ||
-                processor.existingStrings.any { it.value == "hello" }
+            processor.analyzer.existingStrings.containsKey("hello") ||
+                processor.analyzer.existingStrings.any { it.value == "hello" }
         )
     }
 
@@ -89,7 +89,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue(
             "跨行带参数 ${'$'}t() 的 key 应被提取",
-            processor.existingStrings.any { it.value == "world" }
+            processor.analyzer.existingStrings.any { it.value == "world" }
         )
     }
 
@@ -104,7 +104,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("三元表达式中的两个中文都应被提取", 2, processor.extractedStrings.size)
+        assertEquals("三元表达式中的两个中文都应被提取", 2, processor.analyzer.extractedStrings.size)
     }
 
     fun testNestedExpressionInFunctionCall() {
@@ -116,7 +116,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("函数调用参数中的两个中文都应被提取", 2, processor.extractedStrings.size)
+        assertEquals("函数调用参数中的两个中文都应被提取", 2, processor.analyzer.extractedStrings.size)
     }
 
     fun testNestedExpressionInArray() {
@@ -128,7 +128,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("数组字面量中的三个中文都应被提取", 3, processor.extractedStrings.size)
+        assertEquals("数组字面量中的三个中文都应被提取", 3, processor.analyzer.extractedStrings.size)
     }
 
     /* P0.6 nested：箭头函数体表达式（BUG_ANALYSIS 4.2 点名 `items.map(item => "你好")`）。 */
@@ -143,7 +143,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue(
             "箭头函数体中含中文的字符串应被提取",
-            processor.extractedStrings.any { it.value.contains("项目") }
+            processor.analyzer.extractedStrings.any { it.value.contains("项目") }
         )
     }
 
@@ -161,7 +161,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("两个参数中文都应被提取", 2, processor.extractedStrings.size)
+        assertEquals("两个参数中文都应被提取", 2, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val rewritten = file.text
@@ -191,9 +191,9 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val file = configureFile("src/large_batch.ts", sb.toString())
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("批量 $count 个中文字符串应全部提取", count, processor.extractedStrings.size)
-        assertTrue("应含首个字符串", processor.extractedStrings.containsValue("批量字符串0"))
-        assertTrue("应含最后字符串", processor.extractedStrings.containsValue("批量字符串${count - 1}"))
+        assertEquals("批量 $count 个中文字符串应全部提取", count, processor.analyzer.extractedStrings.size)
+        assertTrue("应含首个字符串", processor.analyzer.extractedStrings.containsValue("批量字符串0"))
+        assertTrue("应含最后字符串", processor.analyzer.extractedStrings.containsValue("批量字符串${count - 1}"))
     }
 
     // ── P1-3: Runtime Fixture 语义等价 ────────────────────────────
@@ -221,11 +221,11 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue(
             "getI18n().t 的参数应被视为已翻译（进 existingStrings）",
-            processor.existingStrings.containsValue("已经国际化的中文")
+            processor.analyzer.existingStrings.containsValue("已经国际化的中文")
         )
         assertFalse(
             "getI18n().t 的参数不得再被当作待提取硬编码文案",
-            processor.extractedStrings.containsValue("已经国际化的中文")
+            processor.analyzer.extractedStrings.containsValue("已经国际化的中文")
         )
     }
 
@@ -251,13 +251,13 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue(
             "别名 \${'$'}t('中文') 的中文应进 existingStrings",
-            processor.existingStrings.containsValue("别名中文") &&
-                processor.existingStrings.containsValue("脚本别名中文")
+            processor.analyzer.existingStrings.containsValue("别名中文") &&
+                processor.analyzer.existingStrings.containsValue("脚本别名中文")
         )
         assertFalse(
             "别名 \${'$'}t 调用内中文不得被当作待提取硬编码",
-            processor.extractedStrings.containsValue("别名中文") ||
-                processor.extractedStrings.containsValue("脚本别名中文")
+            processor.analyzer.extractedStrings.containsValue("别名中文") ||
+                processor.analyzer.extractedStrings.containsValue("脚本别名中文")
         )
     }
 
@@ -279,7 +279,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("TSX 属性中的中文应被提取", processor.extractedStrings.isNotEmpty())
+        assertTrue("TSX 属性中的中文应被提取", processor.analyzer.extractedStrings.isNotEmpty())
     }
 
     fun testJSXTextContent() {
@@ -297,7 +297,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("JSX 文本内容应被提取", processor.extractedStrings.isNotEmpty())
+        assertTrue("JSX 文本内容应被提取", processor.analyzer.extractedStrings.isNotEmpty())
     }
 
     // ── P0.5: Import Injection / PSI Rewrite 组合 ────────────────
@@ -316,7 +316,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("Vue SFC 中文应被提取", 1, processor.extractedStrings.size)
+        assertEquals("Vue SFC 中文应被提取", 1, processor.analyzer.extractedStrings.size)
 
         fun injectImport() {
             // 与 production 调用链对齐（CommandProcessor + WriteCommandAction）。
@@ -361,7 +361,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        val initialCount = processor.extractedStrings.size
+        val initialCount = processor.analyzer.extractedStrings.size
         assertTrue("应提取到中文", initialCount > 0)
 
         // 执行重写：必须用 processor.runWithUndo()（内部包 CommandProcessor + WriteCommandAction）
@@ -370,7 +370,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         // 重新 collect，已替换的中文不应再被提取
         val processor2 = I18nProcessor(project, file)
         processor2.collect()
-        assertEquals("WriteBack 后二次 collect 应无重复提取", 0, processor2.extractedStrings.size)
+        assertEquals("WriteBack 后二次 collect 应无重复提取", 0, processor2.analyzer.extractedStrings.size)
     }
 
     // ── BUG_ANALYSIS 4.1: Processor 状态污染 / collect 幂等 ──────────
@@ -390,8 +390,8 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         // 第一次 collect
         processor.collect()
         val sites1 = processor.analyzer.collectedSites.map { it.id }
-        val extracted1 = LinkedHashMap(processor.extractedStrings)
-        val existing1 = LinkedHashMap(processor.existingStrings)
+        val extracted1 = LinkedHashMap(processor.analyzer.extractedStrings)
+        val existing1 = LinkedHashMap(processor.analyzer.existingStrings)
         val siteId1 = processor.analyzer.collectedSites.map { it.id }.toSet()
         assertEquals("重复执行前 site 数应为 2", 2, sites1.size)
 
@@ -403,19 +403,19 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         assertTrue(
             "重复 collect 不应重复提取 extractedStrings",
-            processor.extractedStrings.size == extracted1.size &&
-                processor.extractedStrings.keys == extracted1.keys
+            processor.analyzer.extractedStrings.size == extracted1.size &&
+                processor.analyzer.extractedStrings.keys == extracted1.keys
         )
         assertTrue(
             "重复 collect 不应改变 existingStrings",
-            processor.existingStrings.keys == existing1.keys
+            processor.analyzer.existingStrings.keys == existing1.keys
         )
         assertEquals("重复 collect 后 siteId 应仍从 S1 开始稳定生成", siteId1, processor.analyzer.collectedSites.map { it.id }.toSet())
 
         // 第三次同幂等校验
         processor.collect()
         assertEquals("三次 collect 后 site 数仍应为 2", 2, processor.analyzer.collectedSites.size)
-        assertEquals("三次 collect 后 extracted key 不变", extracted1.keys, processor.extractedStrings.keys)
+        assertEquals("三次 collect 后 extracted key 不变", extracted1.keys, processor.analyzer.extractedStrings.keys)
     }
 
     fun testPendingChangesResetBetweenCollects() {
@@ -479,7 +479,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val file = configureFile("src/views/Home.vue", "<template><div>首页</div></template>")
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("alias 路径项目应正常提取", processor.extractedStrings.isNotEmpty())
+        assertTrue("alias 路径项目应正常提取", processor.analyzer.extractedStrings.isNotEmpty())
     }
 
     fun testVueImportPathRelative() {
@@ -487,7 +487,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val file = configureFile("src/sub/Header.vue", "<template><div>头部</div></template>")
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("相对路径项目应正常提取", processor.extractedStrings.isNotEmpty())
+        assertTrue("相对路径项目应正常提取", processor.analyzer.extractedStrings.isNotEmpty())
     }
 
     // ── P2.4: Unicode / emoji / CRLF 边界 ───────────────────────
@@ -503,7 +503,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("Unicode 中文字符（简繁）应全部提取", 3, processor.extractedStrings.size)
+        assertEquals("Unicode 中文字符（简繁）应全部提取", 3, processor.analyzer.extractedStrings.size)
     }
 
     fun testEmojiInString() {
@@ -513,8 +513,8 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("含 emoji 的中文字符串应被提取", 1, processor.extractedStrings.size)
-        assertTrue("提取的文本应保留 emoji", processor.extractedStrings.values.first().contains("🚀"))
+        assertEquals("含 emoji 的中文字符串应被提取", 1, processor.analyzer.extractedStrings.size)
+        assertTrue("提取的文本应保留 emoji", processor.analyzer.extractedStrings.values.first().contains("🚀"))
     }
 
     fun testCRLFLineEndings() {
@@ -525,7 +525,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("CRLF 换行的两个中文应被提取", 2, processor.extractedStrings.size)
+        assertEquals("CRLF 换行的两个中文应被提取", 2, processor.analyzer.extractedStrings.size)
     }
 
     fun testEmptyStringIgnored() {
@@ -536,7 +536,7 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         // 空字符串和纯空白应被忽略，只有"有效文本"被提取
-        assertEquals("空字符串和纯空白不应被提取", 1, processor.extractedStrings.size)
+        assertEquals("空字符串和纯空白不应被提取", 1, processor.analyzer.extractedStrings.size)
     }
 
     fun testMixedChineseAndEnglish() {
@@ -547,6 +547,6 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         // 含中文的字符串应被提取
-        assertEquals("两个含中文的字符串都应被提取", 2, processor.extractedStrings.size)
+        assertEquals("两个含中文的字符串都应被提取", 2, processor.analyzer.extractedStrings.size)
     }
 }

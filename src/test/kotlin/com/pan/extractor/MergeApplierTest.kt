@@ -67,7 +67,7 @@ class MergeApplierTest : BasePlatformTestCase() {
             "digit" -> ExtractedStringsDialog.MergePlan(emptyList(), digit)
             else -> ExtractedStringsDialog.MergePlan(affix, digit)
         }
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -153,7 +153,7 @@ class MergeApplierTest : BasePlatformTestCase() {
             skeletonKey = "权限{N0}",
         )
         val plan = ExtractedStringsDialog.MergePlan(emptyList(), listOf(digitGroup))
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -190,7 +190,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         processor.collect()
         val (affix, digit) = MergeApplier.factorizeSites(listOf(processor))
         val plan = ExtractedStringsDialog.MergePlan(affix, digit)
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -277,7 +277,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         assertNotNull("应生成 序号{N0} digit 组", digitGroup)
 
         val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup!!), listOf(digitGroup!!))
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -310,7 +310,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         affixGroup.skeletonKey = "custom.merged.label"   // 用户编辑
 
         val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup), emptyList())
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -346,7 +346,7 @@ class MergeApplierTest : BasePlatformTestCase() {
 
         // 模拟用户误勾选了提示组
         val plan = ExtractedStringsDialog.MergePlan(listOf(hint), emptyList())
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         val holder = arrayOfNulls<MutableMap<String, String>>(1)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             holder[0] = MergeApplier.apply(listOf(processor), extracted, plan)
@@ -393,7 +393,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         val digitGroup = digit.firstOrNull { it.skeleton == "状态{N0}" }
             ?: throw IllegalStateException("未生成 状态{N0} 数字组")
         val plan = ExtractedStringsDialog.MergePlan(emptyList(), listOf(digitGroup))
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             MergeApplier.apply(listOf(processor), extracted, plan)
         }
@@ -426,7 +426,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         val affixGroup = affix.firstOrNull { it.skeleton == "更新{N0}" }
             ?: throw IllegalStateException("未生成 更新{N0} affix 组, got=${affix.map { it.skeleton }}")
         val plan = ExtractedStringsDialog.MergePlan(listOf(affixGroup), emptyList())
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             MergeApplier.apply(listOf(processor), extracted, plan)
         }
@@ -562,7 +562,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         val processors = listOf(I18nProcessor(project, file))
         processors.forEach { it.collect() }
         val extracted = LinkedHashMap<String, String>()
-        processors.forEach { extracted.putAll(it.extractedStrings) }
+        processors.forEach { extracted.putAll(it.analyzer.extractedStrings) }
         assertTrue("应提取到待资源化的中文，got: $extracted", extracted.containsValue("资源中文"))
 
         val plan = ExtractedStringsDialog.MergePlan(emptyList(), emptyList())

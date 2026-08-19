@@ -29,7 +29,7 @@ class I18nNegativeExtractionTest : BasePlatformTestCase() {
     }
 
     private fun assertZeroExtractions(processor: I18nProcessor, msg: String) {
-        assertTrue("期望 0 提取 —— $msg，实际=${processor.extractedStrings}", processor.extractedStrings.isEmpty())
+        assertTrue("期望 0 提取 —— $msg，实际=${processor.analyzer.extractedStrings}", processor.analyzer.extractedStrings.isEmpty())
     }
 
     // ── 字符串字面量：非调用形态的 $t 字样 ─────────────────────────
@@ -185,8 +185,8 @@ class I18nNegativeExtractionTest : BasePlatformTestCase() {
             </script>
             """.trimIndent()
         )
-        assertTrue("已有 \$t('key') 调用应进入 existingStrings", p.existingStrings.containsKey("already.key"))
-        assertEquals("已翻译 key 不应被当作待提取硬编码", 0, p.extractedStrings.size)
+        assertTrue("已有 \$t('key') 调用应进入 existingStrings", p.analyzer.existingStrings.containsKey("already.key"))
+        assertEquals("已翻译 key 不应被当作待提取硬编码", 0, p.analyzer.extractedStrings.size)
     }
 
     fun testTranslationResourceFileSkip() {
@@ -203,6 +203,6 @@ class I18nNegativeExtractionTest : BasePlatformTestCase() {
         myFixture.configureFromExistingVirtualFile(psi.virtualFile)
         val processor = I18nProcessor(project, psi)
         processor.collect()
-        assertEquals("翻译资源文件跳过提取", 0, processor.extractedStrings.size)
+        assertEquals("翻译资源文件跳过提取", 0, processor.analyzer.extractedStrings.size)
     }
 }

@@ -218,8 +218,8 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         processor.collect()
         processor.runWithUndo()
         assertTrue(
-            "应提取英文整句字符串，实际：${processor.extractedStrings.values}",
-            processor.extractedStrings.values.contains("Hello world")
+            "应提取英文整句字符串，实际：${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.values.contains("Hello world")
         )
     }
 
@@ -246,8 +246,8 @@ class LanguageExtractorSettingsTest : BasePlatformTestCase() {
         processor.collect()
         processor.runWithUndo()
         assertTrue(
-            "应合并相邻文本节点并提取英文整句，实际：${processor.extractedStrings.values}",
-            processor.extractedStrings.values.contains("Hello world")
+            "应合并相邻文本节点并提取英文整句，实际：${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.values.contains("Hello world")
         )
         assertTrue("React 文件应注入 useTranslation", file.text.contains("useTranslation"))
         assertTrue("React 提取应写 t 调用", file.text.contains("t("))

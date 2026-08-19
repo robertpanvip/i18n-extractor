@@ -18,6 +18,9 @@ import com.intellij.psi.util.PsiTreeUtil
  */
 class I18nImportInjector(private val processor: I18nProcessorContract) {
 
+    /** 能力面之外，结果/状态（[tFunctionName]）经 [state] 读取（由分析器注入，见 I18nProcessor）。 */
+    internal lateinit var state: CollectionState
+
     // ───────────────────────────────────────────────
     // Vue import 去重 / 解构去重 工具函数（问题 4 修复）
     // ───────────────────────────────────────────────
@@ -470,8 +473,8 @@ class I18nImportInjector(private val processor: I18nProcessorContract) {
             // （needInjectReactGlobalDollarT/fallback → "t"；React 约定统一用 t 而非 $t），
             // 否则新提取 `t('...')` 或改写后的调用会出现运行时未定义（P0）。
             !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
-                if (reactLocaleImport != null) "const ${processor.tFunctionName} = i18n.t;\n"
-                else "const ${processor.tFunctionName} = getI18n().t;\n"
+                if (reactLocaleImport != null) "const ${state.tFunctionName} = i18n.t;\n"
+                else "const ${state.tFunctionName} = getI18n().t;\n"
             // React i18n.t 语义 + 回退 getI18n：注入 const i18n = getI18n() 保持 i18n 标识符可用
             reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
             else -> null

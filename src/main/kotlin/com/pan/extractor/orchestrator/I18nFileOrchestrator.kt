@@ -43,12 +43,12 @@ open class I18nFileOrchestrator {
         }
 
         processor.analyzer.framework = I18nFrameworkRegistry.detect(context.psiFile.containingFile ?: context.psiFile)
-        processor.tFunctionName = processor.analyzer.framework.tFunctionName
+        processor.analyzer.tFunctionName = processor.analyzer.framework.tFunctionName
 
         val f = containingFile ?: (context.psiFile as? PsiFile)
         // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
-        if (f != null && processor.analyzer.framework is ReactI18nextStrategy && processor.tFunctionName == "\$t") {
-            processor.tFunctionName = "t"
+        if (f != null && processor.analyzer.framework is ReactI18nextStrategy && processor.analyzer.tFunctionName == "\$t") {
+            processor.analyzer.tFunctionName = "t"
         }
         if (f != null && processor.analyzer.framework.detectGlobalDollarTNeeded(f)) {
             // React/Vue/Solid 纯工具文件注入全局别名标记的预判（见 I18nProcessor 处详注）。
@@ -56,7 +56,7 @@ open class I18nFileOrchestrator {
                 is ReactI18nextStrategy -> processor.analyzer.needInjectReactGlobalDollarT = true
                 is SolidI18nStrategy -> {
                     processor.analyzer.needInjectSolidGlobalDollarT = true
-                    processor.tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
+                    processor.analyzer.tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
                 }
                 is VueI18nStrategy -> processor.analyzer.needInjectGlobalDollarT = true
             }
@@ -88,9 +88,9 @@ open class I18nFileOrchestrator {
                 needInjectReactGlobalDollarT = analyzer.needInjectReactGlobalDollarT,
                 needInjectSolidGlobalDollarT = analyzer.needInjectSolidGlobalDollarT,
                 reactI18nTFallbackToDollarT = analyzer.reactI18nTFallbackToDollarT,
-                tFunctionName = processor.tFunctionName,
-                hasExtractedStrings = processor.extractedStrings.isNotEmpty(),
-                hasExistingStrings = processor.existingStrings.isNotEmpty(),
+                tFunctionName = processor.analyzer.tFunctionName,
+                hasExtractedStrings = processor.analyzer.extractedStrings.isNotEmpty(),
+                hasExistingStrings = processor.analyzer.existingStrings.isNotEmpty(),
             ),
         )
     }

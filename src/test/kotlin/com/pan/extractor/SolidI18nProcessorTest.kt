@@ -79,7 +79,7 @@ class SolidI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
+        assertEquals(1, processor.analyzer.extractedStrings.size)
     }
 
     /**
@@ -99,8 +99,8 @@ class SolidI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '提示信息', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
+            "extractedStrings should contain '提示信息', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
     }
 
@@ -126,10 +126,10 @@ class SolidI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(3, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("标题"))
-        assertTrue(processor.extractedStrings.containsValue("段落内容"))
-        assertTrue(processor.extractedStrings.containsValue("更多文本"))
+        assertEquals(3, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("标题"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("段落内容"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("更多文本"))
     }
 
     // ============================================================

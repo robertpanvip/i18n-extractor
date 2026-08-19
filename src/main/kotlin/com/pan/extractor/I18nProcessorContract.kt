@@ -20,12 +20,6 @@ interface I18nProcessorContract {
     /** 模板字面量 `${...}` 的匹配正则（对象级复用）。 */
     val templateVarRegex: Regex
 
-    /** 本次收集到的 key → 中文 资源映射（跨多次 collect 累积但每次 start 重置）。 */
-    val extractedStrings: MutableMap<String, String>
-
-    /** 探测到的翻译函数名（`t` / `$t` / `tc` …），写入替换文本时使用。 */
-    var tFunctionName: String
-
     fun containsTargetLanguage(text: String, site: SiteKind): Boolean
 
     fun extractPureStringContent(text: String): String?

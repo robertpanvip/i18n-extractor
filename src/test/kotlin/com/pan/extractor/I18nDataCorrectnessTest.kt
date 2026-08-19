@@ -120,9 +120,9 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             })
             """.trimIndent()
         )
-        assertTrue("对象字面量内 title 应被提取", p.extractedStrings.containsValue("你好"))
-        assertTrue("对象字面量内 description 应被提取", p.extractedStrings.containsValue("世界"))
-        assertEquals("对象字面量两个字符串应各成一个 key", 2, p.extractedStrings.size)
+        assertTrue("对象字面量内 title 应被提取", p.analyzer.extractedStrings.containsValue("你好"))
+        assertTrue("对象字面量内 description 应被提取", p.analyzer.extractedStrings.containsValue("世界"))
+        assertEquals("对象字面量两个字符串应各成一个 key", 2, p.analyzer.extractedStrings.size)
     }
 
     fun testTernaryNestedExtractedSeparately() {
@@ -132,9 +132,9 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             const label = cond ? "你好" : "世界"
             """.trimIndent()
         )
-        assertTrue("三元 true 分支应被单独提取", p.extractedStrings.containsValue("你好"))
-        assertTrue("三元 false 分支应被单独提取", p.extractedStrings.containsValue("世界"))
-        assertEquals("三元两个分支应各成一个 key", 2, p.extractedStrings.size)
+        assertTrue("三元 true 分支应被单独提取", p.analyzer.extractedStrings.containsValue("你好"))
+        assertTrue("三元 false 分支应被单独提取", p.analyzer.extractedStrings.containsValue("世界"))
+        assertEquals("三元两个分支应各成一个 key", 2, p.analyzer.extractedStrings.size)
     }
 
     fun testArrowBodyNestedExtracted() {
@@ -144,8 +144,8 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             const labels = items.map(item => "你好")
             """.trimIndent()
         )
-        assertTrue("箭头函数体内的字符串应被提取", p.extractedStrings.containsValue("你好"))
-        assertEquals("箭头函数体应成一个 key", 1, p.extractedStrings.size)
+        assertTrue("箭头函数体内的字符串应被提取", p.analyzer.extractedStrings.containsValue("你好"))
+        assertEquals("箭头函数体应成一个 key", 1, p.analyzer.extractedStrings.size)
     }
 
     // ── 7.3 MergeApplier：因子化分组正确性 ────────────────────────────

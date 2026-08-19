@@ -32,7 +32,7 @@ class I18nAnalyzer(
     private val contract: I18nProcessorContract,
     private val jsCollector: JsStringCollector,
     private val injector: I18nImportInjector,
-) {
+) : com.pan.extractor.CollectionState {
     /** 收集期产物容器（本 analyzer 拥有的唯一可变状态，reset 时整体替换清零）。 */
     private var plan = com.pan.extractor.planner.CollectedPlan()
 
@@ -62,13 +62,13 @@ class I18nAnalyzer(
         }
 
     /** 新提取的 key -> 原文本。 */
-    val extractedStrings: MutableMap<String, String> get() = plan.extractedStrings
+    override val extractedStrings: MutableMap<String, String> get() = plan.extractedStrings
 
     /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换）。 */
     val existingStrings: MutableMap<String, String> get() = plan.existingStrings
 
     /** 检测到的翻译函数名（$t / t / i18n.t / i18n.global.t），默认 $t。 */
-    var tFunctionName: String
+    override var tFunctionName: String
         get() = plan.tFunctionName
         set(value) { plan.tFunctionName = value }
 

@@ -49,8 +49,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("你好", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("你好", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -67,8 +67,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("你好世界", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("你好世界", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -87,8 +87,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for English strings, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for English strings, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -108,8 +108,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for empty strings, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for empty strings, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -127,8 +127,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("Hello 你好 World"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("Hello 你好 World"))
     }
 
     /**
@@ -147,10 +147,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(3, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("苹果"))
-        assertTrue(processor.extractedStrings.containsValue("香蕉"))
-        assertTrue(processor.extractedStrings.containsValue("橙子"))
+        assertEquals(3, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("苹果"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("香蕉"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("橙子"))
     }
 
     /**
@@ -169,8 +169,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("你好"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("你好"))
     }
 
     // ============================================================
@@ -191,9 +191,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        val extractedStr = processor.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        val existingStr = processor.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        if (processor.extractedStrings.isNotEmpty()) {
+        val extractedStr = processor.analyzer.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val existingStr = processor.analyzer.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        if (processor.analyzer.extractedStrings.isNotEmpty()) {
             throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.analyzer.pendingChanges.size}")
         }
     }
@@ -213,12 +213,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for existing ${'$'}t(), but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for existing ${'$'}t(), but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
         assertTrue(
-            "existingStrings should contain '你好', but got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("你好")
+            "existingStrings should contain '你好', but got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("你好")
         )
     }
 
@@ -237,8 +237,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for existing ${'$'}t() with backtick, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for existing ${'$'}t() with backtick, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -258,8 +258,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "'内部中文' 是 foo() 的参数而非 ${'$'}t 的直接参数，应被提取，但 got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("内部中文")
+            "'内部中文' 是 foo() 的参数而非 ${'$'}t 的直接参数，应被提取，但 got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("内部中文")
         )
     }
 
@@ -278,8 +278,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertTrue(processor.extractedStrings.containsValue("提示信息"))
-        assertTrue(processor.extractedStrings.containsValue("警告"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("提示信息"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("警告"))
     }
 
     /**
@@ -301,8 +301,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "同名普通函数 t 的参数中文应被提取，但 got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("自定义函数的中文")
+            "同名普通函数 t 的参数中文应被提取，但 got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("自定义函数的中文")
         )
     }
 
@@ -324,8 +324,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("你好世界", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("你好世界", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -342,8 +342,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("插件管理这是我的测试", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("插件管理这是我的测试", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -360,8 +360,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("前缀中文后缀", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("前缀中文后缀", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -378,8 +378,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("你好{0}", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("你好{0}", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -396,8 +396,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("前缀中间{0}后缀", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("前缀中间{0}后缀", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -414,8 +414,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertEquals("{0}，你好，今天是{1}", processor.extractedStrings.values.first())
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertEquals("{0}，你好，今天是{1}", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -434,8 +434,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         // 内层模板字符串的「内层」中文应被提取
         assertTrue(
-            "Should contain '内层' in extractedStrings, got: ${processor.extractedStrings}",
-            processor.extractedStrings.values.any { it.contains("内层") }
+            "Should contain '内层' in extractedStrings, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.values.any { it.contains("内层") }
         )
     }
 
@@ -454,8 +454,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should be empty for template literal with no Chinese, but got: ${processor.extractedStrings}",
-            processor.extractedStrings.isEmpty()
+            "extractedStrings should be empty for template literal with no Chinese, but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.isEmpty()
         )
     }
 
@@ -479,14 +479,14 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         // 两个中文拼接后应合并为一个提取
         assertTrue(
-            "extractedStrings should contain '你好世界', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好世界")
+            "extractedStrings should contain '你好世界', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好世界")
         )
         // 【Bug 验证 A1】拼接不应把操作数再单独提取，整条拼接应只产生 1 个 key
         assertEquals(
-            "拼接 '你好' + '世界' 应只提取合并后的 1 条，不应分别提取操作数，got: ${processor.extractedStrings}",
+            "拼接 '你好' + '世界' 应只提取合并后的 1 条，不应分别提取操作数，got: ${processor.analyzer.extractedStrings}",
             1,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
     }
 
@@ -505,8 +505,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '你好{0}', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{0}")
+            "extractedStrings should contain '你好{0}', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
     }
 
@@ -525,8 +525,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '{0}你好', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("{0}你好")
+            "extractedStrings should contain '{0}你好', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("{0}你好")
         )
     }
 
@@ -545,8 +545,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '前中后', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("前中后")
+            "extractedStrings should contain '前中后', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("前中后")
         )
     }
 
@@ -565,8 +565,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '共{0}条记录', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("共{0}条记录")
+            "extractedStrings should contain '共{0}条记录', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("共{0}条记录")
         )
     }
 
@@ -591,8 +591,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertTrue(processor.extractedStrings.containsValue("张三"))
-        assertTrue(processor.extractedStrings.containsValue("标签"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("张三"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("标签"))
     }
 
     /**
@@ -609,10 +609,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(3, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("苹果"))
-        assertTrue(processor.extractedStrings.containsValue("香蕉"))
-        assertTrue(processor.extractedStrings.containsValue("橙子"))
+        assertEquals(3, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("苹果"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("香蕉"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("橙子"))
     }
 
     // ============================================================
@@ -634,9 +634,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("真实文本"))
-        assertFalse(processor.extractedStrings.containsValue("这是单行注释的中文"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("真实文本"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("这是单行注释的中文"))
     }
 
     /**
@@ -657,9 +657,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("真实文本"))
-        assertFalse(processor.extractedStrings.containsValue("包含中文内容"))
+        assertEquals(1, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("真实文本"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("包含中文内容"))
     }
 
     // ============================================================
@@ -758,11 +758,11 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         // 已提取的不应出现在 extractedStrings
-        assertFalse(processor.extractedStrings.containsValue("已提取"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("已提取"))
         // 未提取的应出现在 extractedStrings
-        assertTrue(processor.extractedStrings.containsValue("未提取"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("未提取"))
         // 已有的应在 existingStrings 中
-        assertTrue(processor.existingStrings.containsValue("已提取"))
+        assertTrue(processor.analyzer.existingStrings.containsValue("已提取"))
     }
 
     // ============================================================
@@ -790,22 +790,22 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
 
         // answer 的长字符串应被完整提取为一个 $t 调用（使用反引号模板字符串），所有 3 条内容都应在 key 中
-        val extracted = processor.extractedStrings.values.firstOrNull {
+        val extracted = processor.analyzer.extractedStrings.values.firstOrNull {
             it.contains("1. 隔离库存") && it.contains("2. 在线筛选") && it.contains("3. 客户沟通")
         }
         assertTrue(
-            "含 \\n 的多行字符串应作为整体被提取，got: ${processor.extractedStrings.values}",
+            "含 \\n 的多行字符串应作为整体被提取，got: ${processor.analyzer.extractedStrings.values}",
             extracted != null
         )
 
         // keywords 中 "缺陷"（中文）应被提取，"AOI"（英文）不应提取
         assertTrue(
-            "keywords 中的 '缺陷' 应被提取，got: ${processor.extractedStrings.values}",
-            processor.extractedStrings.containsValue("缺陷")
+            "keywords 中的 '缺陷' 应被提取，got: ${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.containsValue("缺陷")
         )
         assertFalse(
-            "keywords 中的 'AOI' 纯英文不应提取，got: ${processor.extractedStrings.values}",
-            processor.extractedStrings.containsValue("AOI")
+            "keywords 中的 'AOI' 纯英文不应提取，got: ${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.containsValue("AOI")
         )
 
         // 替换后结果中应包含完整的 $t(...)，没有被截断
@@ -846,17 +846,17 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         // "AOI" 纯英文不应被提取
         assertFalse(
-            "'AOI' 纯英文不应提取，got: ${processor.extractedStrings.values}",
-            processor.extractedStrings.containsValue("AOI")
+            "'AOI' 纯英文不应提取，got: ${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.containsValue("AOI")
         )
         // "缺陷" 已有 \$t()，应在 existingStrings 中而非 extractedStrings
         assertFalse(
-            "'缺陷' 已有 \$t()，不应重复提取到 extractedStrings，got: ${processor.extractedStrings.values}",
-            processor.extractedStrings.containsValue("缺陷")
+            "'缺陷' 已有 \$t()，不应重复提取到 extractedStrings，got: ${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.containsValue("缺陷")
         )
         assertTrue(
-            "'缺陷' 应在 existingStrings 中，got: ${processor.existingStrings.values}",
-            processor.existingStrings.containsValue("缺陷")
+            "'缺陷' 应在 existingStrings 中，got: ${processor.analyzer.existingStrings.values}",
+            processor.analyzer.existingStrings.containsValue("缺陷")
         )
     }
 
@@ -878,11 +878,11 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals("STATUSES 中 4 个中文都应提取", 4, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("待审批"))
-        assertTrue(processor.extractedStrings.containsValue("已通过"))
-        assertTrue(processor.extractedStrings.containsValue("已拒绝"))
-        assertTrue(processor.extractedStrings.containsValue("已撤回"))
+        assertEquals("STATUSES 中 4 个中文都应提取", 4, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("待审批"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("已通过"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("已拒绝"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("已撤回"))
 
         processor.runWithUndo()
         val result = file.text
@@ -919,9 +919,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals(2, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("开始时间"))
-        assertTrue(processor.extractedStrings.containsValue("结束时间"))
+        assertEquals(2, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("开始时间"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("结束时间"))
 
         processor.runWithUndo()
         val result = file.text
@@ -958,9 +958,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
         // NOTE：processor 明确跳过 TypeScriptEnumField（原因是 enum 初始化值必须是编译期常量，
         //       不能放 $t(...) 调用，会引发 TS18033）。所以提取数量应为 0，且枚举原始内容保持不动。
-        assertEquals("enum 字符串枚举不做 i18n 提取（避免 TS18033 编译错误）", 0, processor.extractedStrings.size)
-        assertFalse(processor.extractedStrings.containsValue("待支付"))
-        assertFalse(processor.extractedStrings.containsValue("已完成"))
+        assertEquals("enum 字符串枚举不做 i18n 提取（避免 TS18033 编译错误）", 0, processor.analyzer.extractedStrings.size)
+        assertFalse(processor.analyzer.extractedStrings.containsValue("待支付"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("已完成"))
 
         processor.runWithUndo()
         val result = file.text
@@ -1005,12 +1005,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
         // defaultUser 中 3 个 value + 类型字面量类型中我们不扫描（因为那是 TS type 语法的字符串字面量类型）
         // → 实际提取的是 defaultUser 的 nickname/bio/status 共 3 个硬编码字符串值
         assertTrue(
-            "defaultUser 里 '新用户' 应被提取，got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("新用户")
+            "defaultUser 里 '新用户' 应被提取，got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("新用户")
         )
         assertTrue(
-            "defaultUser 里 '这个人很懒，什么都没留下' 应被提取，got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("这个人很懒，什么都没留下")
+            "defaultUser 里 '这个人很懒，什么都没留下' 应被提取，got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("这个人很懒，什么都没留下")
         )
 
         processor.runWithUndo()
@@ -1045,8 +1045,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue(processor.extractedStrings.containsValue("提示标题"))
-        assertTrue(processor.extractedStrings.containsValue("你好呀"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("提示标题"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("你好呀"))
 
         processor.runWithUndo()
         val result = file.text
@@ -1078,11 +1078,11 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertEquals(4, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("提交成功"))
-        assertTrue(processor.extractedStrings.containsValue("提交失败"))
-        assertTrue(processor.extractedStrings.containsValue("好消息"))
-        assertTrue(processor.extractedStrings.containsValue("坏消息"))
+        assertEquals(4, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("提交成功"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("提交失败"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("好消息"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("坏消息"))
 
         processor.runWithUndo()
         val result = file.text
@@ -1139,15 +1139,15 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         // title = 操作提示 / toast = 欢迎回来，${x}，您的验证码是 ${y} / toast2 = 用户${x}：第${y}/${z}步 / welcome=欢迎回来
-        assertTrue("title 应提取 '操作提示'", processor.extractedStrings.containsValue("操作提示"))
-        assertTrue("welcome 应提取 '欢迎回来'", processor.extractedStrings.containsValue("欢迎回来"))
+        assertTrue("title 应提取 '操作提示'", processor.analyzer.extractedStrings.containsValue("操作提示"))
+        assertTrue("welcome 应提取 '欢迎回来'", processor.analyzer.extractedStrings.containsValue("欢迎回来"))
         assertTrue(
             "toast 整段模板字面量应提取为包含 欢迎回来 / 验证码 is 的骨架（含 2 个命名插值）",
-            processor.extractedStrings.values.any { it.contains("欢迎回来") && it.contains("验证码是") }
+            processor.analyzer.extractedStrings.values.any { it.contains("欢迎回来") && it.contains("验证码是") }
         )
         assertTrue(
             "toast2 整段骨架包含 用户 / 第 / 步 三个中文段",
-            processor.extractedStrings.values.any { it.contains("用户") && it.contains("第") && it.contains("步") }
+            processor.analyzer.extractedStrings.values.any { it.contains("用户") && it.contains("第") && it.contains("步") }
         )
 
         processor.runWithUndo()
@@ -1182,10 +1182,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue(processor.extractedStrings.containsValue("网络连接失败"))
-        assertTrue(processor.extractedStrings.containsValue("点击重试"))
-        assertTrue(processor.extractedStrings.containsValue("请检查网络设置"))
-        assertTrue(processor.extractedStrings.containsValue("请求发生错误"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("网络连接失败"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("点击重试"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("请检查网络设置"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("请求发生错误"))
 
         processor.runWithUndo()
         val result = file.text
@@ -1224,8 +1224,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("placeholder 默认值 请输入关键字 应提取", processor.extractedStrings.containsValue("请输入关键字"))
-        assertTrue("okText 默认值 立即搜索 应提取", processor.extractedStrings.containsValue("立即搜索"))
+        assertTrue("placeholder 默认值 请输入关键字 应提取", processor.analyzer.extractedStrings.containsValue("请输入关键字"))
+        assertTrue("okText 默认值 立即搜索 应提取", processor.analyzer.extractedStrings.containsValue("立即搜索"))
 
         processor.runWithUndo()
         val result = file.text
@@ -1270,12 +1270,12 @@ class I18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue(processor.extractedStrings.containsValue("欢迎使用"))
-        assertTrue(processor.extractedStrings.containsValue("加载中..."))
-        assertTrue(processor.extractedStrings.containsValue("首页"))
-        assertTrue(processor.extractedStrings.containsValue("关于我们"))
-        assertTrue(processor.extractedStrings.containsValue("联系我们"))
-        assertEquals(5, processor.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("欢迎使用"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("加载中..."))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("首页"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("关于我们"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("联系我们"))
+        assertEquals(5, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text
@@ -1306,11 +1306,11 @@ class I18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("应提取 '限制50字符'", processor.extractedStrings.containsValue("限制50字符"))
-        assertTrue("应提取 '限制200字符'", processor.extractedStrings.containsValue("限制200字符"))
-        assertTrue("应提取 '最多输入1000字'", processor.extractedStrings.containsValue("最多输入1000字"))
-        assertTrue("应提取 '请输入6位邮政编码'", processor.extractedStrings.containsValue("请输入6位邮政编码"))
-        assertEquals("共 4 条中文夹数字提取", 4, processor.extractedStrings.size)
+        assertTrue("应提取 '限制50字符'", processor.analyzer.extractedStrings.containsValue("限制50字符"))
+        assertTrue("应提取 '限制200字符'", processor.analyzer.extractedStrings.containsValue("限制200字符"))
+        assertTrue("应提取 '最多输入1000字'", processor.analyzer.extractedStrings.containsValue("最多输入1000字"))
+        assertTrue("应提取 '请输入6位邮政编码'", processor.analyzer.extractedStrings.containsValue("请输入6位邮政编码"))
+        assertEquals("共 4 条中文夹数字提取", 4, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text
@@ -1342,8 +1342,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("应提取 '取消置顶'", processor.extractedStrings.containsValue("取消置顶"))
-        assertTrue("应提取 '置顶'", processor.extractedStrings.containsValue("置顶"))
+        assertTrue("应提取 '取消置顶'", processor.analyzer.extractedStrings.containsValue("取消置顶"))
+        assertTrue("应提取 '置顶'", processor.analyzer.extractedStrings.containsValue("置顶"))
         processor.runWithUndo()
         val result = file.text
         // 修正后：$t('取消置顶') 和 $t('置顶') 的单条调用只在外层出现一次
@@ -1391,8 +1391,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val p1 = I18nProcessor(project, file)
         p1.collect()
         val json1 = mutableMapOf<String, String>()
-        json1.putAll(p1.existingStrings)
-        json1.putAll(p1.extractedStrings)
+        json1.putAll(p1.analyzer.existingStrings)
+        json1.putAll(p1.analyzer.extractedStrings)
 
         // 应用改动（写入 PSI），得到已提取后的文件
         p1.runWithUndo()
@@ -1404,13 +1404,13 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val p2 = I18nProcessor(project, file2)
         p2.collect()
         val json2 = mutableMapOf<String, String>()
-        json2.putAll(p2.existingStrings)
-        json2.putAll(p2.extractedStrings)
+        json2.putAll(p2.analyzer.existingStrings)
+        json2.putAll(p2.analyzer.extractedStrings)
 
         assertEquals(
             "再次提取不应产生新的 extractedStrings（已翻译调用被跳过）",
             emptyMap<String, String>(),
-            p2.extractedStrings
+            p2.analyzer.extractedStrings
         )
         assertEquals(
             "两次提取得到的 JSON 应完全一致，但 json1=$json1 json2=$json2",

@@ -30,6 +30,9 @@ import com.intellij.psi.xml.XmlText
  */
 class JsStringCollector(private val processor: I18nProcessorContract) {
 
+    /** 能力面（[processor]，[I18nProcessorContract]）之外，结果/状态经 [state] 读写（由分析器注入，见 I18nProcessor）。 */
+    internal lateinit var state: CollectionState
+
     private val templateVarRegex = processor.templateVarRegex
 
     /** 已处理过的 enum 父节点（避免重复弹通知） */
@@ -91,7 +94,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
 
         // 步骤5：保存提取的message（按trim后的value去重）
         val key = generateKey(message, ele)
-        processor.extractedStrings.putIfAbsent(key, message)
+        state.extractedStrings.putIfAbsent(key, message)
 
         // 步骤5：预生成 paramsObject
         // - Vue ：标识符 key，无引号（因为 key 形如 N0/N1）
@@ -142,7 +145,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         val quote = if (trimmedMsg.contains("\n")) "`" else "'"
 
         // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
-        val fn = processor.tFunctionName
+        val fn = state.tFunctionName
         return if (paramsObject.trim().replace("\\s+".toRegex(), "") == "{}") {
             "$fn($quote$escapedMsg$quote)"
         } else {
@@ -188,7 +191,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         }
 
         val key = generateKey(message, ele)
-        processor.extractedStrings.putIfAbsent(key, message)
+        state.extractedStrings.putIfAbsent(key, message)
 
         // 参数对象：Vue 用标识符 key（无引号）；React/Generic 用字符串 key（加引号）
         val paramKeyNeedsQuote = fw.paramKeyNeedsQuote
@@ -275,7 +278,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         // 最小提取长度：过短的文案不提取
         if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
         val key = generateKey(trimmed, ele)
-        processor.extractedStrings.putIfAbsent(key, trimmed)
+        state.extractedStrings.putIfAbsent(key, trimmed)
         return key;
     }
 
@@ -285,7 +288,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         // 最小提取长度：过短的文案不提取
         if (trimmed.codePointCount(0, trimmed.length) < I18nSettings.getInstance().minStringLength()) return null
         val key = generateKey(trimmed, element)
-        processor.extractedStrings.putIfAbsent(key, trimmed)
+        state.extractedStrings.putIfAbsent(key, trimmed)
         return key
     }
 

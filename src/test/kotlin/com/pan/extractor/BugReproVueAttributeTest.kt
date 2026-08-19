@@ -71,7 +71,7 @@ class BugReproVueAttributeTest : BasePlatformTestCase() {
             listOfNotNull(group),
             digit
         )
-        val extracted = LinkedHashMap(processor.extractedStrings)
+        val extracted = LinkedHashMap(processor.analyzer.extractedStrings)
         println("=== extracted before apply ===")
         extracted.forEach { (k, v) -> println("$k -> $v") }
         val holder = arrayOfNulls<MutableMap<String, String>>(1)

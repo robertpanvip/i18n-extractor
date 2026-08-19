@@ -94,8 +94,8 @@ object I18nExtractionOrchestrator {
                     processor.collect()
                     // 已翻译的 t()/i18n.t() 调用（existingStrings）也要并入输出 JSON，
                     // 与单文件/目录提取保持一致，否则已翻译文案会丢失导致 JSON 为空。
-                    extracted.putAll(processor.existingStrings)
-                    extracted.putAll(processor.extractedStrings)
+                    extracted.putAll(processor.analyzer.existingStrings)
+                    extracted.putAll(processor.analyzer.extractedStrings)
                     processor
                 }
             }
@@ -115,8 +115,8 @@ object I18nExtractionOrchestrator {
         }
         val p = processor!!
         val extracted = mutableMapOf<String, String>()
-        extracted.putAll(p.existingStrings)
-        extracted.putAll(p.extractedStrings)
+        extracted.putAll(p.analyzer.existingStrings)
+        extracted.putAll(p.analyzer.extractedStrings)
         return finalizeCollection(project, listOf(p), extracted, psiFile, fileCount = 1)
     }
 

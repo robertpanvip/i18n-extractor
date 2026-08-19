@@ -72,7 +72,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(1, processor.extractedStrings.size)
+        assertEquals(1, processor.analyzer.extractedStrings.size)
     }
 
     /**
@@ -92,8 +92,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '提示信息', got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("提示信息")
+            "extractedStrings should contain '提示信息', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("提示信息")
         )
     }
 
@@ -119,10 +119,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertEquals(3, processor.extractedStrings.size)
-        assertTrue(processor.extractedStrings.containsValue("标题"))
-        assertTrue(processor.extractedStrings.containsValue("段落内容"))
-        assertTrue(processor.extractedStrings.containsValue("更多文本"))
+        assertEquals(3, processor.analyzer.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("标题"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("段落内容"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("更多文本"))
     }
 
     // ============================================================
@@ -367,12 +367,12 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertFalse(
-            "extractedStrings should not contain '你好' for existing ${'$'}t(), got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好")
+            "extractedStrings should not contain '你好' for existing ${'$'}t(), got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好")
         )
         assertTrue(
-            "existingStrings should contain '你好', got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("你好")
+            "existingStrings should contain '你好', got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("你好")
         )
     }
 
@@ -401,8 +401,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
-        assertTrue(processor.extractedStrings.containsValue("真实文本"))
-        assertFalse(processor.extractedStrings.containsValue("这是 JSX 注释，不应提取"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("真实文本"))
+        assertFalse(processor.analyzer.extractedStrings.containsValue("这是 JSX 注释，不应提取"))
     }
 
     // ============================================================
@@ -427,12 +427,12 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         // 模板字面量变量插值应使用 React 的双括号格式 {{0}}
         assertTrue(
-            "React 项目中 .ts 文件的模板字面量插值应使用双括号格式 {{0}}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{{0}}")
+            "React 项目中 .ts 文件的模板字面量插值应使用双括号格式 {{0}}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{{0}}")
         )
         assertFalse(
-            "React 项目中 .ts 文件的模板字面量插值不应使用单括号格式 {0}, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("你好{0}")
+            "React 项目中 .ts 文件的模板字面量插值不应使用单括号格式 {0}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
     }
 
@@ -491,17 +491,17 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         // "已存在" 和 "按钮" 应在 existingStrings 中
         assertTrue(
-            "'已存在' 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("已存在")
+            "'已存在' 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("已存在")
         )
         assertTrue(
-            "'按钮' 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("按钮")
+            "'按钮' 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("按钮")
         )
         // "新标题" 应被提取
         assertTrue(
-            "'新标题' 应被提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("新标题")
+            "'新标题' 应被提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("新标题")
         )
     }
 
@@ -532,21 +532,21 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         // 两种形式都应识别为已翻译
         assertTrue(
-            "'hook文本' (via \$t) 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("hook文本")
+            "'hook文本' (via \$t) 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("hook文本")
         )
         assertTrue(
-            "'全局文本' (via i18n.t) 应在 existingStrings 中, got: ${processor.existingStrings}",
-            processor.existingStrings.containsValue("全局文本")
+            "'全局文本' (via i18n.t) 应在 existingStrings 中, got: ${processor.analyzer.existingStrings}",
+            processor.analyzer.existingStrings.containsValue("全局文本")
         )
         // 不应重复提取
         assertFalse(
-            "'hook文本' 不应被重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("hook文本")
+            "'hook文本' 不应被重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("hook文本")
         )
         assertFalse(
-            "'全局文本' 不应被重复提取, got: ${processor.extractedStrings}",
-            processor.extractedStrings.containsValue("全局文本")
+            "'全局文本' 不应被重复提取, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("全局文本")
         )
     }
 
@@ -1038,8 +1038,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val resultText = file.text
         val compact = resultText.replace("\\s+".toRegex(), "")
         assertEquals(
-            "无中文 React 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.extractedStrings}",
-            0, processor.extractedStrings.size
+            "无中文 React 纯工具 TS 文件：extractedStrings 应为空, got: ${processor.analyzer.extractedStrings}",
+            0, processor.analyzer.extractedStrings.size
         )
         assertFalse(
             "无中文文件不应出现任何 i18n 全局导入（import getI18n / i18next 都不行）, got:\n$resultText",
@@ -1152,14 +1152,14 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.runWithUndo()
 
         assertEquals(
-            "locale 命名的文件不应提取任何字符串, got: ${processor.extractedStrings}",
+            "locale 命名的文件不应提取任何字符串, got: ${processor.analyzer.extractedStrings}",
             0,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
         assertEquals(
-            "locale 命名的文件不应读取 existingStrings, got: ${processor.existingStrings}",
+            "locale 命名的文件不应读取 existingStrings, got: ${processor.analyzer.existingStrings}",
             0,
-            processor.existingStrings.size
+            processor.analyzer.existingStrings.size
         )
         val resultText = file.text
         assertFalse(
@@ -1195,9 +1195,9 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.runWithUndo()
 
         assertEquals(
-            "locales/ 目录下的文件不应提取字符串, got: ${processor.extractedStrings}",
+            "locales/ 目录下的文件不应提取字符串, got: ${processor.analyzer.extractedStrings}",
             0,
-            processor.extractedStrings.size
+            processor.analyzer.extractedStrings.size
         )
         val resultText = file.text
         assertFalse(
@@ -1238,7 +1238,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             .runReadAction<Pair<Int, Int>> {
                 val processor = I18nProcessor(project, file)
                 processor.collect()
-                processor.existingStrings.size to processor.extractedStrings.size
+                processor.analyzer.existingStrings.size to processor.analyzer.extractedStrings.size
             }
         assertEquals("existingStrings 应为空", 0, existingSize)
         assertEquals("extractedStrings 应包含两个中文", 2, extractedSize)
@@ -1272,15 +1272,15 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        val values = processor.existingStrings.values.toSet()
+        val values = processor.analyzer.existingStrings.values.toSet()
         assertTrue(
             "已翻译的 t('你好hello') / t('你好hello2') 必须进 existingStrings, got=$values",
             values.containsAll(setOf("你好hello", "你好hello2"))
         )
         // 已翻译调用不应被当作新文本再次提取
         assertTrue(
-            "已翻译调用不应进入 extractedStrings, got=${processor.extractedStrings.values}",
-            processor.extractedStrings.values.none { it == "你好hello" || it == "你好hello2" }
+            "已翻译调用不应进入 extractedStrings, got=${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.values.none { it == "你好hello" || it == "你好hello2" }
         )
     }
 
@@ -1307,7 +1307,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         )
         val processor = I18nProcessor(project, file)
         processor.collect()
-        val values = processor.existingStrings.values.toSet()
+        val values = processor.analyzer.existingStrings.values.toSet()
         val expected = setOf("成功", "取消")
         assertTrue(
             "React: t() / i18n.t() 内的中文必须进 existingStrings, \nexpect=$expected\ngot=$values",
@@ -1351,12 +1351,12 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
         assertTrue(
-            "existingStrings 应收录「老调用中文」, got=${processor.existingStrings.values}",
-            processor.existingStrings.values.contains("老调用中文")
+            "existingStrings 应收录「老调用中文」, got=${processor.analyzer.existingStrings.values}",
+            processor.analyzer.existingStrings.values.contains("老调用中文")
         )
         assertTrue(
-            "应该有 ≥ 1 个新提取（至少包含「新提示」）, got size=${processor.extractedStrings.size}",
-            processor.extractedStrings.size >= 1
+            "应该有 ≥ 1 个新提取（至少包含「新提示」）, got size=${processor.analyzer.extractedStrings.size}",
+            processor.analyzer.extractedStrings.size >= 1
         )
         processor.runWithUndo()
         val resultText = file.text
@@ -1408,7 +1408,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         )
         val p1 = I18nProcessor(project, file)
         p1.collect()
-        assertEquals("应提取 1 个新中文（品牌好）, got=${p1.extractedStrings.size}", 1, p1.extractedStrings.size)
+        assertEquals("应提取 1 个新中文（品牌好）, got=${p1.analyzer.extractedStrings.size}", 1, p1.analyzer.extractedStrings.size)
         p1.runWithUndo()
         // 再跑一遍：模拟用户第二次点 Extract
         val p2 = I18nProcessor(project, file)
@@ -1486,7 +1486,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         )
         val p = I18nProcessor(project, file)
         p.collect()
-        assertEquals("应提取 1 个新中文（残缺提示）, got=${p.extractedStrings.size}", 1, p.extractedStrings.size)
+        assertEquals("应提取 1 个新中文（残缺提示）, got=${p.analyzer.extractedStrings.size}", 1, p.analyzer.extractedStrings.size)
         p.runWithUndo()
 
         val txt = file.text
@@ -1534,7 +1534,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         val p = I18nProcessor(project, file)
         p.collect()
         val expected = setOf("记录", "文件", "用户")
-        val values = p.existingStrings.values.toSet()
+        val values = p.analyzer.existingStrings.values.toSet()
         assertTrue(
             "React tc/\$tc/i18n.tc 内中文必须进 existingStrings,\nexpect=$expected\ngot=$values",
             values.containsAll(expected)
@@ -1587,20 +1587,20 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         // title="确认提示" / aria-label="确认操作" / data-ok-text="确定"
         // 注意：<ConfirmButton title="确认" /> / title="取消确认" → 它们的值也是中文硬编码 prop
         assertTrue(
-            "button 静态属性 title='确认提示' 应提取，got=${processor.extractedStrings.values}",
-            processor.extractedStrings.containsValue("确认提示")
+            "button 静态属性 title='确认提示' 应提取，got=${processor.analyzer.extractedStrings.values}",
+            processor.analyzer.extractedStrings.containsValue("确认提示")
         )
         assertTrue(
             "aria-label='确认操作' 应提取",
-            processor.extractedStrings.containsValue("确认操作")
+            processor.analyzer.extractedStrings.containsValue("确认操作")
         )
         assertTrue(
             "data-ok-text='确定' 应提取",
-            processor.extractedStrings.containsValue("确定")
+            processor.analyzer.extractedStrings.containsValue("确定")
         )
         assertTrue(
             "ConfirmButton title='确认' / title='取消确认' 两个 JSX 字符串 props 都应提取",
-            processor.extractedStrings.containsValue("确认") && processor.extractedStrings.containsValue("取消确认")
+            processor.analyzer.extractedStrings.containsValue("确认") && processor.analyzer.extractedStrings.containsValue("取消确认")
         )
 
         processor.runWithUndo()
@@ -1658,20 +1658,20 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
         assertTrue(
             "泛型 select 的 placeholder 请选择国家 应提取",
-            processor.extractedStrings.containsValue("请选择国家")
+            processor.analyzer.extractedStrings.containsValue("请选择国家")
         )
         assertTrue(
             "泛型 select 的 label 国家地区 应提取",
-            processor.extractedStrings.containsValue("国家地区")
+            processor.analyzer.extractedStrings.containsValue("国家地区")
         )
-        assertTrue("option 中文 中国 应提取", processor.extractedStrings.containsValue("中国"))
-        assertTrue("option 中文 美国 应提取", processor.extractedStrings.containsValue("美国"))
-        assertTrue("option 中文 日本 应提取", processor.extractedStrings.containsValue("日本"))
-        assertTrue("泛型 List header 数字列表 应提取", processor.extractedStrings.containsValue("数字列表"))
-        assertTrue("泛型 List footer 列表结束 应提取", processor.extractedStrings.containsValue("列表结束"))
-        assertTrue("List children 第一项描述 应提取", processor.extractedStrings.containsValue("第一项描述"))
-        assertTrue("List children 第二项描述 应提取", processor.extractedStrings.containsValue("第二项描述"))
-        assertEquals(9, processor.extractedStrings.size)
+        assertTrue("option 中文 中国 应提取", processor.analyzer.extractedStrings.containsValue("中国"))
+        assertTrue("option 中文 美国 应提取", processor.analyzer.extractedStrings.containsValue("美国"))
+        assertTrue("option 中文 日本 应提取", processor.analyzer.extractedStrings.containsValue("日本"))
+        assertTrue("泛型 List header 数字列表 应提取", processor.analyzer.extractedStrings.containsValue("数字列表"))
+        assertTrue("泛型 List footer 列表结束 应提取", processor.analyzer.extractedStrings.containsValue("列表结束"))
+        assertTrue("List children 第一项描述 应提取", processor.analyzer.extractedStrings.containsValue("第一项描述"))
+        assertTrue("List children 第二项描述 应提取", processor.analyzer.extractedStrings.containsValue("第二项描述"))
+        assertEquals(9, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text
@@ -1722,13 +1722,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue("commonProps.tip 鼠标悬停提示 应提取", processor.extractedStrings.containsValue("鼠标悬停提示"))
-        assertTrue("commonProps.ariaLabel 可点击控件 应提取", processor.extractedStrings.containsValue("可点击控件"))
-        assertTrue("tabs[0] 首页 应提取", processor.extractedStrings.containsValue("首页"))
-        assertTrue("tabs[1] 发现页 应提取", processor.extractedStrings.containsValue("发现页"))
-        assertTrue("tabs[2] 我的 应提取", processor.extractedStrings.containsValue("我的"))
-        assertTrue("Button label=\"主按钮\" 应提取", processor.extractedStrings.containsValue("主按钮"))
-        assertEquals(6, processor.extractedStrings.size)
+        assertTrue("commonProps.tip 鼠标悬停提示 应提取", processor.analyzer.extractedStrings.containsValue("鼠标悬停提示"))
+        assertTrue("commonProps.ariaLabel 可点击控件 应提取", processor.analyzer.extractedStrings.containsValue("可点击控件"))
+        assertTrue("tabs[0] 首页 应提取", processor.analyzer.extractedStrings.containsValue("首页"))
+        assertTrue("tabs[1] 发现页 应提取", processor.analyzer.extractedStrings.containsValue("发现页"))
+        assertTrue("tabs[2] 我的 应提取", processor.analyzer.extractedStrings.containsValue("我的"))
+        assertTrue("Button label=\"主按钮\" 应提取", processor.analyzer.extractedStrings.containsValue("主按钮"))
+        assertEquals(6, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text
@@ -1801,10 +1801,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        assertTrue(processor.extractedStrings.containsValue("用户名或密码错误"))
-        assertTrue(processor.extractedStrings.containsValue("验证码已过期"))
-        assertTrue(processor.extractedStrings.containsValue("用户未登录"))
-        assertEquals(3, processor.extractedStrings.size)
+        assertTrue(processor.analyzer.extractedStrings.containsValue("用户名或密码错误"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("验证码已过期"))
+        assertTrue(processor.analyzer.extractedStrings.containsValue("用户未登录"))
+        assertEquals(3, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text

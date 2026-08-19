@@ -91,8 +91,8 @@ class VueLifecycleTest : BasePlatformTestCase() {
         val p1 = I18nProcessor(project, file)
         p1.collect()
         assertEquals(
-            "第一遍应提取 2 个字符串，got: ${p1.extractedStrings}",
-            2, p1.extractedStrings.size
+            "第一遍应提取 2 个字符串，got: ${p1.analyzer.extractedStrings}",
+            2, p1.analyzer.extractedStrings.size
         )
         p1.runWithUndo()
 
@@ -115,16 +115,16 @@ class VueLifecycleTest : BasePlatformTestCase() {
         val p2 = I18nProcessor(project, file)
         p2.collect()
         assertTrue(
-            "第二遍不应再提取（已翻译），got: ${p2.extractedStrings}",
-            p2.extractedStrings.isEmpty()
+            "第二遍不应再提取（已翻译），got: ${p2.analyzer.extractedStrings}",
+            p2.analyzer.extractedStrings.isEmpty()
         )
         assertTrue(
-            "第二遍应识别 '会员专享' 为已存在翻译，got: ${p2.existingStrings}",
-            p2.existingStrings.containsValue("会员专享")
+            "第二遍应识别 '会员专享' 为已存在翻译，got: ${p2.analyzer.existingStrings}",
+            p2.analyzer.existingStrings.containsValue("会员专享")
         )
         assertTrue(
-            "第二遍应识别 '普通用户' 为已存在翻译，got: ${p2.existingStrings}",
-            p2.existingStrings.containsValue("普通用户")
+            "第二遍应识别 '普通用户' 为已存在翻译，got: ${p2.analyzer.existingStrings}",
+            p2.analyzer.existingStrings.containsValue("普通用户")
         )
 
         // 再 apply 一次也必须是幂等的：源码不发生重复改写
@@ -157,8 +157,8 @@ class VueLifecycleTest : BasePlatformTestCase() {
         val p = I18nProcessor(project, file)
         p.collect()
         assertEquals(
-            "应提取 3 个字符串，got: ${p.extractedStrings}",
-            3, p.extractedStrings.size
+            "应提取 3 个字符串，got: ${p.analyzer.extractedStrings}",
+            3, p.analyzer.extractedStrings.size
         )
         p.runWithUndo()
 
@@ -193,8 +193,8 @@ class VueLifecycleTest : BasePlatformTestCase() {
         val p1 = I18nProcessor(project, file)
         p1.collect()
         assertTrue(
-            "应提取 '启用中'，got: ${p1.extractedStrings}",
-            p1.extractedStrings.containsValue("启用中")
+            "应提取 '启用中'，got: ${p1.analyzer.extractedStrings}",
+            p1.analyzer.extractedStrings.containsValue("启用中")
         )
         p1.runWithUndo()
 

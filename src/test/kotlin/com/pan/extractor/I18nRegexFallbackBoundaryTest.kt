@@ -56,8 +56,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             );
             """.trimIndent()
         )
-        assertTrue("多行 t(\n 'toast.title'\n) 应识别为已有 key", p.existingStrings.containsKey("toast.title"))
-        assertFalse("已有 key 不得进入 extractedStrings", p.extractedStrings.containsKey("toast.title"))
+        assertTrue("多行 t(\n 'toast.title'\n) 应识别为已有 key", p.analyzer.existingStrings.containsKey("toast.title"))
+        assertFalse("已有 key 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("toast.title"))
     }
 
     // ── 换行链式 i18n\n.global\n.t('key') → PSI existing ───────────────
@@ -72,8 +72,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
                 .t('nav.home');
             """.trimIndent()
         )
-        assertTrue("换行链式 i18n.global.t('nav.home') 应识别为已有 key", p.existingStrings.containsKey("nav.home"))
-        assertFalse("链式已有 key 不得进入 extractedStrings", p.extractedStrings.containsKey("nav.home"))
+        assertTrue("换行链式 i18n.global.t('nav.home') 应识别为已有 key", p.analyzer.existingStrings.containsKey("nav.home"))
+        assertFalse("链式已有 key 不得进入 extractedStrings", p.analyzer.extractedStrings.containsKey("nav.home"))
     }
 
     // ── 模板字符串插值 $t(`a ${x}`) → key 不可确定 ─────────────────────
@@ -89,10 +89,10 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         // `${suffix}` 插值 → key 不确定，不作为已有 key
-        assertFalse("带插值的模板字符串不应被当已有 key", p.existingStrings.keys.any { it.contains("dynamic.") })
-        assertFalse("带插值的模板字符串不应进入 extractedStrings", p.extractedStrings.containsKey("dynamic."))
+        assertFalse("带插值的模板字符串不应被当已有 key", p.analyzer.existingStrings.keys.any { it.contains("dynamic.") })
+        assertFalse("带插值的模板字符串不应进入 extractedStrings", p.analyzer.extractedStrings.containsKey("dynamic."))
         // 同文件硬编码中文仍应被提取（证明 PSI 主提取路径正常）
-        assertTrue("同文件硬编码中文应进入 extractedStrings", p.extractedStrings.containsValue("硬编码中文"))
+        assertTrue("同文件硬编码中文应进入 extractedStrings", p.analyzer.extractedStrings.containsValue("硬编码中文"))
     }
 
     // ── 跨行反引号 raw-text fallback 仍能收集已有 key（Vue mustache）────
@@ -106,7 +106,7 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             </template>
             """.trimIndent()
         )
-        assertTrue("Vue mustache backtick 中的 ${'$'}t('wrap.tick') 应进 existingStrings", p.existingStrings.containsKey("wrap.tick"))
+        assertTrue("Vue mustache backtick 中的 ${'$'}t('wrap.tick') 应进 existingStrings", p.analyzer.existingStrings.containsKey("wrap.tick"))
     }
 
     // ── 3.2：非 i18n 实例的 `.t()` 不得被当成「已翻译」而漏提 ───────────
@@ -120,8 +120,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("obj.t('中文文案') 是普通方法调用，其中的中文应被提取（3.2）",
-            p.extractedStrings.containsValue("中文文案"))
-        assertFalse("obj.t 不应被当作 i18n 已有 key", p.existingStrings.containsKey("中文文案"))
+            p.analyzer.extractedStrings.containsValue("中文文案"))
+        assertFalse("obj.t 不应被当作 i18n 已有 key", p.analyzer.existingStrings.containsKey("中文文案"))
     }
 
     fun testChainedNonI18nTChineseExtracted() {
@@ -135,8 +135,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("ns.t('嵌套中文') 不是 i18n 全局实例，中文应被提取（3.2）",
-            p.extractedStrings.containsValue("嵌套中文"))
-        assertFalse("ns.t 不应进 existingStrings", p.existingStrings.containsKey("嵌套中文"))
+            p.analyzer.extractedStrings.containsValue("嵌套中文"))
+        assertFalse("ns.t 不应进 existingStrings", p.analyzer.existingStrings.containsKey("嵌套中文"))
     }
 
     fun testConfirmedI18nChainStillExisting() {
@@ -148,8 +148,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("i18n.global.t('nav.home') 仍是已确认的 i18n 调用，应进 existingStrings",
-            p.existingStrings.containsKey("nav.home"))
-        assertFalse("i18n 全局链式 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.home"))
+            p.analyzer.existingStrings.containsKey("nav.home"))
+        assertFalse("i18n 全局链式 key 不得进 extractedStrings", p.analyzer.extractedStrings.containsKey("nav.home"))
     }
 
     // ── 3.2c symbol collision：本地 const/let 函数变量覆盖同名 t/tc ────
@@ -165,8 +165,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("const t = …; t('本地变量函数中文') 是普通函数调用，中文应被提取（symbol collision）",
-            p.extractedStrings.containsValue("本地变量函数中文"))
-        assertFalse("本地变量函数 t 不应进 existingStrings", p.existingStrings.containsKey("本地变量函数中文"))
+            p.analyzer.extractedStrings.containsValue("本地变量函数中文"))
+        assertFalse("本地变量函数 t 不应进 existingStrings", p.analyzer.existingStrings.containsKey("本地变量函数中文"))
     }
 
     fun testLocalLetFunctionVarTcChineseExtracted() {
@@ -178,8 +178,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("let tc = function…; tc('本地函数变量中文') 中文应被提取（symbol collision）",
-            p.extractedStrings.containsValue("本地函数变量中文"))
-        assertFalse("本地变量函数 tc 不应进 existingStrings", p.existingStrings.containsKey("本地函数变量中文"))
+            p.analyzer.extractedStrings.containsValue("本地函数变量中文"))
+        assertFalse("本地变量函数 tc 不应进 existingStrings", p.analyzer.existingStrings.containsKey("本地函数变量中文"))
     }
 
     // 反向保证：真实 useI18n 解构的裸 t 仍应判定为已翻译 key，不被上述逻辑误伤
@@ -192,8 +192,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             const msg = t('nav.about');
             """.trimIndent()
         )
-        assertTrue("useI18n 解构的裸 t('nav.about') 应仍是 i18n 调用", p.existingStrings.containsKey("nav.about"))
-        assertFalse("解构裸 t 的 key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.about"))
+        assertTrue("useI18n 解构的裸 t('nav.about') 应仍是 i18n 调用", p.analyzer.existingStrings.containsKey("nav.about"))
+        assertFalse("解构裸 t 的 key 不得进 extractedStrings", p.analyzer.extractedStrings.containsKey("nav.about"))
     }
 
     // ── §2：import alias reference resolve ────────────────────────────
@@ -210,8 +210,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("import { t as translate } from 'react-i18next'; translate('nav.home') 应识别为 i18n",
-            p.existingStrings.containsKey("nav.home"))
-        assertFalse("别名 i18n key 不得进 extractedStrings", p.extractedStrings.containsKey("nav.home"))
+            p.analyzer.existingStrings.containsKey("nav.home"))
+        assertFalse("别名 i18n key 不得进 extractedStrings", p.analyzer.extractedStrings.containsKey("nav.home"))
     }
 
     fun testImportFrameworkNameStillExisting() {
@@ -223,8 +223,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("import { t } from 'i18next'; t('greeting') 应识别为 i18n",
-            p.existingStrings.containsKey("greeting"))
-        assertFalse("i18next 的 t key 不得进 extractedStrings", p.extractedStrings.containsKey("greeting"))
+            p.analyzer.existingStrings.containsKey("greeting"))
+        assertFalse("i18next 的 t key 不得进 extractedStrings", p.analyzer.extractedStrings.containsKey("greeting"))
     }
 
     fun testUseTranslationDestructuredBareTStillExisting() {
@@ -237,8 +237,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("useTranslation 解构的裸 t('react.welcome') 应识别为 i18n",
-            p.existingStrings.containsKey("react.welcome"))
-        assertFalse("解构裸 t 的 react key 不得进 extractedStrings", p.extractedStrings.containsKey("react.welcome"))
+            p.analyzer.existingStrings.containsKey("react.welcome"))
+        assertFalse("解构裸 t 的 react key 不得进 extractedStrings", p.analyzer.extractedStrings.containsKey("react.welcome"))
     }
 
     // ── §2：destructured translation function 语义判断（非 i18n 来源不得漏提） ──
@@ -254,9 +254,9 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("import { t } from './utils'; t('工具函数中文') 是非 i18n 普通函数，中文应被提取（§2 修漏提）",
-            p.extractedStrings.containsValue("工具函数中文"))
+            p.analyzer.extractedStrings.containsValue("工具函数中文"))
         assertFalse("非 i18n 工具 import 的 t 不应视为已翻译 key",
-            p.existingStrings.containsKey("工具函数中文"))
+            p.analyzer.existingStrings.containsKey("工具函数中文"))
     }
 
     fun testNonI18nHookDestructuredTBareNameExtracted() {
@@ -271,9 +271,9 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
         //（名字是弱特征，不是语义证明）→ 调用归 UNKNOWN → 参数既不提取也不改写（零误改）。
         // 旧模型（名字兜底 + 非已知 hook 即提取）的行为已废弃：宁可漏一次提取机会，也不破坏用户代码。
         assertFalse("三态 UNKNOWN：无法证明来源的 hook 解构 t，参数保守跳过（不提取）",
-            p.extractedStrings.containsValue("其它hook中文"))
+            p.analyzer.extractedStrings.containsValue("其它hook中文"))
         assertFalse("三态 UNKNOWN：也不把无法证明的调用声称成已翻译 key",
-            p.existingStrings.containsKey("其它hook中文"))
+            p.analyzer.existingStrings.containsKey("其它hook中文"))
     }
 
     fun testImportAliasFromNonI18nModuleExtracted() {
@@ -285,8 +285,8 @@ class I18nRegexFallbackBoundaryTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertTrue("import { t as translate } from './helper'; translate('别名工具函数中文') 非 i18n，中文应被提取",
-            p.extractedStrings.containsValue("别名工具函数中文"))
+            p.analyzer.extractedStrings.containsValue("别名工具函数中文"))
         assertFalse("非 i18n 别名不应视为已翻译 key",
-            p.existingStrings.containsKey("别名工具函数中文"))
+            p.analyzer.existingStrings.containsKey("别名工具函数中文"))
     }
 }
