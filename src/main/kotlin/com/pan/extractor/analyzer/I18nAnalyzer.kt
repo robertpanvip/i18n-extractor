@@ -31,7 +31,7 @@ class I18nAnalyzer(
     private val project: Project,
     private val contract: I18nProcessorContract,
     private val jsCollector: JsStringCollector,
-    private val injector: I18nImportInjector,
+    private val injector: ImportManager,
 ) : com.pan.extractor.CollectionState {
     /** 收集期产物容器（本 analyzer 拥有的唯一可变状态，reset 时整体替换清零）。 */
     private var plan = com.pan.extractor.planner.CollectedPlan()

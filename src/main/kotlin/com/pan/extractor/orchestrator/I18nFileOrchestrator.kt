@@ -2,7 +2,7 @@ package com.pan.extractor.orchestrator
 
 import com.pan.extractor.EntryFileLocator
 import com.pan.extractor.I18nFrameworkRegistry
-import com.pan.extractor.I18nImportInjector
+import com.pan.extractor.ImportManager
 import com.pan.extractor.I18nProcessor
 import com.pan.extractor.ReactI18nextStrategy
 import com.pan.extractor.SolidI18nStrategy
@@ -78,12 +78,12 @@ open class I18nFileOrchestrator {
         val analyzer = processor.analyzer
         analyzer.pendingChanges.forEach { if (it.siteId !in analyzer.blockedSiteIds) it.run() }
 
-        // 注入分支按框架拆到 I18nImportInjector，本层只做派发。
+        // 注入分支按框架拆到 ImportManager，本层只做派发。
         processor.injector.injectForFramework(
             processor = processor,
             psiFile = context.psiFile,
             framework = analyzer.framework,
-            decision = I18nImportInjector.InjectionDecision(
+            decision = ImportManager.InjectionDecision(
                 needInjectGlobalDollarT = analyzer.needInjectGlobalDollarT,
                 needInjectReactGlobalDollarT = analyzer.needInjectReactGlobalDollarT,
                 needInjectSolidGlobalDollarT = analyzer.needInjectSolidGlobalDollarT,

@@ -54,7 +54,7 @@ class I18nProcessor @JvmOverloads constructor(
     internal val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
     /** 「翻译调用 import / i18n 实例注入」辅助类。 */
-    internal val injector: I18nImportInjector by lazy { I18nImportInjector(this) }
+    internal val injector: ImportManager by lazy { ImportManager(this) }
 
     /** 「JS 字符串收集 与 $t 表达式生成」辅助类。 */
     internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }

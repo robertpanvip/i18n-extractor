@@ -13,10 +13,16 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
- * 从 [I18nProcessor] 拆分出的「翻译调用 import / i18n 实例注入」方法群。
- * 持有 [I18nProcessor] 引用以访问其内部状态（工厂、辅助方法、脚本标签定位等）。
+ * 【ImportManager】—— 翻译调用 import / i18n 实例注入的「决策 + 辅助」宿主。
+ *
+ * 由 [I18nProcessor]（薄 Orchestrator）注入，持有窄契约 [I18nProcessorContract] 以访问
+ * 宿主能力面；结果/状态（[tFunctionName]）经 [CollectionState] 读取（§21 能力面/状态面分离）。
+ *
+ * §11 架构：实际改写执行（applyImportPlan）已收敛到 [com.pan.extractor.rewriter.ImportRewriter]
+ * 与 [com.pan.extractor.planner.ImportPlanner]（生成 ImportPlan / InjectionDecision）；本类
+ * 承担 import 注入的决策构建、i18n 实例导入路径解析、去重判定与命令式兼容入口（行为 1:1）。
  */
-class I18nImportInjector(private val processor: I18nProcessorContract) {
+class ImportManager(private val processor: I18nProcessorContract) {
 
     /** 能力面之外，结果/状态（[tFunctionName]）经 [state] 读取（由分析器注入，见 I18nProcessor）。 */
     internal lateinit var state: CollectionState

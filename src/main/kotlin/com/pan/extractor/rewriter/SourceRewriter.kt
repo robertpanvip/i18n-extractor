@@ -114,13 +114,13 @@ object JsRewriter : SourceRewriter {
     }
 }
 
-/** import 重写器：消费 [ImportPlan] 执行 i18n import / hook / 全局 \$t 别名注入（迁移自 I18nImportInjector 编排层）。 */
+/** import 重写器：消费 [ImportPlan] 执行 i18n import / hook / 全局 \$t 别名注入（迁移自 ImportManager 编排层）。 */
 object ImportRewriter : SourceRewriter {
 
     /**
      * 消费 [ImportPlan] 完成一次文件的全部注入。Apply 阶段在 Write Action 内调用。
      *
-     * 迁移自 I18nImportInjector 的 ensureI18nInstanceImported / ensureVueI18nImported /
+     * 迁移自 ImportManager 的 ensureI18nInstanceImported / ensureVueI18nImported /
      * ensureReactI18nImported / ensureVueHookI18nImported / ensureVueComponentI18nInjected /
      * ensureSolidUseI18nImported / ensureSolidGlobalDollarTImported 等命令式注入（行为 1:1）。
      *
@@ -169,14 +169,14 @@ object ImportRewriter : SourceRewriter {
 
     /**
      * 单点注入入口：由 [ImportPlanner.buildImportPlan] 把 collect 阶段锁定的注入决策转为 [ImportPlan]，
-     * 再由 [applyImportPlan] 统一执行。此方法取代旧 I18nImportInjector.injectForFramework 的 when 编排
+     * 再由 [applyImportPlan] 统一执行。此方法取代旧 ImportManager.injectForFramework 的 when 编排
      * （行为 1:1）。
      */
     fun injectForFramework(
         processor: com.pan.extractor.I18nProcessor,
         psiFile: PsiElement,
         framework: com.pan.extractor.I18nFramework,
-        decision: com.pan.extractor.I18nImportInjector.InjectionDecision,
+        decision: com.pan.extractor.ImportManager.InjectionDecision,
     ) {
         val plan = ImportPlanner.buildImportPlan(processor, psiFile, framework, decision)
         applyImportPlan(processor, psiFile, plan)

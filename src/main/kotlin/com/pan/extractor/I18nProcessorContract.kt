@@ -7,7 +7,7 @@ import com.intellij.psi.xml.XmlTag
 /**
  * 收集/注入器访问到的「处理器契约」—— 窄接口。
  *
- * §21 目标：`JsStringCollector` / `I18nImportInjector` 不应接收整个 `I18nProcessor`，
+ * §21 目标：`JsStringCollector` / `ImportManager` 不应接收整个 `I18nProcessor`，
  * 而应只依赖它们实际会用到的能力面。本接口即该能力面；[I18nProcessor] 实现它，
  * 两个收集器改为持有本接口（§21.4 第 3 步 · 拆宿主的第一步：接口隔离）。
  *

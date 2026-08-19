@@ -4,7 +4,7 @@ import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.pan.extractor.I18nFramework
-import com.pan.extractor.I18nImportInjector
+import com.pan.extractor.ImportManager
 import com.pan.extractor.I18nProcessor
 import com.pan.extractor.ProjectStructure
 import com.intellij.psi.PsiFile
@@ -20,7 +20,7 @@ import com.intellij.psi.PsiFile
  * 解析 i18n 实例路径、定位组件/hook 是否存在），**不执行任何写操作**；实际注入由
  * Rewriter 层（[com.pan.extractor.rewriter.ImportRewriter]）在 Apply 阶段消费 plan 完成。
  *
- * 决策与 I18nImportInjector 的旧命令式分支（injectVueBranch / injectReactBranch /
+ * 决策与 ImportManager 的旧命令式分支（injectVueBranch / injectReactBranch /
  * injectSolidBranch）行为 1:1，仅把「要不要注入 / 注入哪几条」从中提取为数据。
  */
 object ImportPlanner {
@@ -38,8 +38,8 @@ object ImportPlanner {
         processor: I18nProcessor,
         psiFile: PsiElement,
         framework: I18nFramework,
-        decision: I18nImportInjector.InjectionDecision,
-        injector: I18nImportInjector = processor.injector,
+        decision: ImportManager.InjectionDecision,
+        injector: ImportManager = processor.injector,
     ): ImportPlan {
         val file = psiFile.containingFile
             ?: return ImportPlan(fileName = psiFile.javaClass.simpleName, frameworkId = framework.id)
@@ -74,8 +74,8 @@ object ImportPlanner {
     private fun buildVuePlan(
         file: PsiFile,
         tName: String,
-        injector: I18nImportInjector,
-        d: I18nImportInjector.InjectionDecision,
+        injector: ImportManager,
+        d: ImportManager.InjectionDecision,
         imports: MutableList<String>,
         aliases: MutableList<String>,
         hooks: MutableList<HookInjectPlan>,
@@ -138,8 +138,8 @@ object ImportPlanner {
     private fun buildReactPlan(
         file: PsiFile,
         tName: String,
-        injector: I18nImportInjector,
-        d: I18nImportInjector.InjectionDecision,
+        injector: ImportManager,
+        d: ImportManager.InjectionDecision,
         imports: MutableList<String>,
         aliases: MutableList<String>,
         hooks: MutableList<HookInjectPlan>,
@@ -205,7 +205,7 @@ object ImportPlanner {
     // ── Solid 决策（镜像旧 injectSolidBranch）────────────────────────────
     private fun buildSolidPlan(
         file: PsiFile,
-        d: I18nImportInjector.InjectionDecision,
+        d: ImportManager.InjectionDecision,
         imports: MutableList<String>,
         aliases: MutableList<String>,
         hooks: MutableList<HookInjectPlan>,
@@ -240,7 +240,7 @@ object ImportPlanner {
     // ── 纯只读辅助（复用 Injector 已有能力 / 文本级匹配，避免写 PSI）────────────
 
     /** vue-i18n 的 `useI18n` 是否已导入。 */
-    private fun hasImportedSpecifierUseI18n(injector: I18nImportInjector, file: PsiElement): Boolean {
+    private fun hasImportedSpecifierUseI18n(injector: ImportManager, file: PsiElement): Boolean {
         val imports = PsiTreeUtil.findChildrenOfType(
             file, com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration::class.java
         )

@@ -37,22 +37,25 @@ object ResourceApplier {
     /**
      * 按计划执行入口资源文件写回，返回「待落盘文件 → 新内容」列表；失败/不支持返回 null。
      *
-     *  - json：直接再生 JSON 文件；
-     *  - ts/tsx/js/jsx：优先 spread 路由（把新 key 写进 `...common` 指向的文件），否则再生入口文件。
+     *  - json：直接再生 JSON 文件（[JsonWriter]）；
+     *  - ts/tsx/js/jsx：优先 spread 路由（[TsResourceWriter.regenerateTsFileWithSpreadRouting]），
+     *    否则再生入口文件（[TsResourceWriter.regenerateTsFile]）。
+     *
+     * §12 解耦：本方法只依赖 [ResourcePlan] 与 resource 包内各自的 writer，不再经代码编辑器
+     * [com.pan.extractor.TsFileEditor] 门面派发 —— Resource 层不感知框架 / PSI / UI。
      */
     fun apply(project: Project, plan: ResourcePlan): List<Pair<VirtualFile, String>>? {
         val entryVf = LocalFileSystem.getInstance().findFileByPath(plan.targetPath) ?: return null
         return try {
             when (plan.format) {
-                "json" -> com.pan.extractor.TsFileEditor
-                    .regenerateJsonFileWithNewJson(entryVf, plan.entries, plan.dropKeys)
+                "json" -> JsonWriter.regenerateJsonFile(entryVf, plan.entries, plan.dropKeys)
                     ?.let { listOf(entryVf to it) }
                 "ts", "tsx", "js", "jsx" -> {
-                    val spread = com.pan.extractor.TsFileEditor
-                        .regenerateTsFileWithSpreadRouting(project, entryVf, plan.entries, plan.dropKeys)
+                    val spread = TsResourceWriter.regenerateTsFileWithSpreadRouting(
+                        project, entryVf, plan.entries, plan.dropKeys
+                    )
                     if (spread != null) spread
-                    else com.pan.extractor.TsFileEditor
-                        .regenerateTsFileWithNewJson(project, entryVf, plan.entries, plan.dropKeys)
+                    else TsResourceWriter.regenerateTsFile(project, entryVf, plan.entries, plan.dropKeys)
                         ?.let { listOf(entryVf to it) }
                 }
                 else -> null

@@ -1,7 +1,7 @@
 package com.pan.extractor
 
 /**
- * 「收集期结果/状态」窄契约 —— 供 `JsStringCollector` / `I18nImportInjector` 读写分析器身上
+ * 「收集期结果/状态」窄契约 —— 供 `JsStringCollector` / `ImportManager` 读写分析器身上
  * 的结果数据，而无需依赖整个 [com.pan.extractor.analyzer.I18nAnalyzer]。由分析器实现。
  *
  * §21 目标：能力面（模板/字符串原语、项目对象）走 [I18nProcessorContract]；结果/状态
