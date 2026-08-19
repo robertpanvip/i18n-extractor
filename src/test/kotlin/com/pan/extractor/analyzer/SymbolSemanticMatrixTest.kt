@@ -147,6 +147,73 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
         assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "i18n.t"))
     }
 
+    // ── 4.5 useTranslation / useI18n 多种 destructuring 形式 ─────
+
+    fun testUseI18nWithLegacyObjectArg() {
+        val file = configureFile(
+            "src/DestructureObjArg.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            const { t, tc } = useI18n({ legacy: false, globalInjection: true })
+            const a = t('已翻译')
+            const b = tc('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "tc"))
+    }
+
+    fun testUseTranslationWithNamespaceArg() {
+        val file = configureFile(
+            "src/DestructureNsArg.ts",
+            """
+            import { useTranslation } from 'react-i18next'
+            const { t } = useTranslation('mySrcNamespace')
+            const a = t('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testRenamedDestructuredBindingViaAlias() {
+        // `const { t: tx } = useI18n()` 后用别名 tx 调用 → 翻译
+        val file = configureFile(
+            "src/DestructureAlias.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            const { t: tx } = useI18n()
+            const a = tx('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "tx"))
+    }
+
+    fun testHookValueChainAccess() {
+        // `const t = useTranslation().t` 值链访问 → 翻译
+        val file = configureFile(
+            "src/HookValueChain.ts",
+            """
+            import { useTranslation } from 'react-i18next'
+            const t = useTranslation().t
+            const a = t('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testDestructuredInstanceThenChainedCall() {
+        // `const { i18n } = useI18n()` 解构出实例，再 i18n.t() → 翻译
+        val file = configureFile(
+            "src/DestructureInstance.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            const { i18n } = useI18n({ legacy: false })
+            const a = i18n.t('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "i18n.t"))
+    }
+
     // ── 5. 保守 / 非翻译 ──────────────────────────────────────────
 
     fun testLocalShadowIsNotTranslation() {
