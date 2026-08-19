@@ -710,6 +710,9 @@ class I18nProcessorTest : BasePlatformTestCase() {
     fun testBuildTExpression() {
         val file = myFixture.configureByText("test.ts", "")
         val processor = I18nProcessor(project, file)
+        // buildTFunctionExpr 依赖分析器回填的 state.tFunctionName（lateinit），
+        // 必须先 collect() 完成分析器懒初始化，否则 state 未初始化。
+        processor.collect()
 
         // 基本用法
         assertEquals(
