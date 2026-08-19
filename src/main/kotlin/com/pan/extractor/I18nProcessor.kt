@@ -79,16 +79,30 @@ class I18nProcessor(
 
     /** 待应用的重写动作（collect 阶段收集，execute/run 阶段逐个执行）。 */
     var pendingChanges = mutableListOf<CollectedChange>()
-    val collectedSites = mutableListOf<CollectedSite>()
-    val blockedSiteIds = mutableSetOf<String>()
-    private var siteCounter = 0
+
+    /**
+     * 收集期产物容器（目标架构 Phase 1）：集中收敛 collectedSites / blockedSiteIds /
+     * siteCounter / extractedStrings / existingStrings 这一组可变状态，reset 时整体替换清零。
+     * 下方公开访问器都代理到此容器，外部消费方与测试零改动。
+     */
+    private var collectedPlan = com.pan.extractor.planner.CollectedPlan()
+
+    /** 一次提取命中列表（见 [CollectedPlan.collectedSites]）。 */
+    val collectedSites: MutableList<CollectedSite> get() = collectedPlan.collectedSites
+
+    /** 被骨架合并承载、应跳过普通替换的 siteId（见 [CollectedPlan.blockedSiteIds]）。 */
+    val blockedSiteIds: MutableSet<String> get() = collectedPlan.blockedSiteIds
+
+    private var siteCounter: Int
+        get() = collectedPlan.siteCounter
+        set(value) { collectedPlan.siteCounter = value }
     private fun nextSiteId() = "S${++siteCounter}"
 
-    /** 新提取的 key -> 原文本 */
-    val extractedStrings = mutableMapOf<String, String>()
+    /** 新提取的 key -> 原文本（见 [CollectedPlan.extractedStrings]）。 */
+    val extractedStrings: MutableMap<String, String> get() = collectedPlan.extractedStrings
 
-    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换） */
-    val existingStrings = mutableMapOf<String, String>()
+    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换，见 [CollectedPlan.existingStrings]）。 */
+    val existingStrings: MutableMap<String, String> get() = collectedPlan.existingStrings
 
     val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
@@ -367,11 +381,9 @@ class I18nProcessor(
      */
     private fun resetState() {
         pendingChanges = mutableListOf()
-        collectedSites.clear()
-        blockedSiteIds.clear()
-        siteCounter = 0
-        extractedStrings.clear()
-        existingStrings.clear()
+        // 收集期可变状态整体替换清零（siteCounter / collectedSites / blockedSiteIds /
+        // extractedStrings / existingStrings 一次性重置，见 CollectedPlan）
+        collectedPlan = com.pan.extractor.planner.CollectedPlan()
         reactFallbackChecked = false
         reactFallbackResult = false
         // BUG_ANALYSIS 4.1：这些"全局 $t 别名注入"flag 也会在 collect() 里被置位，

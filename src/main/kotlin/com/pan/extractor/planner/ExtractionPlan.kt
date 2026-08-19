@@ -62,3 +62,35 @@ data class ResourcePlan(
     /** 输出格式：json / ts。 */
     val format: String = "json",
 )
+
+/**
+ * 收集期产物容器 —— 把 [com.pan.extractor.I18nProcessor] 散落的收集期可变状态收敛为单一对象
+ * （目标架构 Phase 1，PROJECT_ANALYSIS §5）。
+ *
+ * 原则：
+ * > 外部（MergeApplier / 对话框 / Validator / 测试）只按「站点 / 提取 / 已有翻译」三组只读意图消费，
+ * > 不直接操作处理器内部散落字段；收集过程产生的可变状态集中于此，reset 时整体替换即可清零。
+ *
+ * 包含：
+ *  - [collectedSites]：全部待改写站点；
+ *  - [blockedSiteIds]：被合并承载、应跳过普通替换的 siteId；
+ *  - [siteCounter]：siteId 自增计数（保证同一 collect 内 id 稳定）；
+ *  - [extractedStrings]：新提取 key → 原文（写资源文件）；
+ *  - [existingStrings]：已存在的翻译 key → 原文（仅展示，不替换）。
+ */
+class CollectedPlan {
+    /** 一次提取命中站点列表。 */
+    val collectedSites = mutableListOf<com.pan.extractor.I18nProcessor.CollectedSite>()
+
+    /** 被骨架合并承载、应跳过普通单句替换的 siteId 集合。 */
+    val blockedSiteIds = mutableSetOf<String>()
+
+    /** siteId 自增计数。 */
+    var siteCounter = 0
+
+    /** 新提取的 key → 原文本。 */
+    val extractedStrings = mutableMapOf<String, String>()
+
+    /** 已存在的 \$t() 调用 key → 原文本（仅展示，不替换）。 */
+    val existingStrings = mutableMapOf<String, String>()
+}
