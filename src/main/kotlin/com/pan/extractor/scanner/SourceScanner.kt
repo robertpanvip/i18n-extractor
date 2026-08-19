@@ -64,5 +64,8 @@ object ReactScanner : NodeScanner()
 /** Solid 扫描器：与 React 同形态（PascalCase 组件 + JSX）。 */
 object SolidScanner : NodeScanner()
 
+/** Svelte 扫描器：.svelte SFC 模板（HTML 属性 + 文本）与 script 的候选节点，与 Vue 同形态。 */
+object SvelteScanner : NodeScanner()
+
 /** 通用 JS/TS 扫描器：纯 .ts/.js 文件（无模板节点，自然只命中 JS 字面量/拼接）。 */
 object JsScanner : NodeScanner()

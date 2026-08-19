@@ -341,7 +341,8 @@ class I18nAnalyzer(
         if (pureText.contains("\$t(") || pureText.contains("i18n.global.t(") || pureText.contains("i18n.t(")) return
         if (!contract.containsTargetLanguage(pureText, SiteKind.TEXT)) return
 
-        val isJSX = ProjectStructure.isJSX(first)
+        val isJSX = ProjectStructure.isJSX(first) ||
+            framework.getSiteForm(first) == SiteForm.SVELTE_BINDING
         val key = collectExtractedStrings(pureText, first) ?: return
 
         recordChange(
@@ -361,7 +362,8 @@ class I18nAnalyzer(
 
     private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<I18nProcessor.CollectedChange>) {
         val originalText = attrValue.value.trim()
-        val isJSX = ProjectStructure.isJSX(attrValue)
+        val isJSX = ProjectStructure.isJSX(attrValue) ||
+            framework.getSiteForm(attrValue) == SiteForm.SVELTE_BINDING
         if (isJSX && I18nPsiTools.isBlock(originalText)) return
         if (originalText.isEmpty()) return
         if (!contract.containsTargetLanguage(originalText, SiteKind.ATTRIBUTE)) return

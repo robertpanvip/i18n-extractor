@@ -151,4 +151,6 @@ object Util {
     fun isVue(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isVue(element)
 
     fun isSolid(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSolid(element)
+
+    fun isSvelte(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSvelte(element)
 }

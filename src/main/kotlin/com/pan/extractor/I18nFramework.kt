@@ -351,6 +351,8 @@ object I18nFrameworkRegistry {
         // 注册顺序即优先级顺序；detect 按此顺序首个 matches 命中即返回。
         register(VueI18nStrategy)
         register(SolidI18nStrategy)
+        // Svelte 靠 .svelte 扩展名或 svelte 依赖识别；置于 React 之前使 svelte 项目优先命中。
+        register(SvelteI18nStrategy)
         // react-intl 与 react-i18next 共存：两者都靠 Util.isReact 识别，靠用户设置
         // （React 多语言库 → react-intl）区分。注册顺序放 react-i18next 之前，
         // 使「选了 react-intl」时 detect 优先命中 ReactIntlStrategy；默认 i18next 时
@@ -999,6 +1001,9 @@ enum class SiteForm {
 
     /** SolidJS 属性（[SolidI18nStrategy] 产出，不映射到 isReact）。 */
     SOLID_BINDING,
+
+    /** Svelte SFC 模板文本/属性（[SvelteI18nStrategy] 产出，单花括号 `{$t(...)}`，不映射到 isReact）。 */
+    SVELTE_BINDING,
 
     /** 其他（[GenericStrategy] 默认）。 */
     GENERIC,

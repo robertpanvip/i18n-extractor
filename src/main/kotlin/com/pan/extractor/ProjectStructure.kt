@@ -32,6 +32,7 @@ object ProjectStructure {
     private val PREACT_KEY_RE = Regex(""""preact"\s*:\s*"""")
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
     private val SOLID_KEY_RE = Regex(""""solid-js"\s*:\s*"""")
+    private val SVELTE_KEY_RE = Regex(""""svelte"\s*:\s*"""")
 
     /**
      * 提取 package.json 中所有依赖段（dependencies/devDependencies/peerDependencies/optionalDependencies）
@@ -129,7 +130,10 @@ object ProjectStructure {
         val hasReact: Boolean,
         val hasVue: Boolean,
         val hasSolid: Boolean,
+        // 注意：`parsed` 保持在位置 4 —— isReact/isVue/isSolid 仍用 4 位位置解构
+        // （`(hasReact, hasVue, hasSolid, parsed)`），新字段须追加在最后，否则会错位。
         val parsed: Boolean,
+        val hasSvelte: Boolean,
     )
 
     /**
@@ -139,7 +143,7 @@ object ProjectStructure {
      * parsed=false 表示根本没找到 package.json，调用方需要 fallback 到其他策略。
      */
     private fun readPackageJsonDependencies(psiFile: PsiFile): PackageDeps {
-        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return PackageDeps(false, false, false, false)
+        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return PackageDeps(false, false, false, false, false)
         while (dir != null) {
             val pkgFile = dir.findChild("package.json")
             if (pkgFile != null) {
@@ -151,14 +155,15 @@ object ProjectStructure {
                         hasVue = deps.contains(VUE_KEY_RE),
                         hasSolid = deps.contains(SOLID_KEY_RE),
                         parsed = true,
+                        hasSvelte = deps.contains(SVELTE_KEY_RE),
                     )
                 } catch (e: Exception) {
-                    PackageDeps(false, false, false, false)
+                    PackageDeps(false, false, false, false, false)
                 }
             }
             dir = dir.parent
         }
-        return PackageDeps(false, false, false, false)
+        return PackageDeps(false, false, false, false, false)
     }
 
     /**
@@ -204,6 +209,32 @@ object ProjectStructure {
         val (hasReact, hasVue, hasSolid, parsed) = readPackageJsonDependencies(containingFile)
         return if (parsed) {
             hasSolid && !hasVue
+        } else {
+            false
+        }
+    }
+
+    /**
+     * 判断当前元素是否处于 Svelte 上下文。
+     *
+     * 判定逻辑：
+     * 1. `.svelte` 文件直接命中（Svelte SFC 后缀是强信号，优先于依赖判定）；
+     * 2. 依赖 svelte（且不依赖 vue / solid-js）→ Svelte 项目里的 .ts/.js 等也按 Svelte 处理。
+     *
+     * 与 React/Solid/Vue 的"依赖像素级"判定保持一致；`.svelte` 后缀优先，
+     * 避免 svelte+react 混合项目里 .svelte 文件被错判为其他框架。
+     */
+    fun isSvelte(element: PsiElement): Boolean {
+        val containingFile = element.containingFile ?: return false
+
+        if (containingFile.name.endsWith(".svelte", ignoreCase = true)) {
+            return true
+        }
+
+        val (hasReact, hasVue, hasSolid, parsed, hasSvelte) =
+            readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasSvelte && !hasVue && !hasSolid
         } else {
             false
         }
