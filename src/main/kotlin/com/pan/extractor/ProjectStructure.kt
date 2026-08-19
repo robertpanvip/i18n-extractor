@@ -33,6 +33,43 @@ object ProjectStructure {
     private val VUE_KEY_RE = Regex(""""vue"\s*:\s*"""")
     private val SOLID_KEY_RE = Regex(""""solid-js"\s*:\s*"""")
 
+    /**
+     * 提取 package.json 中所有依赖段（dependencies/devDependencies/peerDependencies/optionalDependencies）
+     * 的原文，仅在其中判定框架依赖 key。（P1）否则 `"react": "build"` 等 scripts 名会被
+     * [REACT_KEY_RE] 误判为 react 依赖。
+     */
+    private fun dependencyBlock(content: String): String {
+        val sections = listOf(
+            "dependencies", "devDependencies", "peerDependencies",
+            "optionalDependencies", "bundledDependencies", "bundleDependencies"
+        )
+        val sb = StringBuilder()
+        for (key in sections) {
+            val m = Regex("\"$key\"\\s*:\\s*\\{").find(content) ?: continue
+            val start = m.range.last + 1
+            var depth = 1
+            var inStr = false
+            var esc = false
+            var i = start
+            while (i < content.length && depth > 0) {
+                val c = content[i]
+                when {
+                    inStr -> when (c) {
+                        '\\' -> esc = true
+                        '"' -> inStr = false
+                    }
+                    c == '"' -> inStr = true
+                    c == '{' -> depth++
+                    c == '}' -> depth--
+                }
+                if (esc) esc = false
+                i++
+            }
+            sb.append(content, start, (i - 1).coerceAtLeast(start)).append('\n')
+        }
+        return sb.toString()
+    }
+
     fun isJSX(element: PsiElement): Boolean {
         // 第二步：向上遍历父节点，检查 JS 语法上下文（核心逻辑）
         var currentParent = element.parent
@@ -108,10 +145,11 @@ object ProjectStructure {
             if (pkgFile != null) {
                 return try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
+                    val deps = dependencyBlock(content)
                     PackageDeps(
-                        hasReact = content.contains(REACT_KEY_RE) || content.contains(PREACT_KEY_RE),
-                        hasVue = content.contains(VUE_KEY_RE),
-                        hasSolid = content.contains(SOLID_KEY_RE),
+                        hasReact = deps.contains(REACT_KEY_RE) || deps.contains(PREACT_KEY_RE),
+                        hasVue = deps.contains(VUE_KEY_RE),
+                        hasSolid = deps.contains(SOLID_KEY_RE),
                         parsed = true,
                     )
                 } catch (e: Exception) {
@@ -441,9 +479,10 @@ object ProjectStructure {
             if (pkgFile != null) {
                 try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
-                    // 精确匹配依赖键（排除 react-dom / vue-router 等派生包）
-                    val hasReact = content.contains(REACT_KEY_RE)
-                    val hasVue = content.contains(VUE_KEY_RE)
+                    // 精确匹配依赖键（排除 react-dom / vue-router 等派生包，仅在依赖段匹配避免 scripts 同名误判）
+                    val deps = dependencyBlock(content)
+                    val hasReact = deps.contains(REACT_KEY_RE)
+                    val hasVue = deps.contains(VUE_KEY_RE)
                     return hasReact && !hasVue
                 } catch (e: Exception) {
                     return false
@@ -482,7 +521,9 @@ object ProjectStructure {
             return null
         }
         val (hasReact, hasVue, hasSolid, _) = readPackageJsonDependencies(currentPsiFile)
-        val hasInit = I18nInstanceLocator.findI18nInitFileInRoot(root) != null
+        // P0：必须把 project 传给 Locator，否则其内部 PSI 级复核被绕过、退回纯文本判断，
+        //     使字符串/注释里的 "createI18n(" 字样被误当成已初始化。
+        val hasInit = I18nInstanceLocator.findI18nInitFileInRoot(root, currentPsiFile.project) != null
         return I18nBootstrapSupport.detectMissing(text, hasInit, hasReact, hasVue, hasSolid)
     }
 

@@ -290,6 +290,9 @@ object MergeApplier {
                     // :placeholder="&quot;$t(...)&quot;"，见 Bug（Vue placeholder 属性因子化）。
                     attr.setValue(if (jsx) "{$callExprText}" else callExprText)
                     attr.name = "$prefix${attr.name}"
+                    // 属性值已就地改写成功 → 必须登记 finalExtracted（原实现提前 return 遗漏了
+                    // 这步登记，导致该站点在后续资源写回时被当成「未应用」，造成源码/资源不一致，P1）。
+                    finalExtracted[rewrittenSkeletonKey] = rewrittenSkeleton.trim()
                 }
                 return
             }
@@ -301,7 +304,13 @@ object MergeApplier {
             )?.psi
         }
         if (replacement != null) {
-            try { rootPsi.replace(replacement) } catch (_: Throwable) { }
+            try {
+                rootPsi.replace(replacement)
+            } catch (_: Throwable) {
+                // P0：替换失败时不再登记 finalExtracted —— 否则源码未改，但资源文件仍为它写入 key，
+                // 造成源码/资源不一致、运行时查不到翻译。失败即视为该站点未应用。
+                return
+            }
         }
 
         finalExtracted[rewrittenSkeletonKey] = rewrittenSkeleton.trim()

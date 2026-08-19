@@ -381,6 +381,9 @@ class I18nProcessor(
         needInjectSolidGlobalDollarT = false
         reactI18nTFallbackToDollarT = false
         tFunctionName = "\$t"
+        // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
+        // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
+        jsCollector.clearProcessedEnums()
     }
 
     fun collect(): MutableList<CollectedChange> {
@@ -737,8 +740,16 @@ class I18nProcessor(
         injector.buildReactI18nInstanceImport(psiFile)
 
     companion object {
-        /** 找不到 createI18n 文件时的回退：直接从 vue-i18n 包导入命名导出 i18n */
-        internal const val FALLBACK_VUE_I18N_IMPORT = "import { i18n } from 'vue-i18n';\n"
+        /**
+         * 找不到 createI18n / init 文件时的回退（P1：原 `import { i18n } from 'vue-i18n'` 无效——
+         * vue-i18n 包并不导出命名 `i18n`，只导出 `createI18n`，运行时 i18n 恒为 undefined）。
+         * 回退改为自行创建全局实例：createI18n 返回的实例带有 `global.t`，配合
+         * `const $t = i18n.global.t;` 别名可正常工作。
+         * 注意：平铺为两条语句，SFC/纯 TS 注入分支均需以「保留原文的节点」插入（见 ensureI18nInstanceImported），
+         * 不能走 createJSStatementFromText（其只取首个语句，会丢 const i18n 行）。
+         */
+        internal const val FALLBACK_VUE_I18N_IMPORT =
+            "import { createI18n } from 'vue-i18n';\nconst i18n = createI18n({ legacy: false });\n"
     }
 
     /**

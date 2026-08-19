@@ -187,7 +187,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
 
         // 1. 确保 vue-i18n 导入存在
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("vue-i18n") }) {
+        if (imports.none { Regex("""from\s*['"]vue-i18n['"]""").containsMatchIn(it.text) }) {
             val importText = "import { useI18n } from 'vue-i18n';\n"
             val importStmt = processor.createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
@@ -298,7 +298,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
 
         // —— 阶段 2：保证 vue-i18n import 存在（复用 ensureVueHookI18nImported 的同一段逻辑）
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { it.text.contains("vue-i18n") }) {
+        if (imports.none { Regex("""from\s*['"]vue-i18n['"]""").containsMatchIn(it.text) }) {
             val importText = "import { useI18n } from 'vue-i18n';\n"
             val importStmt = processor.createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
@@ -369,9 +369,9 @@ class I18nImportInjector(private val processor: I18nProcessor) {
             val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
             val reSimple = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
             return vars.any {
-                re.containsMatchIn(it.text.replace("\\s+", "")) ||
+                re.containsMatchIn(it.text.replace("\\s+".toRegex(), "")) ||
                     reSimple.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t ->
+                    it.text.replace("\\s+".toRegex(), "").let { t ->
                         t.contains("const\$t=i18n.global.t")
                     }
             }
@@ -386,7 +386,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
                 reT.containsMatchIn(it.text) ||
                     reDollarT.containsMatchIn(it.text) ||
                     reTLocale.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t ->
+                    it.text.replace("\\s+".toRegex(), "").let { t ->
                         t.contains("constt=getI18n().t") ||
                             t.contains("const\$t=getI18n().t") ||
                             t.contains("constt=i18n.t")
@@ -400,7 +400,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
             val re = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
             return vars.any {
                 re.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+", "").let { t -> t.contains("consti18n=getI18n()") }
+                    it.text.replace("\\s+".toRegex(), "").let { t -> t.contains("consti18n=getI18n()") }
             }
         }
         // React 版：检查是否已存在 getI18n 的 const 别名（$t 或 i18n 均可）
@@ -465,9 +465,13 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         }
         val dollarTText: String? = when {
             isVue && injectGlobalDollarT && !dollarTAliasAlreadyPresent -> "const \$t = i18n.global.t;\n"
-            // React t 别名：locale → i18n.t；回退 → getI18n().t
+            // React $t 别名：locale → i18n.t；回退 → getI18n().t
+            // 注入名必须与 collect 阶段锁死的 tFunctionName 一致
+            // （needInjectReactGlobalDollarT → "t"；reactI18nTFallbackToDollarT → "$t"），
+            // 否则新提取 `t('...')` 或改写后的 `$t('...')` 会出现运行时未定义（P0）。
             !isVue && injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
-                if (reactLocaleImport != null) "const t = i18n.t;\n" else "const t = getI18n().t;\n"
+                if (reactLocaleImport != null) "const ${processor.tFunctionName} = i18n.t;\n"
+                else "const ${processor.tFunctionName} = getI18n().t;\n"
             // React i18n.t 语义 + 回退 getI18n：注入 const i18n = getI18n() 保持 i18n 标识符可用
             reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
             else -> null
@@ -486,19 +490,12 @@ class I18nImportInjector(private val processor: I18nProcessor) {
                 val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(scriptContent)
 
                 // 1) Import 注入（如果需要）
+                //    逐行拆开插入：FALLBACK 是多行（import + const i18n=createI18n(...)），
+                //    单 Leaf 内嵌换行会破坏 undo/redo 空白幂等（见 injectImportLines）。
                 if (importText != null) {
-                    val importStmt = processor.createStringExpressionNode(importText, scriptContent)
-                    if (importStatements.isNotEmpty()) {
-                        val firstImport = importStatements.first()
-                        firstImport.parent.addBefore(importStmt, firstImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(scriptContent)
-                        if (firstStatement != null) {
-                            scriptContent.addBefore(importStmt, firstStatement)
-                        } else {
-                            scriptContent.add(importStmt)
-                        }
-                    }
+                    val anchor = importStatements.firstOrNull()
+                        ?: findFirstNonWhitespaceChild(scriptContent)
+                    injectImportLines(scriptContent, importText, anchor)
                 }
                 // 2) $t 全局别名注入（如果需要且没有）
                 if (injectGlobalDollarT && dollarTText != null && !dollarTAlreadyAliased) {
@@ -524,19 +521,13 @@ class I18nImportInjector(private val processor: I18nProcessor) {
                 val dollarTAlreadyAliased = hasVueGlobalDollarTAliased(containingFile)
 
                 // 1) Import 注入（如果需要）
+                //    【P1】FALLBACK 是多行（import + const i18n=createI18n(...)），逐行拆开注入到
+                //    import 语句之前：既避免 createJSStatementFromText 只取首个语句丢 const i18n
+                //    行，也避免单 Leaf 内嵌换行破坏 undo/redo 空白幂等。
                 if (importText != null) {
-                    val importStmt = processor.createJSStatementFromText(importText, containingFile)
-                    if (imports.isNotEmpty()) {
-                        val firstImport = imports.first()
-                        firstImport.parent.addBefore(importStmt, firstImport)
-                    } else {
-                        val firstStatement = findFirstNonWhitespaceChild(containingFile)
-                        if (firstStatement != null) {
-                            containingFile.addBefore(importStmt, firstStatement)
-                        } else {
-                            containingFile.add(importStmt)
-                        }
-                    }
+                    val anchor = imports.firstOrNull()
+                        ?: findFirstNonWhitespaceChild(containingFile)
+                    injectImportLines(containingFile, importText, anchor)
                 }
                 // 2) $t 全局别名：位置 = import 语句（含刚注入的）之后的首行；若仍无 import
                 //    就放在文件首部。为了去重，先在 ES6ImportDeclaration 的 PSI 树上操作。
@@ -687,6 +678,32 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         I18nPsiTools.findFirstNonWhitespaceChild(element)
 
     /**
+     * 把 `importText`（可能是多条语句、如 FALLBACK 的「import + const i18n=createI18n(...)」）
+     * 以「逐行独立 raw Leaf」的方式注入到 [container]，置于首个非空白语句 [anchor]（可为 null）
+     * 之前，保持语句顺序。
+     *
+     * 为什么要逐行拆：若把多行文本塞进**单条** Leaf（内含换行符），初始插入与 undo/redo 重排时
+     * 该 Leaf 的换行空白会被重新归一，导致 Redo 结果与首次 Extract 的文本不一致（undo 往返测试
+     * 失败）。拆成单行 Leaf 后与既有的单行注入路径行为一致，redo 幂等（P0/P1）。
+     */
+    private fun injectImportLines(container: PsiElement, importText: String, anchor: PsiElement?) {
+        val lines = importText.split("\n").filter { it.isNotEmpty() }
+        if (lines.isEmpty()) return
+        var prev: PsiElement? = null
+        for (line in lines) {
+            val leaf = processor.createStringExpressionNode("$line\n", container)
+            prev = when {
+                // 前一行已插入 → 紧随其后插入，保持原有顺序
+                prev != null -> container.addAfter(leaf, prev)
+                // 有宿主语句 → 插到它前面
+                anchor != null -> container.addBefore(leaf, anchor)
+                // 空容器 → 直接加在末尾
+                else -> container.add(leaf)
+            }
+        }
+    }
+
+    /**
      * React i18n.t 语义 + locale 不可用（回退 getI18n 的 \$t 别名）时，
      * 把文件里已有的 `i18n.t('...')` / `i18n.tc('...')` 调用改写为 `$t('...')`，
      * 避免回退后 i18n 标识符悬空（配合顶部注入 `import { getI18n }` + `const \$t = getI18n().t`）。
@@ -742,6 +759,8 @@ class I18nImportInjector(private val processor: I18nProcessor) {
             (d.hasExtractedStrings || d.hasExistingStrings)
         val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance || vueModeNeedsImport
         if (needGlobalI18nImport) {
+            // 只有确实需要全局 i18n 实例（i18n.global.t 语义、纯工具 $t 模式、或 Vue 全局模式）才注入；
+            // 否则（如 TSX 里的 defineComponent 走 setup 注入 useI18n）不应额外塞 `import { i18n } from ...`。
             if (d.tFunctionName == "i18n.global.t" ||
                 (d.hasExtractedStrings && d.needInjectGlobalDollarT) ||
                 vueModeNeedsImport
@@ -794,11 +813,6 @@ class I18nImportInjector(private val processor: I18nProcessor) {
                 ensureI18nInstanceImported(
                     psiFile, isVue = false, injectGlobalDollarT = false,
                     injectReactGlobalDollarT = d.needInjectReactGlobalDollarT || d.reactI18nTFallbackToDollarT
-                )
-            } else if (reactModeNeedsImport) {
-                ensureI18nInstanceImported(
-                    psiFile, isVue = false, injectGlobalDollarT = false,
-                    injectReactGlobalDollarT = true
                 )
             }
         }
@@ -876,7 +890,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
     private fun ensureSolidUseI18nImported(processor: I18nProcessor, containingFile: PsiElement) {
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
         // 去重：已存在从 @solid-primitives/i18n 导入 useI18n 则跳过
-        if (imports.any { it.text.contains("@solid-primitives/i18n") && it.text.contains("useI18n") }) return
+        if (imports.any { Regex("""from\s*['"]@solid-primitives/i18n['"]""").containsMatchIn(it.text) && it.text.contains("useI18n") }) return
 
         val importText = "import { useI18n } from '@solid-primitives/i18n';\n"
         val importStmt = processor.createJSStatementFromText(importText, containingFile)
@@ -909,7 +923,7 @@ class I18nImportInjector(private val processor: I18nProcessor) {
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
 
         // 已存在任意 @solid-primitives/i18n 导入或 i18n 工厂导入 → 视为已具备全局能力
-        val alreadyHasSolidImport = imports.any { it.text.contains("@solid-primitives/i18n") }
+        val alreadyHasSolidImport = imports.any { Regex("""from\s*['"]@solid-primitives/i18n['"]""").containsMatchIn(it.text) }
         if (alreadyHasSolidImport) {
             // 已导入但可能未注入 const $t 别名 —— 检查是否已存在 $t 或 t 别名
             val vars = PsiTreeUtil.findChildrenOfType(containingFile, JSVarStatement::class.java)

@@ -35,6 +35,11 @@ class JsStringCollector(private val processor: I18nProcessor) {
     /** 已处理过的 enum 父节点（避免重复弹通知） */
     private val processedEnums = mutableSetOf<PsiElement>()
 
+    /** 供 I18nProcessor.resetState() 在每次 collect() 前清空，避免跨收集泄漏导致通知不再触发（P0）。 */
+    internal fun clearProcessedEnums() {
+        processedEnums.clear()
+    }
+
     // ───────────────────────────────────────────────
     // 模板字符串 / $t 表达式生成
     // ───────────────────────────────────────────────
@@ -112,7 +117,9 @@ class JsStringCollector(private val processor: I18nProcessor) {
             changes = changes
         ) {
             // 目标架构 Rewriter 层：JsRewriter 纯文本节点替换（行为与原闭包 1:1）
-            val newExprText = buildTFunctionExpr(message.trim(), paramsObject)
+            // 注意用消毒后的 key（而非原始 message.trim()）作为 $t(...) 实参：与 extractedStrings
+            // 中的资源键保持一致，否则含 @/|/句末点 的文案会因键失配而在运行时查不到翻译（P0）。
+            val newExprText = buildTFunctionExpr(key, paramsObject)
             val text = creator(newExprText)
             com.pan.extractor.rewriter.JsRewriter.rewriteWithStringNode(ele, text)
         }
@@ -136,7 +143,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
 
         // 步骤4：拼接最终的翻译函数调用表达式（使用检测到的函数名，空参数对象时省略第二个参数）
         val fn = processor.tFunctionName
-        return if (paramsObject.replace(" ", "") == "{}") {
+        return if (paramsObject.trim().replace("\\s+".toRegex(), "") == "{}") {
             "$fn($quote$escapedMsg$quote)"
         } else {
             "$fn($quote$escapedMsg$quote, $paramsObject)"
@@ -192,7 +199,7 @@ class JsStringCollector(private val processor: I18nProcessor) {
             if (paramKeyNeedsQuote) "\"$k\": $v" else "$k: $v"
         }
 
-        return buildTFunctionExpr(message.trim(), paramsObject)
+        return buildTFunctionExpr(key, paramsObject)
     }
 
     fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =

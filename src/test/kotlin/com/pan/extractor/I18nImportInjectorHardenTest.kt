@@ -69,7 +69,13 @@ class I18nImportInjectorHardenTest : BasePlatformTestCase() {
 
     fun testNamespaceImportRecognized() {
         val decl = onlyImport("import * as i18n from 'vue-i18n';")
-        assertTrue("namespace import `* as i18n` 视为已处理（wantedName 无所谓）", hasSpec(decl, "vue-i18n", "anything"))
+        // namespace 别名 i18n 恰好等于 wantedName → 视为已导入
+        assertTrue("namespace import `* as i18n` 绑定自由名 i18n，wantedName=i18n 应识别", hasSpec(decl, "vue-i18n", "i18n"))
+        // namespace 别名 ≠ wantedName 时并不把该自由名带入作用域，不应视为已导入
+        // （P0：旧实现一律 return true，`import * as vue from 'vue-i18n'` 也被误判为 useI18n 已导入、
+        //   跳过注入，生成的裸 useI18n() 运行时未定义。）
+        assertFalse("namespace 别名 i18n ≠ wantedName=useI18n，不应识别", hasSpec(decl, "vue-i18n", "useI18n"))
+        assertFalse("namespace 别名 i18n ≠ wantedName=anything，不应识别", hasSpec(decl, "vue-i18n", "anything"))
     }
 
     // ── multiline import ─────────────────────────────────────────

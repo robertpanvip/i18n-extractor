@@ -126,6 +126,8 @@ object I18nInstanceLocator {
                             }
                         }
                         // Solid: useI18n(...) / createAppI18n(...)
+                        // 注：此处是"是否存在初始化调用"的纯谓词，Vue 组件的 useI18n 误判已在
+                        // 上层 isI18nInitText（要求 @solid-primitives/i18n 导入）把关。
                         if (refName == "useI18n" || refName == "createAppI18n") { found = true; return }
                     }
                 }
@@ -216,7 +218,10 @@ object I18nInstanceLocator {
         if (code.contains("initReactI18next")) return true                                          // React (react-i18next)
         if (Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(code)) return true    // React / CJS
         // Solid: 顶层 useI18n( 调用 + 导出 createAppI18n / useI18n 的工厂函数（@solid-primitives/i18n）
-        if (code.contains("useI18n(") &&
+        // P0：必须先存在 `@solid-primitives/i18n` 导入，才判定为 Solid——否则 Vue 项目中
+        //     import { useI18n } from 'vue-i18n' + `useI18n()` 的组件文件会被误判为 Solid 初始化。
+        val hasSolidImport = code.contains("@solid-primitives/i18n")
+        if (hasSolidImport && code.contains("useI18n(") &&
             (code.contains("createAppI18n") || Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""").containsMatchIn(code))
         ) return true
         return false

@@ -240,7 +240,7 @@ object EntryFileLocator {
             if (hit != null) return hit
         }
         // 3) 预设目录未命中：统一像 Vue / React 全局导入那样探测 i18n 初始化文件，再根据其配置项查目标语言入口
-        findChineseEntryViaI18nConfig(root)?.let { if (it.isValid && !it.isDirectory) return it }
+        findChineseEntryViaI18nConfig(root, project)?.let { if (it.isValid && !it.isDirectory) return it }
         // 4) 全项目 walk（深度 5，排除 node_modules/.git/dist/build）
         val excludeDirs = I18nSettings.getInstance().excludeDirs()
         return ProjectStructure.walkVirtualFile(root, maxDepth = 5, enterFilter = { it.name !in excludeDirs }) { vf ->
@@ -301,8 +301,9 @@ object EntryFileLocator {
      *   import zh from '../locales/zh-CN'
      *   i18n.use(initReactI18next).init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zh } } })
      */
-    fun findChineseEntryViaI18nConfig(root: VirtualFile): VirtualFile? {
-        val initFile = I18nInstanceLocator.findI18nInitFileInRoot(root) ?: return null
+    fun findChineseEntryViaI18nConfig(root: VirtualFile, project: Project? = null): VirtualFile? {
+        // P0：把 project 传入 Locator 以启用 PSI 级复核，避免字符串/注释里的 createI18n( 误判
+        val initFile = I18nInstanceLocator.findI18nInitFileInRoot(root, project) ?: return null
         val text = try { String(initFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return null }
         return if (text.contains("createI18n(") || text.contains("createI18n (")) {
             findVueEntryFromConfigText(initFile, text)

@@ -35,16 +35,22 @@ object TsResourceWriter {
         val psiFile = ApplicationManager.getApplication().runReadAction<PsiFile?> {
             PsiManager.getInstance(project).findFile(entryVf)
         }
-        val text = if (psiFile != null) psiFile.text else try {
+        val rawText = if (psiFile != null) psiFile.text else try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (_: Exception) { return null }
+        // P0：TS 写回需保持原文件的换行风格（LF / CRLF）。先把原始文本归一化为 LF 处理
+        //（parseTsExportedObject 的 objectRange 偏移基于归一化文本，与后续 substring 保持一致），
+        // 最后再把整个结果统一转回原风格，避免重写后 \r\n 与 \n 混用。
+        val isCrlf = rawText.contains("\r\n")
+        val text = if (isCrlf) rawText.replace("\r\n", "\n") else rawText
         val info = TsFileEditor.parseTsExportedObject(text) ?: return null
         val merged = TsFileEditor.mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
         // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
         // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
         val oldObjBody = text.substring(info.objectRange.first, info.objectRange.endExclusive)
         val newObjBody = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
-        return text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
+        val newText = text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
+        return if (isCrlf) newText.replace("\n", "\r\n") else newText
     }
 
     /**
@@ -144,7 +150,10 @@ object TsResourceWriter {
     fun writeVirtualFileText(entryVf: VirtualFile, newText: String): Boolean {
         return try {
             val bytes = newText.toByteArray(StandardCharsets.UTF_8)
-            entryVf.setBinaryContent(bytes, 0L, bytes.size.toLong(), null)
+            // setBinaryContent(content, startOffset, endOffset, requestor) 会把 content 插入替换
+            // 原文件的 [startOffset, endOffset) 区间。endOffset 必须取「原文件长度」而非新内容长度，
+            // 否则当新内容比原文件短时，原文件尾部旧字节会被保留，造成文件损坏（P0）。
+            entryVf.setBinaryContent(bytes, 0L, entryVf.length, null)
             true
         } catch (_: Exception) {
             false

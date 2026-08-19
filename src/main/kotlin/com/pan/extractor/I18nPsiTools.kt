@@ -83,8 +83,12 @@ internal object I18nPsiTools {
 
         val cleaned = text
 
-        // 2. namespace import: `import * as X from` 视为"已处理过"
-        if (Regex("""import\s+\*\s+as\s+""").containsMatchIn(cleaned)) return true
+        // 2. namespace import：`import * as X from` —— 只把命名空间别名 X 绑定为自由名，
+        //    并不把裸 wantedName（如 useI18n）变为自由名；只有 wantedName 恰好是该 namespace 别名时才视为已导入。
+        //    （P0：旧实现一律 return true，导致 `import * as NS from 'vue-i18n'` 的文件被误判为
+        //     useI18n 已导入、跳过注入，而生成的裸 useI18n() 调用在运行时未定义。）
+        val nsMatch = Regex("""import\s+\*\s+as\s+([A-Za-z_][\w\$]*)""").find(cleaned)
+        if (nsMatch != null && nsMatch.groupValues[1] == wantedName) return true
 
         // 3. named import: `{ ... , useI18n , ... }` 或 `{ useI18n as xxx }`
         val curlyIdxS = cleaned.indexOf('{')
@@ -218,17 +222,47 @@ internal object I18nPsiTools {
         if (trimmed.length < 2) return null
         // 双引号字符串
         if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
-            return trimmed.substring(1, trimmed.length - 1)
+            return unescapeStringLiteral(trimmed.substring(1, trimmed.length - 1))
         }
         // 单引号字符串
         if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
-            return trimmed.substring(1, trimmed.length - 1)
+            return unescapeStringLiteral(trimmed.substring(1, trimmed.length - 1))
         }
         // 反引号字符串（必须不含 ${} 插值才算纯字符串）
         if (trimmed.startsWith("`") && trimmed.endsWith("`") && !trimmed.contains("\${")) {
-            return trimmed.substring(1, trimmed.length - 1)
+            return unescapeStringLiteral(trimmed.substring(1, trimmed.length - 1))
         }
         return null
+    }
+
+    /** 单遍还原字符串字面量的常见 JS 转义，避免 key 出现字面 `\n`/`\'`/`\"`（P1）。 */
+    private fun unescapeStringLiteral(content: String): String {
+        // 快速路径：无反斜杠则无需还原
+        if (!content.contains('\\')) return content
+        val sb = StringBuilder(content.length)
+        var i = 0
+        while (i < content.length) {
+            val c = content[i]
+            if (c == '\\' && i + 1 < content.length) {
+                val n = content[i + 1]
+                when (n) {
+                    'n' -> { sb.append('\n'); i += 2; continue }
+                    't' -> { sb.append('\t'); i += 2; continue }
+                    'r' -> { sb.append('\r'); i += 2; continue }
+                    'b' -> { sb.append('\b'); i += 2; continue }
+                    'f' -> { sb.append('\u000c'); i += 2; continue }
+                    'v' -> { sb.append('\u000b'); i += 2; continue }
+                    '\\' -> { sb.append('\\'); i += 2; continue }
+                    '\'' -> { sb.append('\''); i += 2; continue }
+                    '"' -> { sb.append('"'); i += 2; continue }
+                    '0' -> { sb.append('\u0000'); i += 2; continue }
+                    else -> { /* \x / \u 等复杂转义不还原，保持原样 */ }
+                }
+            }
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
     }
 
     fun isBlock(originalText: String): Boolean {

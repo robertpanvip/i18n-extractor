@@ -91,7 +91,8 @@ object I18nBootstrap {
     private fun defaultLocaleOf(psiFile: PsiFile): String {
         val root = ProjectStructure.findProjectRoot(psiFile)
         if (root != null) {
-            val init = I18nInstanceLocator.findI18nInitFileInRoot(root)
+            // P0：把 project 传入 Locator 以启用 PSI 级复核，避免字符串/注释里的 createI18n( 误判
+            val init = I18nInstanceLocator.findI18nInitFileInRoot(root, psiFile.project)
             if (init != null) {
                 val text = try {
                     String(init.contentsToByteArray(), Charsets.UTF_8)
