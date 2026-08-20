@@ -1,5 +1,58 @@
 // _local_init.gradle.kts —— 放到项目根，通过 ./gradlew --init-script _local_init.gradle.kts 调用
 
+// ---------------- 0. 本机/沙箱代理：把环境变量 HTTP(S)_PROXY 注入 Gradle/JVM 网络栈 ----------------
+//   · curl/wget/Node 自动读 HTTP_PROXY，但 Gradle（JVM 进程 + Gradle Daemon）只有显式
+//     设置了 systemProp.http(s).proxyHost/Port 才会走代理；
+//   · 本脚本启动时在当前 Gradle 进程（Launcher / Daemon）里通过 System.setProperty 写入，
+//     后续 buildscript / 依赖解析 / IDEA 插件下载全部自动走沙箱 HTTP 代理
+//     (127.0.0.1:18080)。
+//   · 沙箱外/开发机未设置 HTTP_PROXY 时，这一段是 no-op，不影响。
+run {
+    fun applyEnvProxy(envKey: String, scheme: String) {
+        val env = (System.getenv(envKey) ?: System.getenv(envKey.lowercase())).orEmpty().trim()
+        if (env.isBlank()) return
+        try {
+            val normalized = env.replace("""^[a-zA-Z]+://""".toRegex(), "")
+            val hostPort = normalized.substringBefore('/').substringBefore('@').takeLastWhile { true }
+                .let { normalized.substringBefore('/').substringAfterLast('@', missingDelimiterValue = normalized.substringBefore('/')) }
+            val (host, portStr) = hostPort.split(':', limit = 2).let { parts ->
+                parts[0] to (parts.getOrNull(1) ?: (if (scheme == "https") "443" else "80"))
+            }
+            if (host.isBlank()) return@applyEnvProxy
+            val port = portStr.toIntOrNull() ?: return@applyEnvProxy
+            System.setProperty("${scheme}.proxyHost", host)
+            System.setProperty("${scheme}.proxyPort", port.toString())
+            // 把 NO_PROXY 也同步写入 http(s).nonProxyHosts （Gradle 支持 Java 标准 nonProxyHosts）
+            val noProxy = (System.getenv("NO_PROXY") ?: System.getenv("no_proxy")).orEmpty().trim()
+            if (noProxy.isNotBlank()) {
+                // Java nonProxyHosts 格式：用 "|" 分隔，不支持 CIDR，忽略掉 IP 段。
+                val nonProxyHosts = noProxy
+                    .split(',')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && '/' !in it }
+                    .joinToString("|") { entry ->
+                        // 把 ".example.com" 转成 "*.example.com"（Java 识别通配）
+                        if (entry.startsWith('.')) "*${entry}" else entry
+                    }
+                if (nonProxyHosts.isNotBlank()) {
+                    System.setProperty("${scheme}.nonProxyHosts", nonProxyHosts)
+                }
+            }
+        } catch (_: Throwable) { /* 解析失败就跳过，不影响主流程 */ }
+    }
+    applyEnvProxy("HTTPS_PROXY", "https")
+    applyEnvProxy("HTTP_PROXY", "http")
+    // 强制确保 localhost 在 nonProxyHosts 里（避免 Gradle 自己打自己走代理）
+    for (s in listOf("http", "https")) {
+        val cur = System.getProperty("${s}.nonProxyHosts").orEmpty()
+        val items = cur.split('|').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+        items += "localhost"
+        items += "127.0.0.1"
+        items += "::1"
+        System.setProperty("${s}.nonProxyHosts", items.joinToString("|"))
+    }
+}
+
 // ---------------- pluginManagement: 腾讯优先，官方兜底 ----------------
 //   若腾讯镜像不可达（某些容器环境只有 IPv6 公网、腾讯 IPv6 不通），Gradle 会继续尝试下一
 //   个仓库；所以保证 gradlePluginPortal() / mavenCentral() 也同时存在，避免"只有腾讯、
