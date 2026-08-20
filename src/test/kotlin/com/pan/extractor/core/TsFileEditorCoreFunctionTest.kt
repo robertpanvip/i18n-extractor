@@ -214,6 +214,35 @@ class TsFileEditorCoreFunctionTest {
         assertTrue("应追加新 key bbb", out.contains("bbb"))
     }
 
+    /**
+     * 回归：多行对象（export default { ... } 风格）重新生成时，
+     * 必须保留「{ 后换行 + 首属性独立成行 + } 前换行」的原有格式，
+     * 不能把 { 与首属性粘到同一行（修复 export default {    'x': 'x' 塌陷）。
+     */
+    @Test
+    fun regeneratePreservesMultilineBraceStyle() {
+        val old = """
+export default {
+    '你好Hello': '你好Hello',
+}
+""".trim()
+        val info = TsFileEditor.parseTsExportedObject(old)!!
+        val oldObjBody = old.substring(info.objectRange.first, info.objectRange.last + 1)
+        val merged = info.staticKV + mapOf("你好Hello{{0}}" to "你好Hello{{0}}")
+        val out = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, merged)
+
+        // { 之后必须是换行，而非空格后直接接首属性和属性内容
+        val openLineOk = out.startsWith("{\n") || out.startsWith("{\r\n")
+        assertTrue("首行应为 { 独占（后跟换行），实际开头: «${out.take(12)}»", openLineOk)
+        // 首属性应独立成行（{ 行不含属性内容）
+        assertTrue("首行不应包含属性 key，实际:\n$out", out.lineSequence().first().trim() == "{")
+        // 闭合 } 前应换行
+        assertTrue("闭合 } 前应有换行，实际结尾: «${out.takeLast(12)}»", out.trimEnd().endsWith("\n}") || out.endsWith("}"))
+        // 仍包含新旧 key
+        assertTrue("应保留旧 key", out.contains("'你好Hello'"))
+        assertTrue("应追加新 key", out.contains("'你好Hello{{0}}'"))
+    }
+
     // ── JSON 写回格式边界（P1 §11 Resource Writer）────────────────
     // 检测原文件的 UTF-8 BOM 与换行风格，写回时格式不漂移。
 

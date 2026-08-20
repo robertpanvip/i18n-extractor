@@ -246,7 +246,19 @@ object TsObjectMerger {
         while (out.isNotEmpty() && out.first().isBlank()) out.removeAt(0)
         while (out.isNotEmpty() && out.last().isBlank()) out.removeAt(out.lastIndex)
 
-        return "{" + out.joinToString("\n") + "\n}"
+        // 保留原始对象体的括号换行风格：若原始对象内部含有换行（多行风格），
+        // 则 { 与首属性、} 与前一行各自换行 —— 避免「{ 与首属性被粘到同一行」的格式塌陷；
+        // 单行风格（{ a: 1 }）保持同行，不强行拆行。
+        val multiLineStyle = oldBody.contains('\n')
+        val closeIndent = if (multiLineStyle) {
+            // 复刻原始闭合 } 前的缩进（多数顶层级 export 为列 0，嵌套对象可能带缩进）
+            val trimmedOuter = oldObjBody.trim()
+            val lastNl = trimmedOuter.lastIndexOf('\n')
+            if (lastNl >= 0) trimmedOuter.substring(lastNl + 1).takeWhile { it == ' ' || it == '\t' } else ""
+        } else ""
+        val open = if (multiLineStyle) "{\n" else "{"
+        val close = if (multiLineStyle) "\n$closeIndent}" else "}"
+        return open + out.joinToString("\n") + close
     }
 
     /** 从 startIdx 行开始，找到与行首开括号匹配的闭合行索引（含）。 */
