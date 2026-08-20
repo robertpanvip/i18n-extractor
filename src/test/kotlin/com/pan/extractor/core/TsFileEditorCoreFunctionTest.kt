@@ -263,4 +263,120 @@ class TsFileEditorCoreFunctionTest {
     fun stripNestedSatisfiesType() {
         assertEquals("{ a: 1 }", TsFileEditor.stripValueSuffixes("{ a: 1 } satisfies Main.Messages"))
     }
+
+    // ── 回归：原实现因正则 `[\w$.<>\[\],()|&'" ?]+$` 在复杂类型下触发
+    //    Java Pattern 编译阶段栈溢出（PatternSyntaxException wrapping StackOverflowError）
+
+    /** 程序构造 N 层嵌套泛型（严格括号平衡，避免手写字数错）。 */
+    private fun nestedGenerics(n: Int, letterSeed: Char = 'A'): String =
+        (0 until n).fold("X") { acc, i -> "${(letterSeed.code + i).toChar()}<$acc>" } +
+            ">".repeat(0)   // fold 已保证每一层都配对
+
+    @Test
+    fun stripDeeplyNestedGenericAsType() {
+        // 20 层嵌套泛型：旧正则只要字符类里含括号字符，编译时就会递归爆炸
+        assertEquals("val", TsFileEditor.stripValueSuffixes("val as " + nestedGenerics(20, 'A')))
+    }
+
+    @Test
+    fun stripDeeplyNestedSatisfiesType() {
+        // 倒序字母：Z<Y<X<...<X>...>>
+        val t = (0 until 20).fold("X") { acc, i -> "${('Z'.code - i).toChar()}<$acc>" }
+        assertEquals("42", TsFileEditor.stripValueSuffixes("42 satisfies $t"))
+    }
+
+    @Test
+    fun stripComplexGenericAsType() {
+        assertEquals("{ a: 1 }", TsFileEditor.stripValueSuffixes("{ a: 1 } as Map<String, List<Int?>>"))
+    }
+
+    @Test
+    fun stripFunctionTypeAsSuffix() {
+        assertEquals("fn", TsFileEditor.stripValueSuffixes("fn as (a: Int, b: String) -> Boolean"))
+    }
+
+    @Test
+    fun stripUnionIntersectionAsType() {
+        assertEquals("x", TsFileEditor.stripValueSuffixes("x as A | B | (C & D)"))
+    }
+
+    @Test
+    fun stripArrayTupleAsType() {
+        assertEquals("x", TsFileEditor.stripValueSuffixes("x as [string, number, ...boolean[]]"))
+    }
+
+    @Test
+    fun stripIndexedAccessGenericArrayAsType() {
+        assertEquals("x", TsFileEditor.stripValueSuffixes("x as Foo<string>[]"))
+    }
+
+    @Test
+    fun stripStringLiteralUnionAsType() {
+        // 类型里的字符串字面量联合
+        assertEquals("x", TsFileEditor.stripValueSuffixes("""x as 'foo' | "bar" | `baz`"""))
+    }
+
+    // ── 语义修复：关键字出现在字符串内部时，**不能**误剥为类型后缀 ──
+
+    @Test
+    fun doNotStripAsInsideSingleQuotedString() {
+        val s = "'hello as world'"
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    @Test
+    fun doNotStripSatisfiesInsideDoubleQuotedString() {
+        val s = """"something satisfies config""""
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    @Test
+    fun doNotStripAsInsideTemplateLiteral() {
+        val s = "`template as content`"
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    // 字符串里即使包含合法类型写法，也不能剥
+    @Test
+    fun doNotStripAsFakeTypeInsideString() {
+        val s = """'x as Map<A, B>'"""
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    // ── 边界：不应剥除的异常情况 ─────────────────────────────────
+
+    @Test
+    fun doNotStripBlankTypeSuffix() {
+        // 末尾 `as ` 后跟空白，没有实际类型 → 不剥
+        val s = "foo as "
+        assertEquals(s.trim(), TsFileEditor.stripValueSuffixes(s))
+    }
+
+    @Test
+    fun doNotStripUnbalancedAngleBracketType() {
+        // `<` 没有闭合 `>`，不是合法类型后缀 → 不剥，保守
+        val s = "foo as Foo<Bar"
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    @Test
+    fun doNotStripAsKeywordInIdentifier() {
+        // `hasClass` 中的 `as` 是标识符一部分，不能当关键字
+        val s = "hasClass"
+        assertEquals(s, TsFileEditor.stripValueSuffixes(s))
+    }
+
+    // ── 链式剥除 ────────────────────────────────────────────────
+
+    @Test
+    fun stripChainedAsConstAndAsType() {
+        // `as const as string` 这种链式，按 while 循环应当两层都剥掉
+        assertEquals("x", TsFileEditor.stripValueSuffixes("x as const as string"))
+    }
+
+    @Test
+    fun stripAsConstChained() {
+        // 两次 `as const`（虽不太合理，但 while 语义保证可剥）
+        assertEquals("x", TsFileEditor.stripValueSuffixes("x as const as const"))
+    }
 }

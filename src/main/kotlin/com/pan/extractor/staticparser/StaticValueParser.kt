@@ -31,28 +31,132 @@ object StaticValueParser {
     private val DEC_FLOAT_RE = Regex("""-?(\d+(_\d+)*)?\.\d+(_\d+)*([eE][+-]?\d+)?|-?\d+(_\d+)*[eE][+-]?\d+""")
     private val STRING_TEMPLATE_INTERPOL_RE = Regex("""\$\{([^}]*)\}""")
 
-    /** 去掉值表达式尾部与静态判定无关的 TS 后缀（as Type / as const / satisfies Type）。 */
+    /**
+     * 去掉值表达式尾部与静态判定无关的 TS 后缀（as Type / as const / satisfies Type）。
+     *
+     * 实现说明：**不使用正则表达式**。
+     * 原先用 `[\w$.<>\[\],()|&'" ?]+$` 贪婪匹配类型字符，因字符类中含成对括号 + 贪心量词 + `$`，
+     * 会在 Java 正则编译阶段因 NFA 状态机构建发生**递归栈溢出**（PatternSyntaxException wrapped StackOverflowError）。
+     * 改为括号深度扫描：定位关键字位置 → 从该位置向后计数括号/字符串深度 → 到行尾且未越界时视为合法类型后缀，
+     * O(n) 无回溯，同时避免误把字符串内部的 `as` / `satisfies` 子串当成类型断言关键字。
+     */
     fun stripValueSuffixes(expr: String): String {
         var t = expr.trim()
-        // 反复剥除（支持 'x' as const as string 这种链式，虽罕见）
         var changed = true
         while (changed) {
             changed = false
             if (t.endsWith(" as const")) {
                 t = t.removeSuffix(" as const").trim(); changed = true; continue
             }
-            // as <Type>：Type 为标识符路径（含 . <> [], () 等），用宽松匹配到行尾
-            val asMatch = Regex("""\s+as\s+[\w$.<>\[\],()|&'" ?]+${'$'}""").find(t)
-            if (asMatch != null && !t.substring(0, asMatch.range.first).endsWith(" as")) {
-                t = t.substring(0, asMatch.range.first).trim(); changed = true; continue
+            // 在"不在字符串 / 注释内部"的前提下，从右向左找最后一个 ` as ` 关键字
+            val asIdx = findToplevelKeywordLast(t, " as ")
+            if (asIdx >= 0 && isBalancedTypeSuffix(t, asIdx + " as ".length)) {
+                t = t.substring(0, asIdx).trim(); changed = true; continue
             }
-            // satisfies <Type>
-            val satMatch = Regex("""\s+satisfies\s+[\w$.<>\[\],()|&'" ?]+${'$'}""").find(t)
-            if (satMatch != null) {
-                t = t.substring(0, satMatch.range.first).trim(); changed = true; continue
+            val satIdx = findToplevelKeywordLast(t, " satisfies ")
+            if (satIdx >= 0 && isBalancedTypeSuffix(t, satIdx + " satisfies ".length)) {
+                t = t.substring(0, satIdx).trim(); changed = true; continue
             }
         }
         return t
+    }
+
+    /**
+     * 左到右单次扫描，返回最后一个"不在字符串/反引号模板字面量内部"的 [keyword] 起点下标。
+     * 未找到返回 -1。[keyword] 必须以空格开头并结尾，以此自然保证关键字的词边界；
+     * 同时额外校验前后字符非 Java 标识符一部分，避免把 `hasAssertion` 等标识符误拆。
+     */
+    private fun findToplevelKeywordLast(s: String, keyword: String): Int {
+        var topIdx = -1
+        var inString: Char? = null
+        var escapeNext = false
+        var k = 0
+        while (k <= s.length - keyword.length) {
+            val c = s[k]
+            when {
+                escapeNext -> { escapeNext = false; k++ }
+                inString != null -> {
+                    when (c) {
+                        '\\' -> escapeNext = true
+                        inString -> inString = null
+                    }
+                    k++
+                }
+                else -> {
+                    if (c == '"' || c == '\'' || c == '`') {
+                        inString = c; k++
+                    } else if (s.regionMatches(k, keyword, 0, keyword.length, ignoreCase = false)) {
+                        // keyword 形如 " as " / " satisfies "，首尾自带空格，天然不可能嵌入标识符内，
+                        // 因此不必做前后字符边界校验（额外校验会把类型名首字符 / 表达式尾字符
+                        // 误判为"标识符的一部分"，导致所有合法类型后缀都匹配不到）。
+                        topIdx = k
+                        k += keyword.length
+                    } else {
+                        k++
+                    }
+                }
+            }
+        }
+        return topIdx
+    }
+
+    /**
+     * 校验 `s[from..end)` 是否是一个"括号/字符串边界都闭合的 TS 类型后缀"（允许末尾空白）。
+     * 遇到未闭合的右括号（深度 < 0）直接返回 false；行末深度必须 >= 0（对多余的右括号
+     * 保守放行，因为它们本就不属于当前表达式，大概率是外层对象/数组的闭合符）。
+     * 另：作为"类型后缀"，起点必须紧跟关键字，不能是表达式主语法里的右括号/逗号等 ——
+     * 但因为我们已经用关键字切割，只需检查括号深度平衡即可。
+     */
+    private fun isBalancedTypeSuffix(s: String, from: Int): Boolean {
+        if (from > s.length) return false
+        val trail = s.substring(from)
+        // 类型后缀不能为空
+        if (trail.isBlank()) return false
+
+        var depthAng = 0   // <>
+        var depthSqb = 0   // []
+        var depthPar = 0   // ()
+        var depthCur = 0   // {}（理论上类型里不出对象字面量，但防御性统计）
+        var inString: Char? = null
+        var escapeNext = false
+        // 使用带下标循环（而非 for-in），便于在遇到 `->`（函数类型箭头）时一次跳 2 字符，
+        // 防止箭头中的 `>` 被误计为泛型的闭合尖括号。
+        var i = 0
+        while (i < trail.length) {
+            val c = trail[i]
+            when {
+                escapeNext -> { escapeNext = false; i++ }
+                inString != null -> {
+                    when (c) {
+                        '\\' -> escapeNext = true
+                        inString -> inString = null
+                    }
+                    i++
+                }
+                else -> {
+                    // 函数类型箭头 `->`：双字符跳过，不参与括号计数
+                    if (c == '-' && i + 1 < trail.length && trail[i + 1] == '>') {
+                        i += 2; continue
+                    }
+                    when (c) {
+                        '"', '\'', '`' -> inString = c
+                        '<' -> depthAng++
+                        '>' -> depthAng = (depthAng - 1).also { if (it < 0) return false }
+                        '[' -> depthSqb++
+                        ']' -> depthSqb = (depthSqb - 1).also { if (it < 0) return false }
+                        '(' -> depthPar++
+                        ')' -> depthPar = (depthPar - 1).also { if (it < 0) return false }
+                        '{' -> depthCur++
+                        '}' -> depthCur = (depthCur - 1).also { if (it < 0) return false }
+                    }
+                    i++
+                }
+            }
+        }
+        // 字符串未闭合 → 不是合法类型后缀
+        if (inString != null) return false
+        // 括号深度全部归零才算合法
+        return depthAng == 0 && depthSqb == 0 && depthPar == 0 && depthCur == 0
     }
 
     /** 尝试把一个表达式片段解析为静态值；非静态返回 null。 */
