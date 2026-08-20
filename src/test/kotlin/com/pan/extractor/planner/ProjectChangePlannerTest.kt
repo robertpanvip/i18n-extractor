@@ -27,7 +27,7 @@ class ProjectChangePlannerTest : BasePlatformTestCase() {
     // ── 全量有效 → preflight 通过 ─────────────────────────────────
 
     fun testValidChangePlanPassesPreflight() {
-        val psi = myFixture.configureByText("plan.ts", "const ok = 1;\n")
+        val psi = myFixture.configureByText("plan.ts", "export default {\n}\n")
         val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(psi.firstChild)
         val cp = ProjectChangePlanner.plan(
             processors = emptyList(),

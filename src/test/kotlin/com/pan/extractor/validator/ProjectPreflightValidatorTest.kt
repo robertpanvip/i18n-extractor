@@ -146,6 +146,129 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
             result.issues.any { it.code == "RESOURCE_TARGET_UNRESOLVED" })
     }
 
+    // ── A2b：Import 语义级 ───────────────────────────────────────
+
+    fun testImportBindingConflictAgainstDifferentSourceFails() {
+        val psi = myFixture.configureByText("bind.ts", "import { t } from 'x';\nconst a = 1;\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = mapOf(
+                ImportPlan(fileName = "bind.ts", imports = listOf("import { t } from 'y';")) to psi.virtualFile,
+            ),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("同名绑定 t 已绑 x，再绑 y 应报 IMPORT_BINDING_CONFLICT，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "IMPORT_BINDING_CONFLICT" })
+    }
+
+    fun testImportSpecifierDuplicateAgainstSameSourceFails() {
+        val psi = myFixture.configureByText("dup.ts", "import { useI18n } from 'vue-i18n';\nconst a = 1;\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = mapOf(
+                ImportPlan(fileName = "dup.ts", imports = listOf("import { useI18n } from 'vue-i18n';")) to psi.virtualFile,
+            ),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("同 specifier 从同 source 重复注入应报 IMPORT_SPECIFIER_DUPLICATE，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "IMPORT_SPECIFIER_DUPLICATE" })
+    }
+
+    fun testImportDeduplicatedSameSourcePasses() {
+        // 已存在同模块同绑定 → 若 plan 也登记了同名同源，视为重复注入（应由计划侧去重）
+        val psi = myFixture.configureByText("dedup.ts", "import { i18n } from '@/locales';\nconst a = 1;\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = mapOf(
+                ImportPlan(fileName = "dedup.ts") to psi.virtualFile, // plan 不含重复 import
+            ),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("计划未注入重复 import 时应通过，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
+    // ── A3b：Resource 语义级 ─────────────────────────────────────
+
+    fun testResourceJsonNotParseableFails() {
+        val psi = myFixture.configureByText("zh.json", "{ broken\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "zh.json", entries = emptyMap(), format = "json") to psi.virtualFile,
+            ),
+        )
+        assertTrue("JSON 不可解析应报 RESOURCE_NOT_PARSEABLE，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "RESOURCE_NOT_PARSEABLE" })
+    }
+
+    fun testResourceJsonNestedPathConflictFails() {
+        val psi = myFixture.configureByText("zh.json", "{\"a\": \"scalar\"}\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "zh.json", entries = mapOf("a.b" to "v"), format = "json") to psi.virtualFile,
+            ),
+        )
+        assertTrue("嵌套 key a.b 的祖先 a 是标量应报 RESOURCE_NESTED_PATH_CONFLICT，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "RESOURCE_NESTED_PATH_CONFLICT" })
+    }
+
+    fun testResourceEntryDropConflictFails() {
+        val psi = myFixture.configureByText("zh.json", "{}\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "zh.json", entries = mapOf("k" to "v"), dropKeys = setOf("k"), format = "json") to psi.virtualFile,
+            ),
+        )
+        assertTrue("key 同时在 entries 与 dropKeys 应报 RESOURCE_ENTRY_AND_DROP_CONFLICT，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "RESOURCE_ENTRY_AND_DROP_CONFLICT" })
+    }
+
+    fun testResourceTsObjectMissingFails() {
+        val psi = myFixture.configureByText("loc.ts", "const x = 1;\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "loc.ts", format = "ts") to psi.virtualFile,
+            ),
+        )
+        assertTrue("TS 无导出对象应报 RESOURCE_OBJECT_MISSING，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "RESOURCE_OBJECT_MISSING" })
+    }
+
+    fun testResourceTsValidObjectPasses() {
+        val psi = myFixture.configureByText("loc.ts", "export default {\n  greeting: 'hi'\n}\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "loc.ts", entries = mapOf("app.ok" to "ok"), format = "ts") to psi.virtualFile,
+            ),
+        )
+        assertTrue("合法 TS 对象且无冲突应通过，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
     // ── 零写入：requireValidWithActualFiles ───────────────────────
 
     fun testRequireValidThrowsOnAnyIssue() {
@@ -165,14 +288,15 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
     }
 
     fun testRequireValidPassesWhenClean() {
-        val psi = myFixture.configureByText("clean.ts", "const c = 2;\n")
-        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(psi.firstChild)
+        val source = myFixture.configureByText("clean.ts", "const c = 2;\n")
+        val json = myFixture.configureByText("zh.json", "{}\n")
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(source.firstChild)
         ProjectPreflightValidator.requireValidWithActualFiles(
             rewrites = listOf(rewrite("s1", target = ptr)),
             sites = listOf(site("s1", ptr)),
             processorCount = 1,
-            importFiles = mapOf(ImportPlan(fileName = "clean.ts") to psi.virtualFile),
-            resourceFiles = mapOf(ResourcePlan(targetPath = "locales/zh.ts") to psi.virtualFile),
+            importFiles = mapOf(ImportPlan(fileName = "clean.ts") to source.virtualFile),
+            resourceFiles = mapOf(ResourcePlan(targetPath = "zh.json") to json.virtualFile),
         )
         assertTrue("全量有效计划不应抛异常", true)
     }

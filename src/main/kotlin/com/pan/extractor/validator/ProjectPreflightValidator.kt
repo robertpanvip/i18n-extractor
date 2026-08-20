@@ -4,7 +4,11 @@ import com.pan.extractor.model.ExtractionSite
 import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ResourcePlan
 import com.pan.extractor.planner.RewritePlan
+import com.pan.extractor.resource.JsonWriter
+import com.pan.extractor.staticparser.StaticObjectParser
+import com.google.gson.JsonParser
 import com.intellij.openapi.vfs.VirtualFile
+import java.nio.charset.StandardCharsets
 
 /** 单条 preflight 校验结果：错误码 + 人类可读描述。 */
 data class PreflightIssue(
@@ -33,10 +37,16 @@ data class PreflightResult(val issues: List<PreflightIssue>) {
  *              ↓
  *      preflightValidate()
  *              ↓
- *  PSI pointer / Import target / Resource target 全部有效？
+ *  Rewrite/Import/Resource 目标解析&语义级全部有效？
  *      ├── 是 ──► Apply
  *      └── 否 ──► 抛出 / 返回［零写入］
  * ```
+ *
+ * 校验深度（事务级 Change Validation）：
+ *  - Rewrite：processor 索引 / site 存在性 / 目标 pointer 有效性；
+ *  - Import：目标可解析可写 + 语义级冲突（同名绑定 / alias / source 冲突 / specifier 重复）；
+ *  - Resource：目标可解析可写 + 语义级（可解析 / 目标对象存在 / entries×dropKeys 矛盾 /
+ *    扁平点式 key 与既有标量或数组祖先冲突）。
  *
  * 与 [ChangeValidator]（仅校验合并计划的 site 指针）不同，本对象把普通 [RewritePlan]、
  * [ImportPlan]、[ResourcePlan] 统一纳入校验。文件解析（路径 → [VirtualFile]）通过注入的
@@ -117,6 +127,9 @@ object ProjectPreflightValidator {
                     "ImportPlan[file=${plan.fileName}] 与 ${prev} 同时写入同一文件 ${vf.path}（需合并或确认顺序）"
                 )
             }
+            // ── A2b：Import 语义级冲突 —— 同名绑定 / alias / source 冲突 / specifier 重复 ──
+            val importText = readText(vf)
+            if (importText != null) checkImportSemantics(plan, importText, issues)
         }
 
         // ── A3：Resource 校验（目标可解析 / 可写）──
@@ -134,6 +147,9 @@ object ProjectPreflightValidator {
                     "ResourcePlan[target=${plan.targetPath}] 目标文件不可写"
                 )
             }
+            // ── A3b：Resource 语义级 —— 可解析 / 目标对象存在 / entry-drop 冲突 / 嵌套路径冲突 ──
+            val text = readText(vf)
+            if (text != null) checkResourceSemantics(plan, text, issues)
         }
 
         return PreflightResult(issues)
@@ -157,5 +173,193 @@ object ProjectPreflightValidator {
                     result.issues.joinToString("\n") { "  [${it.code}] ${it.message}" }
             )
         }
+    }
+
+    // ==========================================================================
+    // A2b：Import 语义级冲突检测
+    // 目标：同一文件（含已有 import 与本次计划）内不出现同名绑定 / alias / source /
+    // specifier 的冲突或重复注入。纯文本扫描，与 ImportManager 的"文本级宽松匹配"思路一致。
+    // ==========================================================================
+
+    private data class ParsedImport(val source: String?, val bindings: Set<String>)
+
+    /** 解析单条 import 语句文本 → (来源模块, 引入的局部绑定名集合)。 */
+    private fun parseOneImport(line: String): ParsedImport {
+        val source = Regex("""from\s*['"]([^'"]+)['"]""").find(line)?.groupValues?.get(1)
+        val bindings = LinkedHashSet<String>()
+        // namespace：import * as ns from 'x' → ns
+        Regex("""import\s+\*\s+as\s+([\w$]+)""").find(line)?.let { bindings.add(it.groupValues[1]) }
+        // default：import a from / import a, { ... } from → a
+        Regex("""import\s+([\w$]+)\s*(?:,|from)""").find(line)?.let { bindings.add(it.groupValues[1]) }
+        // named：{ a, b as c } → a, c
+        Regex("""\{([^{}]*)\}""").find(line)?.groupValues?.get(1)?.let { inner ->
+            for (seg in inner.split(',')) {
+                val s = seg.trim()
+                if (s.isEmpty()) continue
+                val asIdx = s.indexOf(" as ")
+                bindings.add(if (asIdx > 0) s.substring(asIdx + 4).trim() else s.trim())
+            }
+        }
+        return ParsedImport(source, bindings)
+    }
+
+    /** 把文件文本切成一段段以 `import` 开头的语句（按括号深度/分号/换行判定结尾）。 */
+    private fun importChunks(text: String): List<String> {
+        val chunks = ArrayList<String>()
+        var i = 0
+        val n = text.length
+        while (i < n) {
+            val st = text.indexOf("import", i)
+            if (st < 0) break
+            val prev = if (st > 0) text[st - 1] else ' '
+            // "import" 作为词中片段（如 identifier/x'important'）跳过
+            if (prev.isLetterOrDigit() || prev == '_' || prev == '$') { i = st + 6; continue }
+            var j = st + 6
+            var depth = 0
+            var inStr: Char? = null
+            var esc = false
+            var end = -1
+            while (j < n) {
+                val c = text[j]
+                when {
+                    esc -> esc = false
+                    inStr != null -> when (c) {
+                        '\\' -> esc = true
+                        inStr -> inStr = null
+                    }
+                    else -> when (c) {
+                        '"', '\'', '`' -> inStr = c
+                        '{' -> depth++
+                        '}' -> depth--
+                        ';' -> if (depth == 0) { end = j; break }
+                        '\n', '\r' -> if (depth == 0) { end = j; break }
+                    }
+                }
+                j++
+            }
+            if (end > st) chunks.add(text.substring(st, end))
+            i = if (end > st) end + 1 else st + 6
+        }
+        return chunks
+    }
+
+    /**
+     * 把 [plan] 待注入的 import 与目标文件已存在的 import 做语义级比对：
+     *  - 同名绑定已绑定到【不同】来源 → IMPORT_BINDING_CONFLICT（alias/source 冲突）；
+     *  - 同一绑定从【相同】来源再次注入，或计划内重复 → IMPORT_SPECIFIER_DUPLICATE。
+     */
+    private fun checkImportSemantics(plan: ImportPlan, text: String, issues: MutableList<PreflightIssue>) {
+        val existingBindings = HashMap<String, String>()
+        for (chunk in importChunks(text)) {
+            val pi = parseOneImport(chunk)
+            if (pi.source == null) continue
+            for (b in pi.bindings) existingBindings.putIfAbsent(b, pi.source)
+        }
+        val seenInPlan = HashSet<String>()
+        for (line in plan.imports) {
+            val pi = parseOneImport(line)
+            if (pi.source == null) continue
+            for (b in pi.bindings) {
+                if (!seenInPlan.add(b)) {
+                    issues += PreflightIssue(
+                        "IMPORT_SPECIFIER_DUPLICATE",
+                        "ImportPlan[file=${plan.fileName}]：绑定名 \"$b\" 在同计划内出现多次（specifier 重复）"
+                    )
+                    continue
+                }
+                val prevSrc = existingBindings[b] ?: continue
+                if (prevSrc == pi.source) {
+                    issues += PreflightIssue(
+                        "IMPORT_SPECIFIER_DUPLICATE",
+                        "ImportPlan[file=${plan.fileName}]：\"$b\" 已从同模块 '$pi.source' 导入（specifier 重复注入）"
+                    )
+                } else {
+                    issues += PreflightIssue(
+                        "IMPORT_BINDING_CONFLICT",
+                        "ImportPlan[file=${plan.fileName}]：\"$b\" 已在文件中绑定 '${prevSrc}'，再绑定 '${pi.source}' 会造成同名冲突（alias/source 冲突）"
+                    )
+                }
+            }
+        }
+    }
+
+    // ==========================================================================
+    // A3b：Resource 语义级冲突检测
+    // 目标：目标资源文件可解析 / 目标对象存在 / entries 与 dropKeys 不矛盾 /
+    // 扁平点式 key 不与既有标量或数组祖先冲突（避免合并时静默退化为字面量点式 key）。
+    // 复用与 apply 相同解析器（gson / StaticObjectParser），判定一致。
+    // ==========================================================================
+
+    private fun checkResourceSemantics(plan: ResourcePlan, text: String, issues: MutableList<PreflightIssue>) {
+        when (plan.format.lowercase()) {
+            "json" -> {
+                val root = try {
+                    JsonParser.parseString(text)
+                } catch (_: Throwable) {
+                    issues += PreflightIssue(
+                        "RESOURCE_NOT_PARSEABLE",
+                        "ResourcePlan[target=${plan.targetPath}] JSON 无法解析"
+                    )
+                    return
+                }
+                if (!root.isJsonObject) {
+                    issues += PreflightIssue(
+                        "RESOURCE_OBJECT_MISSING",
+                        "ResourcePlan[target=${plan.targetPath}] JSON 顶层不是对象，无法作为翻译资源结构"
+                    )
+                    return
+                }
+                emitResourceMergeIssues(plan, JsonWriter.jsonElementToNestedMap(root.asJsonObject), issues)
+            }
+            "ts", "tsx", "js", "jsx" -> {
+                val info = StaticObjectParser.parseTsExportedObject(text)
+                if (info == null) {
+                    issues += PreflightIssue(
+                        "RESOURCE_OBJECT_MISSING",
+                        "ResourcePlan[target=${plan.targetPath}] 找不到可导出的 TS/JS 对象字面量（需要 export default / export const / module.exports）"
+                    )
+                    return
+                }
+                emitResourceMergeIssues(plan, info.staticKV, issues)
+            }
+            else -> { /* 其他格式不做深语义校验 */ }
+        }
+    }
+
+    private fun emitResourceMergeIssues(
+        plan: ResourcePlan,
+        existing: Map<String, Any?>,
+        issues: MutableList<PreflightIssue>,
+    ) {
+        for (k in plan.entries.keys) {
+            if (k in plan.dropKeys) {
+                issues += PreflightIssue(
+                    "RESOURCE_ENTRY_AND_DROP_CONFLICT",
+                    "ResourcePlan[target=${plan.targetPath}]：key \"$k\" 同时出现在 entries 与 dropKeys，合并语义矛盾"
+                )
+            }
+        }
+        for (k in plan.entries.keys) {
+            val segments = k.split('.')
+            if (segments.size <= 1 || segments.any { it.isBlank() }) continue
+            var cur: Any? = existing
+            for (i in 0 until segments.size - 1) {
+                val seg = segments[i]
+                val child = (cur as? Map<*, *>)?.get(seg) ?: break
+                if (child is Map<*, *>) { cur = child; continue }
+                issues += PreflightIssue(
+                    "RESOURCE_NESTED_PATH_CONFLICT",
+                    "ResourcePlan[target=${plan.targetPath}]：嵌套 key \"$k\" 的祖先段 \"$seg\" 现为${if (child is List<*>) "数组" else "标量"}，合并后会退化为字面量点式 key"
+                )
+                break
+            }
+        }
+    }
+
+    /** 读取一个 [VirtualFile] 的 UTF-8 文本；失败返回 null（由调用方决定是否报读失败）。 */
+    private fun readText(vf: VirtualFile): String? = try {
+        String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+    } catch (_: Throwable) {
+        null
     }
 }
