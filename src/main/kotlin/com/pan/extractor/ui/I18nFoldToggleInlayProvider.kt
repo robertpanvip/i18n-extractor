@@ -8,6 +8,8 @@ import com.pan.extractor.analyzer.*
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.progress.EmptyProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
@@ -87,6 +89,15 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
      * PSI 访问必须在 read action 内执行。
      */
     private fun addFoldToggleInlaysAsync(editor: Editor, file: PsiFile, messages: Map<String, String>) {
+        // 后台池线程默认没有 Job / ProgressIndicator 线程上下文；TS resolve 引擎里的
+        // runBlockingCancellable 会因缺少进度上下文抛 IllegalStateException。这里用
+        // EmptyProgressIndicator 注入进度上下文，保证整个 PSI 遍历 + resolve 过程可取消。
+        ProgressManager.getInstance().runProcess({
+            addFoldToggleInlaysUnderProgress(editor, file, messages)
+        }, EmptyProgressIndicator())
+    }
+
+    private fun addFoldToggleInlaysUnderProgress(editor: Editor, file: PsiFile, messages: Map<String, String>) {
         val t0 = System.nanoTime()
         val fileSize = ApplicationManager.getApplication().runReadAction<Int> { file.textLength }
         val fw = I18nFrameworkRegistry.detect(file)
