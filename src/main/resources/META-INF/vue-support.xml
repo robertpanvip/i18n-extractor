@@ -6,9 +6,9 @@
         <!-- Vue 模板注入 JS 的 folding（mustache {{ $t('x') }} 等） -->
         <lang.foldingBuilder
                 language="VueJS"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
         <lang.foldingBuilder
                 language="Vue"
-                implementationClass="com.pan.extractor.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
     </extensions>
 </idea-plugin>
