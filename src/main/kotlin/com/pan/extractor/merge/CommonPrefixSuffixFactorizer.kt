@@ -225,7 +225,10 @@ object CommonPrefixSuffixFactorizer {
                 // 选 anchor 的 (p,s)：所有 candidates 中最大交 (prefix,suffix) 对（第一个就是最长）
                 val (maxPrefix, maxSuffix, anchorDiff) = candidates.maxBy { it.second.first.length + it.second.second.length }.second.let { c0 ->
                     var p = c0.first; var s = c0.second
-                    for (c in candidates.drop(1)) {
+                    // 交集遍历**所有**候选：与 c0 自身相交是 no-op，但避免按迭代位置 drop 掉
+                    // 恰好排在首位的候选 —— 那会让"仅部分候选共享的后缀"（如 AX测试3XZ 不共享的 XY）
+                    // 因 hash 迭代顺序而偶发地残留进骨架，导致结果不确定（CI 偶发失败）。
+                    for (c in candidates) {
                         p = longestCommonPrefix(p, c.second.first)
                         s = longestCommonSuffix(s, c.second.second)
                     }
