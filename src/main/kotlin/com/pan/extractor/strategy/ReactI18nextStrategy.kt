@@ -72,17 +72,19 @@ object ReactI18nextStrategy : I18nFramework {
         val resourcesBlock = if (!entryImport.isNullOrBlank()) {
             "  resources: {\n    $defaultLocale: { translation: zh },\n  },\n"
         } else ""
+        // 用 trimMargin("|") 而非 trimIndent：resourcesBlock 内部带 2/4 空格的相对缩进，
+        // 若用 trimIndent 会被插值块的最小缩进（2sp）拉低基准，导致所有顶层行多出不该有的前导缩进。
         return """
-            import i18n from 'i18next';
-            import { initReactI18next } from 'react-i18next';
-            $importLine
-            i18n.use(initReactI18next).init({
-              lng: '$defaultLocale',
-              fallbackLng: '$defaultLocale',
-            $resourcesBlock});
+            |import i18n from 'i18next';
+            |import { initReactI18next } from 'react-i18next';
+            |$importLine
+            |i18n.use(initReactI18next).init({
+            |  lng: '$defaultLocale',
+            |  fallbackLng: '$defaultLocale',
+            |$resourcesBlock});
 
-            export default i18n;
-        """.trimIndent() + "\n"
+            |export default i18n;
+        """.trimMargin() + "\n"
     }
 
     /**

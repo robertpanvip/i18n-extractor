@@ -52,13 +52,19 @@ object SolidI18nStrategy : I18nFramework {
         } else {
             "  const [t, { locale }] = useI18n({}, () => '$defaultLocale');\n"
         }
+        // 用 trimMargin("|") 而非 trimIndent：
+        //  1) 把 $importLine 与 $dictLine 拆成独立行，避免两者拼接导致 dictLine 落到 0 缩进、
+        //     把 trimIndent 基准拉到 0 而使所有顶层行保留 12 空格前导缩进；
+        //  2) providerLine 内部带 2 空格函数体缩进，与「  return」同级，trimMargin 仅删 | 前缀、
+        //     保留插值块内部相对缩进。
         return """
-            import { useI18n } from '@solid-primitives/i18n';
-            $importLine$dictLine
-            export function createAppI18n() {
-            $providerLine  return { t, locale };
-            }
-        """.trimIndent() + "\n"
+            |import { useI18n } from '@solid-primitives/i18n';
+            |$importLine
+            |$dictLine
+            |export function createAppI18n() {
+            |$providerLine  return { t, locale };
+            |}
+        """.trimMargin() + "\n"
     }
 
     /**

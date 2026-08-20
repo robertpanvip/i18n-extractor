@@ -217,16 +217,18 @@ object VueI18nStrategy : I18nFramework {
         val messagesBlock = if (!entryImport.isNullOrBlank()) {
             "  messages: {\n    $defaultLocale: zh,\n  },\n"
         } else ""
+        // 用 trimMargin("|") 而非 trimIndent：messagesBlock 内部带 2/4 空格的相对缩进，
+        // 若用 trimIndent 会被插值块的最小缩进（2sp）拉低基准，导致所有顶层行多出不该有的前导缩进。
         return """
-            import { createI18n } from 'vue-i18n';
-            $importLine
-            const i18n = createI18n({
-              legacy: false,
-              locale: '$defaultLocale',
-              fallbackLocale: '$defaultLocale',
-            $messagesBlock});
+            |import { createI18n } from 'vue-i18n';
+            |$importLine
+            |const i18n = createI18n({
+            |  legacy: false,
+            |  locale: '$defaultLocale',
+            |  fallbackLocale: '$defaultLocale',
+            |$messagesBlock});
 
-            export default i18n;
-        """.trimIndent() + "\n"
+            |export default i18n;
+        """.trimMargin() + "\n"
     }
 }

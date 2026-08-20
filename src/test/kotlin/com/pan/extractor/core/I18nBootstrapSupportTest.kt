@@ -214,6 +214,75 @@ class I18nBootstrapSupportTest {
         assertTrue(content.contains("export default i18n;"))
     }
 
+    // ── buildInitFileContent 格式（trimMargin 缩进修复回归）───────────
+    // 旧实现用 trimIndent()，插值块（resources/messages）内部的 2/4 空格相对缩进会把
+    // 最小缩进基准拉低，导致所有顶层行多出不该有的前导空格。以下精确到字符校验格式。
+
+    @Test
+    fun reactInitFileFormatIsClean() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            ReactI18nextStrategy, "zh", "zh-CN"
+        )
+        val expected = """
+            |import i18n from 'i18next';
+            |import { initReactI18next } from 'react-i18next';
+            |import zh from './locales/zh-CN';
+            |
+            |i18n.use(initReactI18next).init({
+            |  lng: 'zh',
+            |  fallbackLng: 'zh',
+            |  resources: {
+            |    zh: { translation: zh },
+            |  },
+            |});
+            |
+            |export default i18n;
+        """.trimMargin() + "\n"
+        assertEquals("React 初始化文件顶层不应有多余前导缩进", expected, content)
+    }
+
+    @Test
+    fun vueInitFileFormatIsClean() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            VueI18nStrategy, "zh-CN", "zh-CN"
+        )
+        val expected = """
+            |import { createI18n } from 'vue-i18n';
+            |import zh from './locales/zh-CN';
+            |
+            |const i18n = createI18n({
+            |  legacy: false,
+            |  locale: 'zh-CN',
+            |  fallbackLocale: 'zh-CN',
+            |  messages: {
+            |    zh-CN: zh,
+            |  },
+            |});
+            |
+            |export default i18n;
+        """.trimMargin() + "\n"
+        assertEquals("Vue 初始化文件顶层不应有多余前导缩进", expected, content)
+    }
+
+    @Test
+    fun solidInitFileFormatIsClean() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            SolidI18nStrategy, "zh", "zh"
+        )
+        val expected = """
+            |import { useI18n } from '@solid-primitives/i18n';
+            |import zh from './locales/zh';
+            |
+            |const dict = { zh: zh };
+            |
+            |export function createAppI18n() {
+            |  const [t, { locale }] = useI18n(dict, () => 'zh');
+            |  return { t, locale };
+            |}
+        """.trimMargin() + "\n"
+        assertEquals("Solid 初始化文件顶层不应有多余前导缩进（且 import/dict 行不应塌缩到 0 缩进）", expected, content)
+    }
+
     // ── addDepsToPackageJson ──────────────────────────────────
 
     @Test
