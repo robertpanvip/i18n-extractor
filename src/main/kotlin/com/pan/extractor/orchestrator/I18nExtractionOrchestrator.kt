@@ -183,6 +183,30 @@ object I18nExtractionOrchestrator {
         val dropExistingKeys = LinkedHashSet<String>()
         var output: OutputResult = OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
 
+        // 【P0 A 组 A4】写入前统一 preflight：Code + Import + Resource 作为整体校验，
+        // 任一类失效立即抛异常 ⇒ 尚未进入 WriteCommandAction，零写入。
+        // 收集阶段已完成，此处只需做只读的 target / import / resource 解析校验；
+        // apply 处于后台任务，读 PSI（buildImportPlan）需显式包 read action（线程合规）。
+        try {
+            ApplicationManager.getApplication().runReadAction {
+                val preflightRewrites = collection.processors.flatMap { it.analyzer.rewrites }
+                val preflightSites = collection.processors.flatMap { it.analyzer.collectedSites }
+                val preflightPlan = com.pan.extractor.planner.ProjectChangePlanner.plan(
+                    processors = collection.processors,
+                    sites = preflightSites,
+                    rewrites = preflightRewrites,
+                    processorCount = collection.processors.size,
+                    entryVf = options.entryFile,
+                    finalExtracted = collection.extracted,
+                    dropKeys = emptySet(),
+                )
+                preflightPlan.preflightOrThrow()
+            }
+        } catch (t: Throwable) {
+            LOG.warn("I18nExtractionOrchestrator: Apply 前统一 preflight 失败，已中止（零写入）。${t.message?.take(120)}", t)
+            throw t
+        }
+
         indicator.text = "原子写入 ${collection.processors.size} 个文件（import + \$t 替换 + 骨架 + 资源写回）"
         indicator.text2 = "单 command 统一提交，失败将整体回滚"
 

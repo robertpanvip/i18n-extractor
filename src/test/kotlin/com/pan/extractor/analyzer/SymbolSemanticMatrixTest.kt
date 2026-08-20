@@ -5,6 +5,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 
 /**
  * PROJECT_ANALYSIS §7 —— Translation Call 语义矩阵。
@@ -236,5 +237,52 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
             """.trimIndent()
         )
         assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "t"))
+    }
+
+    // ── 6. P0 增量：本地 shadow / 孤儿调用绝不可误判为「翻译」（§5.3 / §18）──
+
+    fun testLocallyDefinedFunctionTIsNonTranslation() {
+        // function t(x){return x} 是本地定义，非框架 t → NON_TRANSLATION
+        val file = configureFile(
+            "src/LocalShadow.ts",
+            """
+            function t(x: string) { return x.toUpperCase() }
+            const a = t('x')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testLocalConstShadowTIsNeverTranslation() {
+        // const t = somethingElse 右侧无法证明来源 → 至少绝不判为 TRANSLATION（保守避免高风险改写）
+        val file = configureFile(
+            "src/ConstShadow.ts",
+            """
+            const t = somethingElse
+            const a = t('x')
+            """.trimIndent()
+        )
+        assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testPlainObjectMethodTIsNeverTranslation() {
+        // 普通对象方法 o.t() 无从证明来源 → 至少绝不判为 TRANSLATION（避免高风险改写）
+        val file = configureFile(
+            "src/PlainObject.ts",
+            """
+            const o = { t(x: string) { return x } }
+            const a = o.t('x')
+            """.trimIndent()
+        )
+        assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "o.t"))
+    }
+
+    fun testOrphanBareTWithoutOriginIsNotHighRisk() {
+        // 孤儿 t('x')：无 import / 无本地定义 / 无可解析出处 → 必须保守（非 TRANSLATION）
+        val file = configureFile(
+            "src/OrphanBareT.ts",
+            "const a = t('x')\n"
+        )
+        assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
     }
 }
