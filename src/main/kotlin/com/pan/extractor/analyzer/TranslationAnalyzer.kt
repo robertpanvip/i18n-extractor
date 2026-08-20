@@ -100,14 +100,25 @@ object TranslationAnalyzer {
 
     /**
      * react-intl 结构化位置：字符串字面量是「消息描述符」属性值（`id` / `defaultMessage` /
-     * `description`），且外层由 `formatMessage` / `defineMessages` / `defineIntlConfig` /
-     * `formatList` / `formatPlural` 包裹。
+     * `description`），且外层由**已证明来源**的 react-intl 消息 API 包裹。
      *
      * `formatMessage({ id: 'x' })` 的 id、`defineMessages({ a: { defaultMessage: '你好' } })`
      * 的 defaultMessage 属**已结构化 i18n 资源**，不属需要再 $t 包装的裸硬编码 → 直接跳过。
+     *
+     * ⚠️ **来源证明优先**：外层调用函数名命中 [REACT_INTL_MSG_FUNCTIONS] 只是**候选特征**，
+     * 不能作为语义证据——否则本地 `function formatMessage() {}` / `function defineMessages() {}`
+     * 同样对象字面量形态也会被当成 react-intl 结构化资源而错误跳过提取（NON_TRANSLATION 场景）。
+     * 必须再经 [SymbolAnalyzer.analyze] 证明该调用来源为 react-intl（框架 import / useIntl()
+     * 解构产物），见 [isReactIntlMsgCall]。
      */
     private val REACT_INTL_MSG_FUNCTIONS = setOf(
         "formatMessage", "defineMessages", "defineIntlConfig", "formatList", "formatPlural"
+    )
+
+    /** 视为「已证明 react-intl 消息 API」的来源分类（与翻译三态来源判定一致）。 */
+    private val REACT_INTL_PROVEN_ORIGINS = setOf(
+        SymbolOrigin.I18N_FRAMEWORK_IMPORT,
+        SymbolOrigin.I18N_HOOK_OR_FACTORY,
     )
 
     /** react-intl 消息描述符里承载文案的属性键。 */
@@ -117,17 +128,32 @@ object TranslationAnalyzer {
         if (!lit.isStringLiteral) return false
         val prop = lit.parent as? JSProperty ?: return false
         if (prop.name !in REACT_INTL_MSG_PROPS) return false
-        // 沿祖先链向上找到最近调用表达式；若其函数名属于 react-intl 消息 API 即判定已结构化。
+        // 沿祖先链向上找到最近调用表达式；仅当该调用为「已证明来源」的 react-intl 消息 API 才判定已结构化
+        // （名字命中只是候选，来源证明才是语义证据——见 isReactIntlMsgCall）。
         var cursor: PsiElement? = prop.parent
         while (cursor != null) {
-            if (cursor is JSCallExpression) {
-                val fn = (cursor.methodExpression as? com.intellij.lang.javascript.psi.JSReferenceExpression)
-                    ?.referenceName
-                return fn in REACT_INTL_MSG_FUNCTIONS
-            }
+            if (cursor is JSCallExpression && isReactIntlMsgCall(cursor)) return true
             cursor = cursor.parent
         }
         return false
+    }
+
+    /**
+     * 判定一个调用是否为「已证明来源」的 react-intl 消息 API。
+     *
+     * 名字命中 [REACT_INTL_MSG_FUNCTIONS]（formatMessage / defineMessages / defineIntlConfig /
+     * formatList / formatPlural）仅是候选，还必须经 [SymbolAnalyzer.analyze] 证明：
+     *  - `formatMessage` / `formatList` / `formatPlural` → `useIntl()` 解构产物（I18N_HOOK_OR_FACTORY）；
+     *  - `defineMessages` / `defineIntlConfig` → react-intl 具名 import（I18N_FRAMEWORK_IMPORT）。
+     *
+     * 本地同名 shadow（`function formatMessage() {}` 等）归 [SymbolOrigin.LOCAL_SHADOW]，
+     * 不在 proven 集内 → 不判定结构化 → 其对象字面量参数中的文案正常进入提取。
+     */
+    private fun isReactIntlMsgCall(call: JSCallExpression): Boolean {
+        val fn = (call.methodExpression as? com.intellij.lang.javascript.psi.JSReferenceExpression)?.referenceName
+            ?: return false
+        if (fn !in REACT_INTL_MSG_FUNCTIONS) return false
+        return SymbolAnalyzer.analyze(call).origin in REACT_INTL_PROVEN_ORIGINS
     }
 
     /**

@@ -376,4 +376,54 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
         )
         assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "t"))
     }
+
+    // ── React Intl / 本地实例 shadow（Negative）────────────────────
+
+    /** Negative：本地 `function formatMessage` 不得因名字被当作 react-intl（见 TranslationAnalyzer 来源证明）。 */
+    fun testLocalFunctionNamedFormatMessageIsNotTranslation() {
+        val file = configureFile(
+            "src/LocalFormatMessage.ts",
+            """
+            function formatMessage(options: any) { return options.id }
+            const a = formatMessage({ id: '中文' })
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "formatMessage"))
+    }
+
+    /** Negative：本地 `function defineMessages` 同样不得当作 react-intl。 */
+    fun testLocalFunctionNamedDefineMessagesIsNotTranslation() {
+        val file = configureFile(
+            "src/LocalDefineMessages.ts",
+            """
+            function defineMessages(obj: any) { return obj }
+            const a = defineMessages({ k: { defaultMessage: '中文' } })
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "defineMessages"))
+    }
+
+    /** Negative：`const i18n = { t: ... }` 本地对象字面量实例 → LOCAL_SHADOW，绝非翻译。 */
+    fun testLocalObjectLiteralInstanceTItsNotTranslation() {
+        val file = configureFile(
+            "src/ObjLiteralShadow.ts",
+            """
+            const i18n = { t: (x: string) => x }
+            const a = i18n.t('中文')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "i18n.t"))
+    }
+
+    /** Negative：`const i18n = createSomethingElse()` 未知工厂产物 → 不得误判为翻译（保守）。 */
+    fun testUnknownFactoryInstanceTItsNotTranslation() {
+        val file = configureFile(
+            "src/UnknownFactoryShadow.ts",
+            """
+            const i18n = createSomethingElse()
+            const a = i18n.t('中文')
+            """.trimIndent()
+        )
+        assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "i18n.t"))
+    }
 }

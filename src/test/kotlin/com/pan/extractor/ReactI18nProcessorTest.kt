@@ -2014,4 +2014,46 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             resultText.contains("formatMessage({ id: '你好' ")
         )
     }
+
+    /** Negative：本地 `function formatMessage` 不得因名字被当作 react-intl 结构化资源而跳过提取。 */
+    fun testReactIntlLocalFormatMessageShadowNotStructured() {
+        val (_, analyzer) = runReactIntlExtract(
+            """
+            function formatMessage(options: any) {
+                return options.id;
+            }
+            export function localFn() {
+                return formatMessage({ id: '普通文本' });
+            }
+            """.trimIndent()
+        )
+        assertTrue(
+            "本地 formatMessage 的 { id: '普通文本' } 是普通硬编码，应进 extractedStrings，got=${analyzer.extractedStrings}",
+            analyzer.extractedStrings.values.contains("普通文本")
+        )
+        assertFalse(
+            "本地 formatMessage 不得被当作 react-intl 结构化而进 existingStrings，got=${analyzer.existingStrings}",
+            analyzer.existingStrings.containsKey("普通文本")
+        )
+    }
+
+    /** Negative：本地 `function defineMessages` 同样不得被当作 react-intl 结构化资源而跳过提取。 */
+    fun testReactIntlLocalDefineMessagesShadowNotStructured() {
+        val (_, analyzer) = runReactIntlExtract(
+            """
+            function defineMessages(obj: any) {
+                return obj;
+            }
+            const msgs = defineMessages({ greeting: { defaultMessage: '普通问候' } });
+            """.trimIndent()
+        )
+        assertTrue(
+            "本地 defineMessages 的 defaultMessage 是普通硬编码，应进 extractedStrings，got=${analyzer.extractedStrings}",
+            analyzer.extractedStrings.values.contains("普通问候")
+        )
+        assertFalse(
+            "本地 defineMessages 不得被当作 react-intl 结构化而进 existingStrings，got=${analyzer.existingStrings}",
+            analyzer.existingStrings.containsKey("普通问候")
+        )
+    }
 }
