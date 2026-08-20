@@ -160,9 +160,13 @@ object SymbolAnalyzer {
     /** #4 按引用表达式 offset 缓存 resolve() 结果；同一引用在 detect/collect/祖先链里只解析一次。 */
     private fun resolvedOf(ref: JSReferenceExpression?): PsiElement? {
         if (ref == null) return null
-        val memo = fileScanGen(ref.containingFile as? PsiFile ?: return ref.resolve())
-            ?: return ref.resolve()
-        return when (val v = memo.resolveResult.computeIfAbsent(ref.textRange.startOffset) { ref.resolve() ?: NO_RESOLVE }) {
+        // 用 ReadAction.compute 包裹 resolve()，确保 IntelliJ 线程上下文中有 ProgressIndicator，
+        // 避免 TypeScript resolve 引擎中的 runBlockingCancellable 因缺少进度上下文而抛
+        // "There is no ProgressIndicator or Job in this thread" 异常。
+        fun resolveInReadAction(): PsiElement? = ReadAction.compute<PsiElement?, Throwable> { ref.resolve() }
+        val memo = fileScanGen(ref.containingFile as? PsiFile ?: return resolveInReadAction())
+            ?: return resolveInReadAction()
+        return when (val v = memo.resolveResult.computeIfAbsent(ref.textRange.startOffset) { resolveInReadAction() ?: NO_RESOLVE }) {
             NO_RESOLVE -> null
             else -> v as PsiElement
         }
