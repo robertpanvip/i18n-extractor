@@ -95,9 +95,17 @@ object I18nExtractionOrchestrator {
      *
      * @param contextPsi 入口 Action 的上下文文件（用于 Dialog 推断入口）；可为 null。
      */
-    fun collect(project: Project, files: List<VirtualFile>, contextPsi: PsiFile?): Collection {
+    fun collect(project: Project, files: List<VirtualFile>, contextPsi: PsiFile?, indicator: ProgressIndicator? = null): Collection {
         val extracted = mutableMapOf<String, String>()
-        val processors: List<I18nProcessor> = files.mapNotNull { file ->
+        val total = files.size
+        val processors: List<I18nProcessor> = files.mapIndexedNotNull { idx, file ->
+            // 每分析一个文件，推进一次进度（含 cancel 检查），让批量提取的进度条持续更新。
+            if (indicator != null) {
+                indicator.checkCanceled()
+                indicator.text = "分析中：${file.name} (${idx + 1}/$total)"
+                indicator.text2 = "已提取 ${extracted.size} 条 key"
+                indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
+            }
             ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
                 val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
                 if (psiFile == null) {

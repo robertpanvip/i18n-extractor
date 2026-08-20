@@ -321,7 +321,7 @@ class AllI18nExtractorAction : AnAction() {
                 indicator.text = "分析 ${files.size} 个文件中的硬编码中文"
                 indicator.fraction = 0.2
                 try {
-                    collection = Orchestrator.collect(project, files, contextPsi)
+                    collection = Orchestrator.collect(project, files, contextPsi, indicator)
                 } catch (t: Throwable) {
                     err = t
                 }
