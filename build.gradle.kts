@@ -68,9 +68,9 @@ intellijPlatform {
     """.trimIndent()
     }
 
-    // 禁用测试代码 instrumentation（IDEA Ultimate EAP + useInstaller=false 时
-    // instrumentTestCode 会因 nested element 报错），纯 JUnit 测试不需要。
-    instrumentCode = false
+    // 启用主代码 instrumentation，恢复平台 @NotNull 契约检查（插件代码传 null / 违背
+    // 契约时在测试期即被断言暴露），避免掩盖传 null 问题。
+    instrumentCode = true
 }
 
 java {
