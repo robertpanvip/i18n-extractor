@@ -1,6 +1,7 @@
 package com.pan.extractor.resource
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -21,6 +22,8 @@ import java.nio.charset.StandardCharsets
  */
 object TsResourceWriter {
 
+    private val LOG = Logger.getInstance(TsResourceWriter::class.java)
+
     /**
      * TS 入口文件写回：解析 export default/const 对象字面量 → 合并扁平 JSON → 重新生成对象体。
      * 迁移自 [com.pan.extractor.editor.TsFileEditor.regenerateTsFileWithNewJson]（实现体 1:1）。
@@ -38,7 +41,10 @@ object TsResourceWriter {
         }
         val rawText = if (psiFile != null) psiFile.text else try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
-        } catch (_: Exception) { return null }
+        } catch (e: Exception) {
+            LOG.warn("TsResourceWriter: 读取翻译文件内容失败，返回 null", e)
+            return null
+        }
         // P0：TS 写回需保持原文件的换行风格（LF / CRLF）。先把原始文本归一化为 LF 处理
         //（parseTsExportedObject 的 objectRange 偏移基于归一化文本，与后续 substring 保持一致），
         // 最后再把整个结果统一转回原风格，避免重写后 \r\n 与 \n 混用。
@@ -171,7 +177,8 @@ object TsResourceWriter {
             val bytes = newText.toByteArray(StandardCharsets.UTF_8)
             entryVf.setBinaryContent(bytes, 0L, entryVf.length, null)
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("TsResourceWriter: 写回翻译文件失败", e)
             false
         }
     }

@@ -4,6 +4,7 @@ import com.pan.extractor.ui.*
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.diagnostic.Logger
 
 // ─────────────────────────────────────────────────────────────
 // 候选分组模型
@@ -93,12 +94,19 @@ object CommonPrefixSuffixFactorizer {
     private val HAN_RE = Regex("""[\u4e00-\u9fff]""")
     private val DIGIT_TOKEN_RE = Regex("""\d+(?:\.\d+)?""")
 
+    private val LOG = Logger.getInstance(CommonPrefixSuffixFactorizer::class.java)
+
     /** 合并建议阈值（公共前后缀合计至少达到该字符数才生成建议），来自全局设置，默认 2。 */
     private fun minAffixChar(): Int {
         // 纯单元测试（无 IntelliJ Application）下读不到设置，回退默认 2
         val app = ApplicationManager.getApplication()
         return if (app != null && !app.isDisposed) {
-            try { I18nSettings.getInstance().mergeAffixThreshold() } catch (_: Throwable) { 2 }
+            try {
+                I18nSettings.getInstance().mergeAffixThreshold()
+            } catch (e: Throwable) {
+                LOG.debug("CommonPrefixSuffixFactorizer: 读取合并阈值设置失败，回退默认值", e)
+                2
+            }
         } else 2
     }
 

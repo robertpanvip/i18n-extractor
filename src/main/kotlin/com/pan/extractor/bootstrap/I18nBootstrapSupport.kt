@@ -7,6 +7,7 @@ import com.pan.extractor.strategy.SolidI18nStrategy
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.openapi.diagnostic.Logger
 
 /**
  * i18n 引导（Bootstrap）支持：
@@ -24,6 +25,8 @@ import com.google.gson.JsonParser
  *   - [addDepsToPackageJson]：更新 package.json 文本，追加依赖
  */
 object I18nBootstrapSupport {
+
+    private val LOG = Logger.getInstance(I18nBootstrapSupport::class.java)
 
     /** 检测结果：缺 bootstrap 时描述需要补什么。 */
     data class MissingBootstrap(
@@ -107,7 +110,8 @@ object I18nBootstrapSupport {
         // 尝试用 Gson 解析，失败则直接返回原文（不做破坏性修改）
         val root = try {
             JsonParser.parseString(packageJsonText)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("I18nBootstrapSupport: 解析 package.json 失败，返回原文", e)
             return packageJsonText
         }
         if (!root.isJsonObject) return packageJsonText

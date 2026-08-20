@@ -3,6 +3,7 @@ package com.pan.extractor.resource
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import com.pan.extractor.editor.TsFileEditor
 import java.nio.charset.StandardCharsets
@@ -24,6 +25,8 @@ data class JsonWriteFormat(
 
 /** JSON 资源写入器：扁平 key → value 的格式化、merge 与写回。 */
 object JsonWriter {
+
+    private val LOG = Logger.getInstance(JsonWriter::class.java)
 
     private val prettyGson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
 
@@ -62,12 +65,16 @@ object JsonWriter {
     ): String? {
         val content = try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
-        } catch (_: Exception) { return null }
+        } catch (e: Exception) {
+            LOG.warn("JsonWriter: 读取翻译文件内容失败，返回 null", e)
+            return null
+        }
         val fmt = detectJsonWriteFormat(content)
         val body = if (fmt.bom) content.removePrefix("\uFEFF") else content
         val rootJson: JsonElement = try {
             JsonParser.parseString(body)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("JsonWriter: JSON 解析失败，回退覆盖写回", e)
             // JSON 解析失败 → 兜底：把新 JSON 格式化返回（整个文件被新值覆盖）
             return applyJsonWriteFormat(prettyGson.toJson(newFlatJson), fmt)
         }

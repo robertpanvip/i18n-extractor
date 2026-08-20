@@ -2,6 +2,7 @@ package com.pan.extractor.editor
 
 import com.pan.extractor.project.Util
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -12,6 +13,8 @@ import com.google.gson.JsonParser
 import java.nio.charset.StandardCharsets
 
 object TsFileEditor {
+    private val LOG = Logger.getInstance(TsFileEditor::class.java)
+
     // ==========================================================================
     // TS 文件：解析 export default / export const 对象字面量 → 嵌套 Map
     //         遇到无法确定的表达式跳过（整条属性整条跳过，不抛错）
@@ -699,7 +702,12 @@ object TsFileEditor {
         val targetText = Util.readVirtualFileText(project, targetVf) ?: return null
         return when (targetVf.extension?.lowercase()) {
             "json" -> {
-                val root = try { JsonParser.parseString(targetText) } catch (_: Exception) { return null }
+                val root = try {
+                    JsonParser.parseString(targetText)
+                } catch (e: Exception) {
+                    LOG.warn("TsFileEditor: 解析 target JSON 失败，返回 null", e)
+                    return null
+                }
                 val existing = com.pan.extractor.resource.JsonWriter.jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))
                 ResolvedSpreadTarget(targetVf, 0 until 0, existing, "json", readOnly)
             }
@@ -753,7 +761,10 @@ object TsFileEditor {
                                 val root = JsonParser.parseString(String(pkgJson.contentsToByteArray(), StandardCharsets.UTF_8))
                                 root.takeIf { it.isJsonObject }?.asJsonObject?.get("main")
                                     ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
-                            } catch (_: Exception) { null }
+                            } catch (e: Exception) {
+                                LOG.debug("TsFileEditor: 解析包 main 字段失败，回退内置候选", e)
+                                null
+                            }
                         }
                         val candidates = buildList {
                             if (!main.isNullOrEmpty()) add(main)

@@ -7,6 +7,7 @@ import com.pan.extractor.ui.*
 
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 
@@ -26,6 +27,8 @@ object MergeApplier {
 
     /** 纯数字字面量正则（含负数/小数），高频用于差异段/数字渲染，避免每次重复编译。 */
     private val NUMBER_RE = Regex("""-?\d+(?:\.\d+)?""")
+
+    private val LOG = Logger.getInstance(MergeApplier::class.java)
 
     /**
      * 【P0 多文件原子性】应用前的完整性校验：确认所有将被改写 / 将作为骨架重写目标的
@@ -266,7 +269,8 @@ object MergeApplier {
         if (replacement != null) {
             try {
                 rootPsi.replace(replacement)
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                LOG.warn("MergeApplier: 替换源码片段失败，跳过该站点应用", e)
                 // P0：替换失败时不再登记 finalExtracted —— 否则源码未改，但资源文件仍为它写入 key，
                 // 造成源码/资源不一致、运行时查不到翻译。失败即视为该站点未应用。
                 return

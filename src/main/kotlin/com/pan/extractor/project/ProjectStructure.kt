@@ -15,6 +15,7 @@ import com.intellij.lang.javascript.psi.JSReturnStatement
 import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.javascript.psi.ecma6.TypeScriptFunctionExpression
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -29,6 +30,9 @@ import kotlin.io.path.relativeToOrNull
  * 从 [Util] 拆分而来，行为不变。
  */
 object ProjectStructure {
+
+    private val LOG = Logger.getInstance(ProjectStructure::class.java)
+
     /** 高频复用正则：避免每次在循环里重复编译（性能）。 */
     private val REACT_KEY_RE = Regex(""""react"\s*:\s*"""")
     private val PREACT_KEY_RE = Regex(""""preact"\s*:\s*"""")
@@ -165,6 +169,7 @@ object ProjectStructure {
                         hasAngular = deps.contains(NGX_TRANSLATE_KEY_RE) || deps.contains(ANGULAR_CORE_KEY_RE),
                     )
                 } catch (e: Exception) {
+                    LOG.warn("ProjectStructure: 读取 package.json 依赖失败，按未解析处理", e)
                     sixFalse
                 }
             }
@@ -546,6 +551,7 @@ object ProjectStructure {
                     val hasVue = deps.contains(VUE_KEY_RE)
                     return hasReact && !hasVue
                 } catch (e: Exception) {
+                    LOG.warn("ProjectStructure: hasReactDependency 读取 package.json 失败，返回 false", e)
                     return false
                 }
             }
@@ -578,7 +584,8 @@ object ProjectStructure {
         val pkg = root.findChild("package.json") ?: return null
         val text = try {
             String(pkg.contentsToByteArray(), StandardCharsets.UTF_8)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("ProjectStructure: 读取 package.json 失败，返回 null", e)
             return null
         }
         val (hasReact, hasVue, hasSolid, _) = readPackageJsonDependencies(currentPsiFile)
@@ -629,7 +636,8 @@ object ProjectStructure {
             if (vf.isDirectory && depth < maxDepth && (depth == 0 || enterFilter(vf))) {
                 val children = try {
                     vf.children
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    LOG.warn("ProjectStructure: 读取子目录 children 失败，跳过", e)
                     continue
                 }
                 for (child in children) {

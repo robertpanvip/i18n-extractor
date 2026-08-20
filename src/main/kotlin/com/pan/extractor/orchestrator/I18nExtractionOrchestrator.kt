@@ -15,6 +15,7 @@ import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
@@ -46,6 +47,8 @@ import java.awt.datatransfer.StringSelection
  * `invokeAndWait + runWriteCommandAction` 单 command 原子提交。
  */
 object I18nExtractionOrchestrator {
+
+    private val LOG = Logger.getInstance(I18nExtractionOrchestrator::class.java)
 
     // ─────────────────────────────────────────────────────────────
     // 采集阶段产物（Scanner + Analyzer 输出）
@@ -240,6 +243,7 @@ object I18nExtractionOrchestrator {
                         entryFileName = entryVf.name,
                     )
                 } catch (t: Throwable) {
+                    LOG.warn("I18nExtractionOrchestrator: 写回入口文件失败，回退到剪贴板。${t.message?.take(60)}", t)
                     val content = Util.getJsonContent(jsonPretty)
                     CopyPasteManager.getInstance().setContents(StringSelection(content))
                     return OutputResult(

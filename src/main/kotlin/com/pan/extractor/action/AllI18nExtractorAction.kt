@@ -15,6 +15,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -33,6 +34,8 @@ import java.nio.charset.StandardCharsets
  * [Orchestrator]（Scanner → Analyzer → Planner → Validator → Rewriter → 原子 Apply）。
  */
 class AllI18nExtractorAction : AnAction() {
+
+    private val LOG = Logger.getInstance(AllI18nExtractorAction::class.java)
 
     override fun getActionUpdateThread(): ActionUpdateThread {
         return ActionUpdateThread.BGT
@@ -90,9 +93,9 @@ class AllI18nExtractorAction : AnAction() {
                 }
             }
         } catch (e: JsonParseException) {
-            println("tsconfig.json 格式错误: ${e.message}")
+            LOG.warn("tsconfig.json 格式错误: ${e.message}", e)
         } catch (e: Exception) {
-            println("读取或解析 tsconfig.json 失败: ${e.message}")
+            LOG.warn("读取或解析 tsconfig.json 失败: ${e.message}", e)
         }
 
         return emptyList()

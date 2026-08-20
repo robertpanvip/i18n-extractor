@@ -6,6 +6,7 @@ import com.pan.extractor.lang.LanguageExtractor
 import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.ui.*
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -18,6 +19,8 @@ import com.intellij.psi.PsiFile
  */
 object EntryFileLocator {
     /** 两字母 ISO 639-1 语言码列表（覆盖绝大多数项目的命名习惯）。 */
+    private val LOG = Logger.getInstance(EntryFileLocator::class.java)
+
     private val ISO_639_1 = setOf(
         "ab","aa","af","ak","sq","am","ar","an","hy","as","av","ae","ay","az","bm","ba","eu","be","bn","bh","bi",
         "bs","br","bg","my","ca","ch","ce","ny","zh","cv","kw","co","cr","hr","cs","da","dv","nl","dz","en","eo","et",
@@ -38,7 +41,12 @@ object EntryFileLocator {
         // 纯单元测试（无 IntelliJ Application）下读不到设置，回退仅用内置目录。
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         val custom = if (app != null && !app.isDisposed) {
-            try { I18nSettings.getInstance().customTranslationDirs() } catch (_: Throwable) { emptyList() }
+            try {
+                I18nSettings.getInstance().customTranslationDirs()
+            } catch (e: Throwable) {
+                LOG.debug("EntryFileLocator: 读取自定义翻译目录设置失败，回退空列表", e)
+                emptyList()
+            }
         } else emptyList()
         return TRANSLATION_DIRS_DEFAULT + custom.map { it.lowercase() }
     }
@@ -308,7 +316,12 @@ object EntryFileLocator {
     fun findChineseEntryViaI18nConfig(root: VirtualFile, project: Project? = null): VirtualFile? {
         // P0：把 project 传入 Locator 以启用 PSI 级复核，避免字符串/注释里的 createI18n( 误判
         val initFile = I18nInstanceLocator.findI18nInitFileInRoot(root, project) ?: return null
-        val text = try { String(initFile.contentsToByteArray(), Charsets.UTF_8) } catch (_: Exception) { return null }
+        val text = try {
+            String(initFile.contentsToByteArray(), Charsets.UTF_8)
+        } catch (e: Exception) {
+            LOG.warn("EntryFileLocator: 读取 i18n 初始化文件失败，返回 null", e)
+            return null
+        }
         return if (text.contains("createI18n(") || text.contains("createI18n (")) {
             findVueEntryFromConfigText(initFile, text)
         } else {

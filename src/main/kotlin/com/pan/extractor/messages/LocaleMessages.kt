@@ -8,6 +8,7 @@ import com.pan.extractor.ui.*
 
 import com.google.gson.JsonParser
 import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -25,6 +26,8 @@ import com.intellij.psi.PsiManager
  * 支持 .json / .ts / .tsx / .js / .jsx。嵌套对象按 `.` 拼成扁平 key（i18n 常见约定）。
  */
 object LocaleMessages {
+
+    private val LOG = Logger.getInstance(LocaleMessages::class.java)
 
     private data class CacheKey(val entryPath: String, val displayLang: String, val modStamp: Long)
 
@@ -121,7 +124,8 @@ object LocaleMessages {
             val out = LinkedHashMap<String, String>()
             flattenNested(root.asJsonObject.entrySet().asSequence().map { it.key to it.value }.toMap(), "", out)
             out
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("LocaleMessages: 解析 JSON 翻译资源失败，返回空映射", e)
             emptyMap()
         }
     }

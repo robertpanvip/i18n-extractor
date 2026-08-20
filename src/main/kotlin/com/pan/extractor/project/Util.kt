@@ -5,6 +5,7 @@ import com.pan.extractor.ui.*
 
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -22,6 +23,8 @@ object Util {
      * （`const $t = i18n.global.t` → `const$t=i18n.global.t`），避免在十余处散落
      * `"\\s+".toRegex()`。行为与旧内联用法完全一致。
      */
+    private val LOG = Logger.getInstance(Util::class.java)
+
     val WS_COMPACT_RE: Regex = "\\s+".toRegex()
 
     // ────────────────────────────────────────────────────────────────
@@ -169,7 +172,8 @@ object Util {
             } else {
                 String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.warn("Util: 读取虚拟文件文本失败，返回 null", e)
             null
         }
     }

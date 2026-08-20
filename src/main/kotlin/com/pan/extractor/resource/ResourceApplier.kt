@@ -1,5 +1,6 @@
 package com.pan.extractor.resource
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -17,6 +18,8 @@ import com.pan.extractor.planner.ResourcePlan
  * fallback 仍在动作层处理）—— 与旧行为逐分支 1:1。
  */
 object ResourceApplier {
+
+    private val LOG = Logger.getInstance(ResourceApplier::class.java)
 
     /**
      * 把写回意图组装为 [ResourcePlan]。
@@ -61,6 +64,7 @@ object ResourceApplier {
                 else -> null
             }
         } catch (t: Throwable) {
+            LOG.warn("ResourceApplier: 执行入口资源文件写回失败，返回 null", t)
             null
         }
     }

@@ -8,6 +8,7 @@ import com.pan.extractor.locate.I18nInstanceLocator
 import com.pan.extractor.planner.HookInjectPlan
 import com.pan.extractor.planner.HookTarget
 import com.pan.extractor.planner.ImportPlan
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.psi.PsiElement
@@ -22,6 +23,8 @@ import com.intellij.psi.util.PsiTreeUtil
  * 差异仅在框架识别（依赖 `solid-js`）和引导文件（使用 `@solid-primitives/i18n`）。
  */
 object SolidI18nStrategy : I18nFramework {
+    private val LOG = Logger.getInstance(SolidI18nStrategy::class.java)
+
     override val id = "solid-i18n"
     override val tFunctionName = "t"
     override val hookImport = "import { useI18n } from '@solid-primitives/i18n';"
@@ -162,7 +165,10 @@ object SolidI18nStrategy : I18nFramework {
         val importPath = I18nInstanceLocator.resolveVueI18nImportPath(containingFile, initFile) ?: return null
         val initText = try {
             String(initFile.contentsToByteArray(), Charsets.UTF_8)
-        } catch (_: Exception) { "" }
+        } catch (e: Exception) {
+            LOG.warn("SolidI18nStrategy: 读取 i18n 初始化文件失败，回退为空字符串", e)
+            ""
+        }
         return when {
             initText.contains("createAppI18n") -> "import { createAppI18n } from '$importPath';\n"
             Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(initText) ->

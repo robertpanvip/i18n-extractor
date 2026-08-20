@@ -16,6 +16,7 @@ import com.pan.extractor.analyzer.*
 import com.google.gson.GsonBuilder
 import com.intellij.json.JsonFileType
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
@@ -49,6 +50,8 @@ class ExtractedStringsDialog(
         val selectedAffix: List<AffixGroupCandidate>,
         val selectedDigit: List<DigitGroupCandidate>,
     )
+
+    private val LOG = Logger.getInstance(ExtractedStringsDialog::class.java)
 
     private var editor: Editor? = null
     var json: String? = null
@@ -165,7 +168,10 @@ class ExtractedStringsDialog(
                 outputMode = OutputDestination.FILE
                 selectedEntryFile = try {
                     EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
-                } catch (_: Throwable) { null }
+                } catch (e: Throwable) {
+                    LOG.warn("ExtractedStringsDialog: 定位中文入口文件失败，回退为空", e)
+                    null
+                }
             }
         }
     }
@@ -175,7 +181,8 @@ class ExtractedStringsDialog(
         val psiFile = contextPsiFile ?: return
         bootstrapMissing = try {
             ProjectStructure.detectMissingI18nBootstrap(psiFile)
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            LOG.warn("ExtractedStringsDialog: 检测 i18n 引导缺失状态失败，回退为 null", e)
             null
         }
     }
@@ -270,7 +277,10 @@ class ExtractedStringsDialog(
         if (candidate == null || !candidate.isValid) {
             candidate = try {
                 EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
-            } catch (_: Throwable) { null }
+            } catch (e: Throwable) {
+                LOG.warn("ExtractedStringsDialog: 重新定位中文入口文件失败，回退为空", e)
+                null
+            }
         }
         if (candidate != null) {
             entryPathField.text = candidate.path
@@ -340,7 +350,8 @@ class ExtractedStringsDialog(
             WriteCommandAction.runWriteCommandAction(project) {
                 createdEntry = I18nBootstrap.maybeApply(project, psiFile, missing)
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            LOG.warn("ExtractedStringsDialog: 执行 i18n 引导失败，返回 null", e)
             return null
         }
         bootstrapPerformed = true
