@@ -11,9 +11,7 @@ group = "com.pan"
 version = "1.7.0"
 
 repositories {
-    // 腾讯云 Maven 公共镜像（覆盖 mavenCentral / google / jcenter 等常用仓库）
-    maven { url = uri("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/") }
-    maven { url = uri("https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/") }
+    mavenCentral()
     intellijPlatform {
         defaultRepositories()
     }
