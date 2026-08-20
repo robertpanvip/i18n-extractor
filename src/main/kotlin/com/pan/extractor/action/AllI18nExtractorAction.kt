@@ -249,24 +249,41 @@ class AllI18nExtractorAction : AnAction() {
     // 入口
     // ═════════════════════════════════════════════════════════════
 
+    private fun isSupportedFile(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.endsWith(".vue") ||
+                lower.endsWith(".ts") ||
+                lower.endsWith(".tsx") ||
+                lower.endsWith(".js") ||
+                lower.endsWith(".jsx")
+    }
+
     override fun update(e: AnActionEvent) {
-        // "全项目提取"入口的启用策略：只要当前 project 打开即可（不需要 focus 在特定 PsiFile）。
-        // 原先要求必须有 PSI_FILE，会出现「菜单可点但点了无反馈」的假象：
-        // actionPerformed 里 "if (PSI_FILE == null) return" 直接静默 return。
-        val project = e.project
-        if (project == null) {
+        // 启用策略：基于上下文中的 PsiFile / VirtualFile 判断（与单文件入口语义一致），
+        // 避免"菜单总是可用、点了看似无反应"的误导：
+        //   · 语言包/翻译资源文件 → 禁用；
+        //   · 支持后缀（.vue/.ts/.tsx/.js/.jsx）→ 启用；
+        //   · PSI_FILE 为 null 但用户在 Project View 选中【目录】→ 允许（全项目提取）；其余 → 禁用。
+        val psi = e.getData(CommonDataKeys.PSI_FILE)
+        if (psi == null) {
+            val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+            if (virtualFile == null) {
+                e.presentation.isEnabledAndVisible = false
+                return
+            }
+            if (virtualFile.isDirectory) {
+                e.presentation.isEnabledAndVisible = true
+                return
+            }
+            e.presentation.isEnabledAndVisible = isSupportedFile(virtualFile.name)
+            return
+        }
+        // 语言包/翻译资源文件上禁用菜单
+        if (EntryFileLocator.isTranslationResourceFile(psi.virtualFile)) {
             e.presentation.isEnabledAndVisible = false
             return
         }
-        // 如果用户在 Project View 中选中了翻译资源目录/语言包文件，也禁用作为保险。
-        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-        if (virtualFile != null && !virtualFile.isDirectory &&
-            EntryFileLocator.isTranslationResourceFile(virtualFile)
-        ) {
-            e.presentation.isEnabledAndVisible = false
-            return
-        }
-        e.presentation.isEnabledAndVisible = true
+        e.presentation.isEnabledAndVisible = isSupportedFile(psi.name)
     }
 
     override fun actionPerformed(e: AnActionEvent) {
