@@ -85,8 +85,10 @@ class ExtractedStringsDialog(
     // Swing 默认列：Boolean / String / String / String / String / Int / String
     private class AffixModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
         override fun getColumnClass(columnIndex: Int): Class<*> = when (columnIndex) {
-            0 -> Boolean::class.java
-            5 -> Int::class.java
+            // 必须用 javaObjectType（java.lang.Boolean 包装类），否则 Kotlin 的 Boolean::class.java
+            // 返回原始类型 boolean，Swing 找不到对应的勾选框渲染器/编辑器，会退化成文本 true/false
+            0 -> Boolean::class.javaObjectType
+            5 -> Int::class.javaObjectType
             else -> String::class.java
         }
 
@@ -95,8 +97,8 @@ class ExtractedStringsDialog(
 
     private class DigitModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
         override fun getColumnClass(columnIndex: Int): Class<*> = when (columnIndex) {
-            0 -> Boolean::class.java
-            4 -> Int::class.java
+            0 -> Boolean::class.javaObjectType
+            4 -> Int::class.javaObjectType
             else -> String::class.java
         }
 
