@@ -93,6 +93,24 @@ class StaticValueParserTest {
         // 1 + 2 不进入拼接路径（首字符非字符串）
         assertNull(parse("1 + 2"))
     }
+    // ── 回归：加号全部位于字符串内部 → 走字面量分支，不得无限递归（修复栈溢出）──
+    @Test fun `plus inside single-quoted string`() {
+        assertEquals("a+b", parse("'a+b'"))
+        assertEquals("a+b+c", parse("'a+b+c'"))
+    }
+    @Test fun `plus inside double-quoted string`() {
+        assertEquals("a+b", parse("\"a+b\""))
+    }
+    @Test fun `plus inside template literal`() {
+        assertEquals("a+b", parse("`a+b`"))
+    }
+    @Test fun `plus inside string with as suffix`() {
+        assertEquals("a+b", parse("'a+b' as string"))
+    }
+    @Test fun `concat where operand contains no top-level plus`() {
+        // 存在顶层 `+`，但某一操作数自身是含 `+` 的字符串 → 不得递归死循环，仍正确拼接
+        assertEquals("a+b=c", parse("'a+b' + \"=c\""))
+    }
 
     // ── TS 类型断言 ───────────────────────────────────────────
     @Test fun `as const suffix`() { assertEquals("hello", parse("'hello' as const")) }

@@ -276,4 +276,38 @@ class CommonPrefixSuffixFactorizerTest {
             affix.any { it.skeleton.startsWith("测试职务仅能选择{N0}") }
         )
     }
+
+    /**
+     * 性能回归：旧实现对每个候选逐条 `list.remove(sref)`（O(k) 线性扫描），而桶一直保持
+     * 很大（每条只与它的配对伙伴共享长前缀，与其余几千条只共享首字符），因此每个 anchor
+     * 都要扫描近全表并做一次 O(k) remove —— 累加起来把桶内算法从 O(k^2) 恶化成 O(k^3)，
+     * 正是"单页转换卡到 20s+"的根因。
+     *
+     * 本用例构造「大量小分组 + 大表不缩小」的极端负载：2 万条消息、每对共享约 16 位随机
+     * 十六进制前缀（组内伙伴可合并），但**组间彼此只共享首字符**（伪随机 hex 几乎不碰撞），
+     * 逼着每个 anchor 各自形成 2 成员的组并反复在大表上做 remove。在 O(k^2) 实现下应于秒级
+     * 完成；O(k^3) 复现则要卡几十秒。只断言上界（宽松阈值，避免 CI 抖动误报）。
+     */
+    @Test
+    fun testLargeSingleBucketCompletesInTime() {
+        val n = 20_000
+        val sites = ArrayList<SiteRef>(n)
+        // 固定乘子 → 伪随机 hex 稳定，且组间长前缀几乎不共享，组内伙伴完全共享。
+        val mul = 0x9E3779B97F4A7C15UL
+        for (i in 0 until n) {
+            val group = (i / 2).toULong()
+            val hex = (group * mul).toString(16)
+            val side = if (i % 2 == 0) "甲" else "乙"
+            val msg = "配$hex$side"   // 仅首字符 '配' 在所有消息间共享
+            sites.add(site(msg, i))
+        }
+
+        val start = System.nanoTime()
+        val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue("affix 组数: ${affix.size}", affix.isNotEmpty())
+
+        // 2 万条「大表 + 大量小分组」负载在 O(k^2) 下应落在秒级；给足余量避免 CI 抖动。
+        assertTrue("factorize 2 万条同桶消息耗时 ${elapsedMs}ms，疑似退化为 O(k^3)，实际 affix=${affix.size}", elapsedMs < 15_000)
+    }
 }

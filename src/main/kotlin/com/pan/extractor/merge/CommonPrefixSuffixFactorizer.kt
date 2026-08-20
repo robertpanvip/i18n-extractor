@@ -160,10 +160,12 @@ object CommonPrefixSuffixFactorizer {
 
     // ── ① 公共前后缀合并（≥2字） ──────────────────────────────
     private fun buildAffixGroups(allSites: List<SiteRef>): List<AffixGroupCandidate> {
-        val byMessageBucket = allSites.groupBy { it.originalMessage }
-            .filterValues { it.size >= 2 }    // 先以"完全相同原句=桶"作为 1 级种子？不，我们要的是"相似但不同"，所以桶其实是"全量两两比较"前的分桶。
+        // 【性能】合并阈值只读一次，避免在双重循环里对每个候选反复读持久化配置（I18nSettings 每次都是
+        // 一次不可忽略的查找/反序列化；桶内两两比较达上万次时，重复读取会显著拖慢单页转换）。
+        val minAffix = minAffixChar()
 
-        // 简单算法：对原消息先按前缀长度分桶（按前 1 字 bucket，再 O(n^2) 比较，避免 1e4 条 OOM）
+        // 简单算法：对原消息先按首字符分桶（对 ASCII/中文前导字足够），再在桶内做相似度比较，
+        // 避免 1e4 条全量两两比较的灾难退化。桶大小为 k 时，本实现为 O(k^2)。
         val buckets: MutableMap<Char, MutableList<SiteRef>> = mutableMapOf()
         for (s in allSites) {
             val first = s.originalMessage.firstOrNull() ?: continue
@@ -175,19 +177,16 @@ object CommonPrefixSuffixFactorizer {
         var idSeq = 0
 
         for ((_, bucket) in buckets) {
-            val list = bucket.toMutableList()
-            list.sortByDescending { it.originalMessage.length }
+            val list = bucket.sortedByDescending { it.originalMessage.length }.toMutableList()
             while (list.isNotEmpty()) {
                 val anchor = list.removeFirst()
                 if (anchor in consumed) continue
                 val candidates = mutableListOf<Pair<SiteRef, Triple<String, String, String>>>() // siteRef -> (prefix,suffix,diff)
                 for (other in list) {
                     if (other in consumed) continue
-                    val (p, s, d) = longestCommonAffix(anchor.originalMessage, other.originalMessage) ?: continue
-                    if (p.codePointCount(0, p.length) < minAffixChar() && s.codePointCount(0, s.length) < minAffixChar()) continue
-                    // 前后缀至少一边≥2字（组合也算）——用户阈值：≥2字 + 全自动
-                    val totalAffix = p.codePointCount(0, p.length) + s.codePointCount(0, s.length)
-                    if (totalAffix < minAffixChar()) continue
+                    // 【性能】先用纯 char 遍历快速量出前后缀长度，绝大多数（桶内共享<阈值）的配对
+                    // 在此即返回 null，完全避免 substring/正则分配；只有确会命中阈值的配对才物化字符串。
+                    val (p, s, d) = longestCommonAffix(anchor.originalMessage, other.originalMessage, minAffix) ?: continue
                     candidates.add(other to Triple(p, s, d))
                 }
                 if (candidates.isEmpty()) continue
@@ -205,7 +204,7 @@ object CommonPrefixSuffixFactorizer {
                 // 如果交集前后缀太短（合并过程中缩小），放弃这个分组
                 val pLen = maxPrefix.codePointCount(0, maxPrefix.length)
                 val sLen = maxSuffix.codePointCount(0, maxSuffix.length)
-                if (pLen + sLen < minAffixChar()) continue
+                if (pLen + sLen < minAffix) continue
 
                 // 【防呆】共享前后缀必须覆盖整句的足够比例，否则合并无意义且会生成垃圾骨架。
                 // 例："当前职位仅能选择60人" 与某句只共享"当前"(2字/约18%)，
@@ -222,13 +221,18 @@ object CommonPrefixSuffixFactorizer {
 
                 val variants = mutableMapOf<String, MutableList<SiteRef>>()
                 variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor); consumed.add(anchor)
-                for ((sref, triple) in candidates) {
+                val toRemove = mutableSetOf<SiteRef>()
+                for ((sref, _) in candidates) {
                     // 按最终 prefix/suffix 重新切 diff（避免中间交集缩小后不再对应）
                     val msg = sref.originalMessage
                     if (!msg.startsWith(maxPrefix) || !msg.endsWith(maxSuffix) || msg.length <= maxPrefix.length + maxSuffix.length) continue
                     val diff = msg.substring(maxPrefix.length, msg.length - maxSuffix.length)
-                    variants.getOrPut(diff) { mutableListOf() }.add(sref); consumed.add(sref); list.remove(sref)
+                    variants.getOrPut(diff) { mutableListOf() }.add(sref); consumed.add(sref); toRemove.add(sref)
                 }
+                // 【性能】批量收集后一次性 removeAll（单遍 O(k)），替代逐条 list.remove(sref) 的 O(k)
+                // 线性扫描 —— 原来累加会把桶内算法从 O(k^2) 恶化成 O(k^3)，大桶（上千条同首字符）
+                // 时正是单页转换卡到 20s+ 的根因。
+                if (toRemove.isNotEmpty()) list.removeAll(toRemove)
                 val skeleton = "$maxPrefix{N0}$maxSuffix"
                 results += AffixGroupCandidate(
                     id = "AG${++idSeq}",
@@ -243,17 +247,36 @@ object CommonPrefixSuffixFactorizer {
         return results.sortedByDescending { it.siteCount }
     }
 
-    /** 返回 (commonPrefix, commonSuffix, anchor diff) 或 null（完全不包含非空前缀或后缀） */
-    private fun longestCommonAffix(a: String, b: String): Triple<String, String, String>? {
+    /**
+     * 返回 (commonPrefix, commonSuffix, anchor diff) 或 null（完全不包含非空前缀或后缀，
+     * 或前后缀总长度不满足 [minAffix] 阈值）。
+     *
+     * 【性能】不命中阈值时全程只用 charAt 比字符、不产生任何 substring 分配；只有确定
+     * 总长度达标的配对才物化前缀/后缀字符串。这对桶内大量"只共享 1 个首字符"的无意义配对，
+     * 可把 O(k^2) 双重循环的真实开销降低一个数量级（单页转换 20s+ 的热点即在此）。
+     */
+    private fun longestCommonAffix(a: String, b: String, minAffix: Int): Triple<String, String, String>? {
         if (a === b) return null
-        val p = longestCommonPrefix(a, b)
-        val aTail = a.substring(p.length)
-        val bTail = b.substring(p.length)
-        val s = longestCommonSuffix(aTail, bTail)
-        val endA = if (s.isNotEmpty()) a.length - s.length else a.length
-        val endB = if (s.isNotEmpty()) b.length - s.length else b.length
-        val aa = a.substring(p.length, endA)
-        val bb = b.substring(p.length, endB)
+        // ① 纯 char 快速扫描：公共前缀长度
+        val maxLen = minOf(a.length, b.length)
+        var pLen = 0
+        while (pLen < maxLen && a[pLen] == b[pLen]) pLen++
+        if (pLen == maxLen) return null   // 其中之一是另一句的前缀/完全重合 → 无差异段
+        // ② 纯 char 快速扫描：公共后缀长度（不得与前述前缀重叠）
+        var sLen = 0
+        val aEnd = a.length - 1
+        val bEnd = b.length - 1
+        while (pLen + sLen < maxLen && a[aEnd - sLen] == b[bEnd - sLen]) sLen++
+        // ③ 阈值早筛：不满足约定合并长度（≥2 字）直接返回，避免物化字符串
+        if (pLen < minAffix && sLen < minAffix) return null
+        if (pLen + sLen < minAffix) return null
+        // ④ 命中才物化
+        val p = a.substring(0, pLen)
+        val s = if (sLen > 0) a.substring(a.length - sLen) else ""
+        val endA = if (sLen > 0) a.length - sLen else a.length
+        val endB = if (sLen > 0) b.length - sLen else b.length
+        val aa = a.substring(pLen, endA)
+        val bb = b.substring(pLen, endB)
         if (aa.isEmpty() || bb.isEmpty()) return null   // 其中一句没有差异（完全重合的情况另处理）
         return Triple(p, s, aa)
     }

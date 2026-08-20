@@ -186,8 +186,13 @@ object StaticValueParser {
         }
 
         // 字符串拼接（全字面量）：'a' + 'b' + "c" + `d`
-        if (looksLikeConcat(s)) {
-            return tryEvaluateConcat(s)
+        // 注意：必须先验证确实存在顶层 `+`（splitTopLevelPlus 切出 ≥2 段）才进入拼接求值。
+        // 若 `+` 全部位于字符串内部（如 'a+b'），splitTopLevelPlus 只会返回 1 段，
+        // 此时若照常走 tryEvaluateConcat 会以【同一段】再次进入本函数 → 无限递归 → 栈溢出；
+        // 落回字面量分支则能正确解析出普通字符串 "a+b"。
+        val concatParts = if (looksLikeConcat(s)) splitTopLevelPlus(s) else emptyList()
+        if (concatParts.size >= 2) {
+            return tryEvaluateConcat(concatParts)
         }
 
         // 数字（进制）：十六进制 / 二进制 / 八进制 / BigInt
@@ -296,11 +301,11 @@ object StaticValueParser {
     }
 
     /**
-     * 递归求值字符串拼接：`'a' + 'b' + "c"` → "abc"。
+     * 递归求值字符串拼接：`['a', 'b', '"c"']` → "abc"。
      * 仅当所有操作数都是静态字符串（含模板字面量）时返回拼接结果；否则 null。
+     * [parts] 必须已由 [splitTopLevelPlus] 切为 ≥2 段（调用方保证），避免对单段无限递归。
      */
-    private fun tryEvaluateConcat(s: String): String? {
-        val parts = splitTopLevelPlus(s)
+    private fun tryEvaluateConcat(parts: List<String>): String? {
         val sb = StringBuilder()
         for (part in parts) {
             val v = tryParseStaticValue(part) ?: return null
