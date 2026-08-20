@@ -236,4 +236,80 @@ class VueLifecycleTest : BasePlatformTestCase() {
             first, second
         )
     }
+
+    /**
+     * §C1：Vue directive(`v-t`) + interpolation(`{{ }}`) 混合生命周期。
+     * 同一模板内同时出现：指令属性 `v-t="'中文'"` 与 mustache 插值 `{{ '中文' }}`。
+     * 第一遍：两者各自被改写一次；第二遍（同一 PsiFile reparse 后）均识别为已翻译，
+     * 不重复提取、不产生双重 `\$t` 嵌套。
+     */
+    fun testVueDirectiveAndInterpolationMixedLifecycle() {
+        val file = configureFile(
+            "src/MixedDirectives.vue",
+            """
+            <template>
+                <div>
+                    <span v-t="'提示信息'"></span>
+                    <span>{{ '欢迎回来' }}</span>
+                </div>
+            </template>
+            """.trimIndent()
+        )
+
+        // ── 第一遍：collect + apply ──
+        val p1 = I18nProcessor(project, file)
+        p1.collect()
+        assertEquals(
+            "第一遍应提取 2 个字符串（指令 + 插值各一），got: ${p1.analyzer.extractedStrings}",
+            2, p1.analyzer.extractedStrings.size
+        )
+        p1.runWithUndo()
+
+        val afterFirst = file.text
+        assertTrue(
+            "v-t 指令值应改写为 \$t(key)，got:\n$afterFirst",
+            afterFirst.containsIgnoringWs("${'$'}t('提示信息')")
+        )
+        assertTrue(
+            "mustache 插值应改写为 \$t(key)，got:\n$afterFirst",
+            afterFirst.containsIgnoringWs("${'$'}t('欢迎回来')")
+        )
+        // 两段文本各自的 \$t 都只能出现一次，禁止双重嵌套。
+        assertEquals(
+            "'提示信息' 的 \$t 应恰好出现一次，got:\n$afterFirst",
+            1, afterFirst.occurrencesRegex("${'$'}t('提示信息')")
+        )
+        assertEquals(
+            "'欢迎回来' 的 \$t 应恰好出现一次，got:\n$afterFirst",
+            1, afterFirst.occurrencesRegex("${'$'}t('欢迎回来')")
+        )
+
+        // ── 第二遍：同一 PsiFile 重新 collect（文件已被改写，PSI 已重解析）──
+        val p2 = I18nProcessor(project, file)
+        p2.collect()
+        assertTrue(
+            "第二遍不应再提取任何字符串（均已翻译），got: ${p2.analyzer.extractedStrings}",
+            p2.analyzer.extractedStrings.isEmpty()
+        )
+        assertTrue(
+            "第二遍应识别 '提示信息' 为已有翻译，got: ${p2.analyzer.existingStrings}",
+            p2.analyzer.existingStrings.containsValue("提示信息")
+        )
+        assertTrue(
+            "第二遍应识别 '欢迎回来' 为已有翻译，got: ${p2.analyzer.existingStrings}",
+            p2.analyzer.existingStrings.containsValue("欢迎回来")
+        )
+
+        // 再 apply 一次必须幂等：源码不再发生重复改写。
+        p2.runWithUndo()
+        val afterSecond = file.text
+        assertEquals(
+            "二次 apply 后 '提示信息' 的 \$t 仍应恰好一次，got:\n$afterSecond",
+            1, afterSecond.occurrencesRegex("${'$'}t('提示信息')")
+        )
+        assertEquals(
+            "二次 apply 后 '欢迎回来' 的 \$t 仍应恰好一次，got:\n$afterSecond",
+            1, afterSecond.occurrencesRegex("${'$'}t('欢迎回来')")
+        )
+    }
 }

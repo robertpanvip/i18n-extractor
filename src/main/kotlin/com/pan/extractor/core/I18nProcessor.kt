@@ -132,12 +132,10 @@ class I18nProcessor @JvmOverloads constructor(
         kind: RewriteKind,
         newExpression: String,
         xmlTextPointers: List<SmartPsiElementPointer<XmlText>>,
-        isJSX: Boolean,
-        isDirective: Boolean,
-        isAngular: Boolean,
+        attributeForm: com.pan.extractor.planner.AttributeRenderForm,
     ): RewritePlan = analyzer.recordPlan(
         message, replaceRoot, anchor, kind, newExpression,
-        xmlTextPointers, isJSX, isDirective, isAngular,
+        xmlTextPointers, attributeForm,
     )
 
     override fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =

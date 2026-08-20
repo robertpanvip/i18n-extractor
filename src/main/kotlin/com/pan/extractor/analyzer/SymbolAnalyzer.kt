@@ -88,13 +88,13 @@ object SymbolAnalyzer {
 
     /** 提供翻译函数（t/tc/\$t）的 i18n 框架包名。命中说明该 import 是"真实 i18n 框架"。 */
     private val I18N_FRAMEWORK_MODULES = setOf(
-        "react-i18next", "vue-i18n", "i18next",
+        "react-i18next", "vue-i18n", "i18next", "react-intl",
         "@solid-primitives/i18n", "@solid-hooks/i18n"
     )
 
     /** 通过解构 / 工厂调用生成翻译函数的已知 i18n 入口名。 */
     private val I18N_HOOK_OR_FACTORY_NAMES = setOf(
-        "useI18n", "useTranslation", "getI18n", "createI18n", "createAppI18n", "initReactI18next"
+        "useI18n", "useTranslation", "useIntl", "getI18n", "createI18n", "createAppI18n", "initReactI18next"
     )
 
     /** 插件注入 / 约定的全局规范名（始终视为已翻译，因为它是本插件产出的形式）。 */
@@ -392,13 +392,8 @@ object SymbolAnalyzer {
             return importLocalNameMatches(text, localName)
         }
         // 非框架模块：可能是 barrel / re-export 中转（`@/i18n` 再 `export { t } from 'vue-i18n'`）。
-        // 只在可能与 i18n 相关的名字上做代价有限的跟随，避免对每个普通 import 都扫描全项目。
-        if (localName !in TRANSLATION_LIKE_NAMES &&
-            localName !in I18N_HOOK_OR_FACTORY_NAMES &&
-            localName !in CONVENTIONAL_INSTANCE_NAMES
-        ) {
-            return false
-        }
+        // 跟随以【被导入的原始导出名】（`X as localName` 的 X）为准，而非本地别名 localName，
+        // 否则 `import { t as midT }` / `import { i18n as l10n }` 的本地别名名会因不在候选集而漏判。
         return importIsBarrelReExportFromFramework(decl, localName)
     }
 
@@ -427,7 +422,52 @@ object SymbolAnalyzer {
         val srcMatch = FROM_SOURCE_RE.find(decl.text)
             ?.groupValues?.get(1)?.trim() ?: return false
         val target = resolveSourceFile(decl.containingFile, srcMatch) ?: return false
-        return fileReExportsNameFromFramework(target, localName, mutableSetOf())
+        // namespace import（`import * as ns from '@/i18n'`）：namespace 的任意导出来自框架，
+        // 或本地导出 i18n 实例 → 整个命名空间即 i18n。
+        if (decl.text.contains("* as")) {
+            return fileExportsAnythingFromFramework(target, mutableSetOf())
+        }
+        // 具名 import：还原被导入的原始导出名（`X as localName` → X），再沿 barrel 递归证明
+        // （枚举 `* as` 在此之上，故这里的 default 导入 `import i18n from '@/x'` rawName 即 i18n）。
+        val rawName = rawImportedName(decl.text, localName) ?: return false
+        return fileReExportsNameFromFramework(target, rawName, mutableSetOf())
+    }
+
+    /** 从 import 文本取被导入的原始导出名：`X as localName` → X；直接 `X` → X；无则返回 null。 */
+    private fun rawImportedName(importText: String, localName: String): String? {
+        Regex("""([A-Za-z_$][\w$]*)\s+as\s+\Q$localName\E\b""")
+            .find(importText)?.groupValues?.get(1)?.let { return it }
+        return localName
+    }
+
+    /** barrel 是否从框架导出【任意】符号，或本地导出 i18n 惯例实例（namespace import 专用证明）。 */
+    private fun fileExportsAnythingFromFramework(barrel: PsiFile, visited: MutableSet<String>): Boolean {
+        val key = barrel.virtualFile?.path ?: barrel.name
+        if (!visited.add(key)) return false
+        val text = barrel.text
+        // 直接/星号 re-export 自 i18n 框架包
+        if (MODULES_PROVIDING_NATIVE_T_RESOLVED.any {
+                Regex("""from\s*['"]\Q$it\E['"]""").containsMatchIn(text)
+            }
+        ) return true
+        // 本地导出 i18n 惯例实例（`export const i18n = createI18n(...)`)
+        if (CONVENTIONAL_INSTANCE_NAMES.any { n ->
+                Regex("""\bexport\s+const\s+\Q$n\E\b""").containsMatchIn(text) &&
+                    Regex("""create(I18n|I18next|AppI18n)\s*\(""").containsMatchIn(text)
+            }
+        ) return true
+        // 递归：跟随嵌套 barrel
+        for (m in EXPORT_STAR_FROM_RE.findAll(text)) {
+            resolveSourceFile(barrel, m.groupValues[1])?.let {
+                if (fileExportsAnythingFromFramework(it, visited)) return true
+            }
+        }
+        for (m in Regex("""export\s*\{[^}]*\}\s*from\s*['"]([^'"]+)['"]""").findAll(text)) {
+            resolveSourceFile(barrel, m.groupValues[1])?.let {
+                if (fileExportsAnythingFromFramework(it, visited)) return true
+            }
+        }
+        return false
     }
 
     /**
@@ -486,11 +526,19 @@ object SymbolAnalyzer {
     }
 
     /**
-     * 判定 barrel 文件是否把 [localName] re-export 自 i18n 框架（可跨一层或多层）。
-     * 覆盖三种形态：
-     *  1. `export { localName } from '<framework>'`（具名直转）；
-     *  2. `export * from '<framework>'`（星号全量）；
-     *  3. `export { localName }`（先 import 自框架再具名导出）—— 递归跟随其 import 源。
+     * 判定 barrel 文件是否把 localName（可能已是别名，如 `t` 别名成 `midT`）的来源收敛到
+     * i18n 框架（可跨一层或多层、可重命名）。覆盖四种形态：
+     *  1. `export { localName } from '<src>'`（具名直转）；
+     *  2. `export { X as localName } from '<src>'`（**别名直转**——递归时把 X 还原，
+     *     否则在 src 里找不到 localName 会误判 NON_TRANSLATION）；
+     *  3. `export * from '<framework>'`（星号全量）；
+     *  4. `export const X = createI18n(...)` / `export const i18n = createI18n(...)`
+     *     （本地导出 i18n 实例）——仅在 X 为惯例实例名时收敛到框架（跨文件 instance resolve）。
+     *  5. `export { localName }`（无 from）—— 该名字需在本文件 import 自框架再导出。
+     *
+     * 别名链是关键：`import { midT } from '@/i18n-mid'`，而 `@/i18n-mid` 内
+     * `export { t as midT } from '@/i18n-core'` —— 跟随必须把 `midT` 还原为 `t`，
+     * 再沿 `@/i18n-core → vue-i18n` 收敛。
      */
     private fun fileReExportsNameFromFramework(
         barrel: PsiFile,
@@ -502,28 +550,64 @@ object SymbolAnalyzer {
         val text = barrel.text
         val name = Regex.escape(localName)
 
-        val namedFrom = Regex("""export\s*\{[^}]*\b$name\b[^}]*\}\s*from\s*['"]([^'"]+)['"]""")
-        val starFrom = EXPORT_STAR_FROM_RE
+        val namedFrom = Regex("""export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]""")
 
-        // 形态 1 / 2：直接 re-export
-        for (m in namedFrom.findAll(text) + starFrom.findAll(text)) {
-            val src = m.groupValues[1].trim()
-            if (src.lowercase() in I18N_FRAMEWORK_MODULES) return true
-            val nested = resolveSourceFile(barrel, src) ?: continue
-            if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+        // 形态 1 / 2：具名直转（含别名）。逐个 specifier 判断，别名时还原原始导出名跟随。
+        for (m in namedFrom.findAll(text)) {
+            val src = m.groupValues[2].trim()
+            val specifiers = m.groupValues[1].split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            val hit = specifiers.firstOrNull { spec ->
+                // 直接 `localName` 或 `X as localName`
+                spec == localName || Regex("""\bas\s+\Q$localName\E\b""").containsMatchIn(spec)
+            } ?: continue
+            // 别名：取 `X as localName` 的 X；否则即 localName
+            val rawName = Regex("""^([A-Za-z_$][\w$]*)\s+as\s+\Q$localName\E\b""")
+                .find(hit)?.groupValues?.get(1) ?: localName
+            if (isTranslationLikeOrConventional(rawName)) {
+                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
+                val nested = resolveSourceFile(barrel, src) ?: continue
+                if (fileReExportsNameFromFramework(nested, rawName, visited)) return true
+            }
         }
 
-        // 形态 3：`export { localName }`（无 from）—— 该名字需在本文件 import 自框架
+        // 形态 3：星号全量 re-export，且 localName 是翻译候选/惯例名（保守限定，避免全项目误命中）
+        if (isTranslationLikeOrConventional(localName)) {
+            for (m in EXPORT_STAR_FROM_RE.findAll(text)) {
+                val src = m.groupValues[1].trim()
+                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
+                val nested = resolveSourceFile(barrel, src) ?: continue
+                if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+            }
+        }
+
+        // 形态 4：本地导出 i18n 实例（`export const i18n = createI18n(...)`）——
+        // 名字为惯例实例名时视为 i18n 实例（跨文件 instance resolve，P1）。
+        if (localName in CONVENTIONAL_INSTANCE_NAMES &&
+            Regex("""\bexport\s+const\s+\Q$localName\E\b\s*=\s*[^;\n]*?""")
+                .containsMatchIn(text)
+        ) {
+            return true
+        }
+
+        // 形态 5：`export { localName }`（无 from）—— 该名字需在本文件 import 自框架再导出
         if (Regex("""export\s*\{[^}]*\b$name\b[^}]*\}""").containsMatchIn(text)) {
             for (imp in PsiTreeUtil.findChildrenOfType(barrel, ES6ImportDeclaration::class.java)) {
                 if (!importLocalNameMatches(imp.text, localName)) continue
                 val impSrc = FROM_SOURCE_RE.find(imp.text)
                     ?.groupValues?.get(1)?.trim() ?: continue
-                if (impSrc.lowercase() in I18N_FRAMEWORK_MODULES) return true
+                if (impSrc.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
                 val nested = resolveSourceFile(barrel, impSrc) ?: continue
                 if (fileReExportsNameFromFramework(nested, localName, visited)) return true
             }
         }
         return false
     }
+
+    /** 名字是翻译候选或惯例实例名（用于限定是否需要跨模块跟随，避免对普通 import 全项目误扫）。 */
+    private fun isTranslationLikeOrConventional(name: String): Boolean =
+        name in TRANSLATION_LIKE_NAMES ||
+            name in I18N_HOOK_OR_FACTORY_NAMES ||
+            name in CONVENTIONAL_INSTANCE_NAMES
+
+    private val MODULES_PROVIDING_NATIVE_T_RESOLVED: Set<String> by lazy { I18N_FRAMEWORK_MODULES }
 }

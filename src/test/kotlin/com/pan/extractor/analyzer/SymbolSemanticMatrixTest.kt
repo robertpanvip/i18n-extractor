@@ -65,6 +65,66 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
 
     // ── 2. re-export / barrel import ──────────────────────────────
 
+    fun testMultiLevelBarrelReExportIsTranslation() {
+        // P1（§26-翻译·re-export）：跨文件多级 barrel 递归 A→B→vue-i18n
+        configureFile(
+            "src/i18n-core.ts",
+            "export { t, tc } from 'vue-i18n'\n"
+        )
+        configureFile(
+            "src/i18n-mid.ts",
+            "export { t as midT, tc } from '@/i18n-core'\n"
+        )
+        val file = configureFile(
+            "src/UseMulti.ts",
+            """
+            import { midT, tc } from '@/i18n-mid'
+            const a = midT('已翻译')
+            const b = tc('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "midT"))
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "tc"))
+    }
+
+    fun testNamespaceImportOfBarrelReExportIsTranslation() {
+        // P1：`import * as ns from '@/i18n'`（i18n 内部 re-export 框架）→ i18n 实例 → TRANSLATION
+        configureFile(
+            "src/i18n-ns.ts",
+            """
+            export { i18n, t } from 'vue-i18n'
+            export default i18n
+            """.trimIndent()
+        )
+        val file = configureFile(
+            "src/UseNsBarrel.ts",
+            """
+            import * as L10n from '@/i18n-ns'
+            const a = L10n.t('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "L10n.t"))
+    }
+
+    fun testCrossFileInstanceViaBarrelThenChainIsTranslation() {
+        // P1：barrel 再导出 createI18n 实例，另一端 .t() 链式调用
+        configureFile(
+            "src/locales/index.ts",
+            """
+            import { createI18n } from 'vue-i18n'
+            export const i18n = createI18n({ legacy: false })
+            """.trimIndent()
+        )
+        val file = configureFile(
+            "src/UseAliasChain.ts",
+            """
+            import { i18n as l10n } from '@/locales/index'
+            const a = l10n.t('已翻译')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "l10n.t"))
+    }
+
     fun testNamedReExportFromFrameworkIsTranslation() {
         // barrel：从 vue-i18n re-export t/tc
         configureFile(
@@ -284,5 +344,36 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
             "const a = t('x')\n"
         )
         assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testHookTShadowedByLocalFunctionIsNotTranslation() {
+        // P1 Negative：`const { t } = useI18n()` 之后同一作用域出现本地同名 `function t`，
+        // 调用命中「本地同名声明」→ 绝不能误判 TRANSLATION（shadow 优先级高于框架解构回退）
+        val file = configureFile(
+            "src/HookShadowed.ts",
+            """
+            import { useI18n } from 'vue-i18n'
+            const { t } = useI18n()
+            function t(x: string) { return x.toUpperCase() }
+            const a = t('硬编码')
+            """.trimIndent()
+        )
+        assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "t"))
+    }
+
+    fun testOrdinaryUtilsModuleTIsNonTranslation() {
+        // P1 Negative：`import { t } from '@/utils'`，utils 不 re-export 框架 → NON_TRANSLATION
+        configureFile(
+            "src/utils.ts",
+            "export function t(x: string) { return x.trim() }\n"
+        )
+        val file = configureFile(
+            "src/UseUtils.ts",
+            """
+            import { t } from '@/utils'
+            const a = t('硬编码')
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.NON_TRANSLATION, statusOf(file, "t"))
     }
 }

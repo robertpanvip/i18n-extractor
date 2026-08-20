@@ -19,6 +19,7 @@ import com.pan.extractor.*
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
+import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -26,6 +27,7 @@ import com.intellij.psi.*
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
 import com.pan.extractor.analyzer.TranslationCallStatus
+import com.pan.extractor.planner.AttributeRenderForm
 import com.pan.extractor.planner.RewriteKind
 import com.pan.extractor.planner.RewritePlan
 
@@ -96,12 +98,9 @@ class I18nAnalyzer(
     var reactI18nTFallbackToDollarT: Boolean
         get() = plan.reactI18nTFallbackToDollarT
         set(value) { plan.reactI18nTFallbackToDollarT = value }
-    private var reactFallbackChecked: Boolean
-        get() = plan.reactFallbackChecked
-        set(value) { plan.reactFallbackChecked = value }
-    private var reactFallbackResult: Boolean
-        get() = plan.reactFallbackResult
-        set(value) { plan.reactFallbackResult = value }
+    private var reactFallback: Boolean?
+        get() = plan.reactFallback
+        set(value) { plan.reactFallback = value }
 
     private var siteCounter: Int
         get() = plan.siteCounter
@@ -136,9 +135,7 @@ class I18nAnalyzer(
         kind: RewriteKind,
         newExpression: String,
         xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
-        isJSX: Boolean = false,
-        isDirective: Boolean = false,
-        isAngular: Boolean = false,
+        attributeForm: AttributeRenderForm = AttributeRenderForm.VUE_BINDING,
     ): RewritePlan {
         val id = nextSiteId()
         val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
@@ -167,9 +164,7 @@ class I18nAnalyzer(
             newExpression = newExpression,
             target = ptr,
             xmlTextPointers = xmlTextPointers,
-            isJSX = isJSX,
-            isDirective = isDirective,
-            isAngular = isAngular,
+            attributeForm = attributeForm,
         )
         plan.rewrites += recipe
         return recipe
@@ -221,15 +216,22 @@ class I18nAnalyzer(
 
     private fun collectTKeyFromCall(call: JSCallExpression) {
         val firstArg = call.arguments.firstOrNull() ?: return
+        if (TranslationAnalyzer.analyzeCall(call).status != TranslationCallStatus.TRANSLATION) return
+
+        // react-intl 对象形态：formatMessage({ id: 'x' }[, values]) —— key 取 id 属性值。
+        // （该调用已识别为翻译调用；id 值属于已结构化资源，并入 existingStrings 避免重复提取。）
+        if (firstArg is JSObjectLiteralExpression) {
+            val idProp = firstArg.properties.firstOrNull { it.name == "id" } ?: return
+            val idStr = idProp.value as? JSLiteralExpression ?: return
+            val text = I18nPsiTools.extractStringArgText(idStr) ?: return
+            val key = text.trim()
+            if (key.isNotEmpty()) existingStrings.putIfAbsent(key, text.trim())
+            return
+        }
+
         val text = I18nPsiTools.extractStringArgText(firstArg) ?: return
         val key = text.trim()
-        val analyzed = TranslationAnalyzer.analyzeCall(call)
-        when (analyzed.status) {
-            TranslationCallStatus.TRANSLATION -> existingStrings.putIfAbsent(key, text.trim())
-            TranslationCallStatus.NON_TRANSLATION,
-            TranslationCallStatus.UNKNOWN,
-            -> { /* 交给提取 / 保守跳过 */ }
-        }
+        existingStrings.putIfAbsent(key, text.trim())
     }
 
     private fun detectTFunctionName(call: JSCallExpression, root: PsiElement) {
@@ -260,9 +262,8 @@ class I18nAnalyzer(
      * 结果在 collect 阶段只算一次（避免对每个 i18n.t 调用都重复走项目目录扫描）。
      */
     private fun reactFallsBackToGetI18n(root: PsiElement): Boolean {
-        if (reactFallbackChecked) return reactFallbackResult
-        reactFallbackChecked = true
-        reactFallbackResult = run {
+        reactFallback?.let { return it }
+        reactFallback = run {
             val rootFile = (root.containingFile ?: (root as? PsiFile))
             if (rootFile == null) return@run false
             // 与 I18nProcessor.reactFallsBackToGetI18n 保持 1:1：Vue 文件 / Vue 框架直接不回退。
@@ -276,7 +277,7 @@ class I18nAnalyzer(
             if (initFile != null && I18nInstanceLocator.resolveVueI18nImportPath(rootFile, initFile) != null) return@run false
             true
         }
-        return reactFallbackResult
+        return reactFallback!!
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -366,6 +367,8 @@ class I18nAnalyzer(
 
     private fun collectTemplateTextChange(nodes: List<XmlText>) {
         val first = nodes.first()
+        // <FormattedMessage> 子文本已是 react-intl 结构化资源（defaultMessage），不重复提取。
+        if (enclosingTagName(first) == FORMATTED_MESSAGE_TAG) return
         val pureText = nodes.joinToString(" ") { jsCollector.getPureXmlText(it) }.trim()
         if (pureText.isEmpty()) return
         if (pureText.contains("\$t(") || pureText.contains("i18n.global.t(") || pureText.contains("i18n.t(")) return
@@ -393,6 +396,8 @@ class I18nAnalyzer(
     }
 
     private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue) {
+        // <FormattedMessage defaultMessage="…" /> 的文案已属 react-intl 结构化资源，不重复提取。
+        if (enclosingTagName(attrValue) == FORMATTED_MESSAGE_TAG) return
         val originalText = attrValue.value.trim()
         val isJSX = ProjectStructure.isJSX(attrValue) ||
             framework.getSiteForm(attrValue) == SiteForm.SVELTE_BINDING
@@ -434,9 +439,12 @@ class I18nAnalyzer(
             anchor = attrValue,
             kind = RewriteKind.XML_ATTRIBUTE,
             newExpression = newText,
-            isJSX = isJSX,
-            isDirective = I18nPsiTools.isVueDirective(attr.name),
-            isAngular = isAngular,
+            attributeForm = when {
+                isAngular -> AttributeRenderForm.ANGULAR
+                isJSX -> AttributeRenderForm.JSX
+                isDirective -> AttributeRenderForm.DIRECTIVE
+                else -> AttributeRenderForm.VUE_BINDING
+            },
         )
     }
 
@@ -446,4 +454,11 @@ class I18nAnalyzer(
 
     fun collectExtractedStrings(ele: PsiElement): String? =
         jsCollector.collectExtractedStrings(ele)
+
+    /** react-intl 的 JSX 结构化消息组件：其 defaultMessage / 子文本本身就是 i18n 资源。 */
+    private val FORMATTED_MESSAGE_TAG = "FormattedMessage"
+
+    /** 返回 [element] 所在最近父级 XML 标签名；无标签则返回 null。 */
+    private fun enclosingTagName(element: PsiElement): String? =
+        element.parent?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }?.name
 }

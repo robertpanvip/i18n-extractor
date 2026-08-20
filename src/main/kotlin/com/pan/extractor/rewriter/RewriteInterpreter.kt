@@ -83,7 +83,7 @@ object RewriteInterpreter {
 
             RewriteKind.XML_ATTRIBUTE -> {
                 val target = rw.target?.element as? XmlAttributeValue ?: return
-                VueRewriter.rewriteAttribute(target, rw.newExpression, rw.isJSX, rw.isDirective, rw.isAngular)
+                VueRewriter.rewriteAttribute(target, rw.newExpression, rw.attributeForm)
             }
 
             RewriteKind.JS_TEMPLATE -> {

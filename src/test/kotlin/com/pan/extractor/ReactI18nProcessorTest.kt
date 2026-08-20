@@ -1512,6 +1512,58 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * §C2：React Hook 注入后 `t` 解构函数行为的完整生命周期。
+     * 第一遍注入 useTranslation / 解构 t 并把 JSX 文案改写为 `{t('中文')}`；
+     * 第二遍（同一 PsiFile reparse）重新 collect 应识别为已翻译（extractedStrings 为空）、
+     * 不再重复注入 import/const；再 apply 一次源码与第一遍完全一致（幂等）。
+     */
+    fun testReactUseTranslationHookLifecycleIdempotent() {
+        val file = configureFile(
+            "src/HookLifecycle.tsx",
+            """
+            export function Hello() {
+                return <h1>欢迎回来</h1>
+            }
+            """.trimIndent()
+        )
+
+        // ── 第一遍：注入 hook + 改写 JSX 文案 ──
+        I18nProcessor(project, file).let { it.collect(); it.runWithUndo() }
+        val first = file.text
+        val compact1 = first.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "应注入 useTranslation 并解构 t，got:\n$first",
+            compact1.contains("import{useTranslation}from'react-i18next'") &&
+                compact1.contains("const{t}=useTranslation()")
+        )
+        // JSX 文本节点按统一反引号模板形态改写：`{ t(`欢迎回来`) }`
+        val jsxCall = "{t(`欢迎回来`)}"
+        assertTrue(
+            "JSX 文案应改写为 { t(`欢迎回来`) }（反引号模板），got:\n$first",
+            compact1.contains(jsxCall)
+        )
+
+        // ── 第二遍：重新 collect——已翻译不再提取、不再重复注入 ──
+        val p2 = I18nProcessor(project, file)
+        p2.collect()
+        assertTrue(
+            "第二遍不应再提取 '欢迎回来'，got: ${p2.analyzer.extractedStrings}",
+            p2.analyzer.extractedStrings.isEmpty()
+        )
+        p2.runWithUndo()
+        val second = file.text
+        val compact2 = second.replace("\\s+".toRegex(), "")
+        assertEquals(
+            "二次 apply 后源码应与第一次 apply 后一致（幂等），\n一次:\n$first\n\n二次:\n$second",
+            first, second
+        )
+        assertEquals(
+            "JSX 文案的 { t(`欢迎回来`) } 应恰好出现一次，got:\n$second",
+            1, compact2.split(jsxCall).size - 1
+        )
+    }
+
+    /**
      * 【React 纯 TS · 部分残缺场景】：
      *   顶部用户手删了 const 别名，只剩 `import { getI18n } from 'react-i18next'`；
      *   文件里既有新硬编码中文要提取。
@@ -1866,6 +1918,100 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertFalse(
             "ERRORS.E001 硬编码 \"用户名或密码错误\" 不应残留",
             result.contains("E001: \"用户名或密码错误\"")
+        )
+    }
+
+    // ============================================================
+    // P1（§26-React Intl）：react-intl 结构化形态黑盒 —— 不重复提取 / 不二次 $t 包装
+    // ============================================================
+
+    /** 切到 react-intl 并跑 collect + undo，返回改写后的文件文本。 */
+    private fun runReactIntlExtract(text: String): Pair<String, com.pan.extractor.analyzer.I18nAnalyzer> {
+        val settings = com.pan.extractor.ui.I18nSettings.getInstance()
+        val original = settings.reactLibrary()
+        try {
+            settings.setReactLibrary(com.pan.extractor.ui.ReactLibrary.REACT_INTL)
+            val file = configureFile("src/IntlComp.tsx", text)
+            val processor = I18nProcessor(project, file)
+            processor.collect()
+            processor.runWithUndo()
+            return file.text to processor.analyzer
+        } finally {
+            settings.setReactLibrary(original)
+        }
+    }
+
+    /** B2：formatMessage({ id: '已翻译' }) 的 id 已属既有翻译，识别入 existingStrings 且不再二次包装。 */
+    fun testReactIntlFormatMessageObjectIdIsAlreadyTranslated() {
+        val (resultText, analyzer) = runReactIntlExtract(
+            """
+            import React from 'react';
+            import { useIntl } from 'react-intl';
+            export default function App() {
+                const { formatMessage } = useIntl();
+                return <div>{formatMessage({ id: '已翻译' })}</div>;
+            }
+            """.trimIndent()
+        )
+        // id 值识别为已有翻译 key
+        assertTrue(
+            "formatMessage 的 id 应进入 existingStrings",
+            analyzer.existingStrings.containsKey("已翻译")
+        )
+        // 不应二次包一层 formatMessage（源访问保持原状）
+        val c = resultText.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "formatMessage({ id: '已翻译' }) 应保持原状，got:\n$resultText",
+            c.contains("{formatMessage({id:'已翻译'})}")
+        )
+        assertFalse(
+            "不应出现 formatMessage 嵌套 formatMessage 的双重包装，got:\n$resultText",
+            c.contains("formatMessage({id:formatMessage")
+        )
+    }
+
+    /** B1：defineMessages 包裹的消息描述符（defaultMessage）已被结构化，不再重复提取。 */
+    fun testReactIntlDefineMessagesDefaultMessageIsStructured() {
+        val (resultText, analyzer) = runReactIntlExtract(
+            """
+            import { defineMessages } from 'react-intl'
+            const messages = defineMessages({
+                greeting: { id: 'app.greeting', defaultMessage: '你好世界' }
+            })
+            """.trimIndent()
+        )
+        assertTrue(
+            "defaultMessage 的值被结构化识别（不进 extractedStrings 待包装集合）",
+            !analyzer.extractedStrings.values.contains("你好世界")
+        )
+        assertTrue(
+            "defaultMessage: '你好世界' 应保持原状、不被二次包装，got:\n$resultText",
+            resultText.contains("defaultMessage: '你好世界'")
+        )
+        assertFalse(
+            "不应把默认文案再包成 formatMessage，got:\n$resultText",
+            resultText.contains("formatMessage({ id: '你好世界' ")
+        )
+    }
+
+    /** B3：<FormattedMessage defaultMessage="你好" /> 已是结构化消息，不重复提取。 */
+    fun testReactIntlFormattedMessageDefaultMessageIsStructured() {
+        val (resultText, _) = runReactIntlExtract(
+            """
+            import React from 'react';
+            import { FormattedMessage } from 'react-intl';
+            export default function Comp() {
+                return <FormattedMessage id="app.hello" defaultMessage="你好" />;
+            }
+            """.trimIndent()
+        )
+        assertTrue(
+            "FormattedMessage 的 defaultMessage 应保持原状，got:\n$resultText",
+            resultText.contains("defaultMessage=\"你好\"")
+        )
+        assertFalse(
+            "不应把 defaultMessage 再包成 formatMessage，got:\n$resultText",
+            resultText.contains("formatMessage({ id: '你好' ")
         )
     }
 }

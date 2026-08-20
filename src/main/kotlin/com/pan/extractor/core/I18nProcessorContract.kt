@@ -48,9 +48,7 @@ interface I18nProcessorContract {
         kind: RewriteKind,
         newExpression: String,
         xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
-        isJSX: Boolean = false,
-        isDirective: Boolean = false,
-        isAngular: Boolean = false,
+        attributeForm: com.pan.extractor.planner.AttributeRenderForm = com.pan.extractor.planner.AttributeRenderForm.VUE_BINDING,
     ): RewritePlan
 
     /** 定位 SFC 的 `<script>` 标签；无则返回 null。 */

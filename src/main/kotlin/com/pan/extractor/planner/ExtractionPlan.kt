@@ -60,6 +60,21 @@ enum class RewriteKind {
 }
 
 /**
+ * XML 属性的「渲染形态」——把曾作为 [RewritePlan] 三个互斥布尔（isJSX / isDirective / isAngular）
+ * 的「明显 boolean」收紧为单一枚举，从类型上杜绝「JSX ∧ directive」这类非法组合。
+ */
+enum class AttributeRenderForm {
+    /** 普通 Vue 绑定（`:attr="..."`，改写时补 `:` 前缀）。 */
+    VUE_BINDING,
+    /** JSX / Svelte 大括号表达式（`attr={ expr }`，不加前缀）。 */
+    JSX,
+    /** Vue 指令属性（`v-xxx` / `@` / `:` 缩写，不加 `:` 前缀）。 */
+    DIRECTIVE,
+    /** Angular 属性插值（`attr="{{ expr | translate }}"`，双花括号包裹）。 */
+    ANGULAR,
+}
+
+/**
  * 单站点重写计划 —— Apply 阶段「改写动作」的唯一描述（纯数据，不含可执行闭包）。
  *
  * 取代旧的 `I18nProcessor.CollectedChange`（siteId + 闭包）双数据流：所有站点改写（含骨架
@@ -79,12 +94,8 @@ data class RewritePlan(
     val target: SmartPsiElementPointer<PsiElement>? = null,
     /** XML_TEXT：命中该句的一组 XmlText 节点指针（仅空白分隔，需整体重写/删除）。 */
     val xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
-    /** XML_ATTRIBUTE / SKELETON：JSX 大括号形态旗标。 */
-    val isJSX: Boolean = false,
-    /** XML_ATTRIBUTE：Vue 指令属性（不加 `:` 前缀）。 */
-    val isDirective: Boolean = false,
-    /** XML_ATTRIBUTE：Angular 属性插值形态。 */
-    val isAngular: Boolean = false,
+    /** XML_ATTRIBUTE：属性值的渲染形态（替代原 isJSX / isDirective / isAngular 三布尔）。 */
+    val attributeForm: AttributeRenderForm = AttributeRenderForm.VUE_BINDING,
     /** SKELETON：重写后回填资源用的骨架 key（`{{0}}`/`{N0}` 形态已变换）。 */
     val skeletonKey: String? = null,
     /** SKELETON：原骨架文本（含 {N0} 占位，如 `请输入{N0}关键词`）。 */
@@ -227,9 +238,8 @@ class CollectedPlan : com.pan.extractor.core.CollectionState {
     /** React i18n.t 回退 getI18n 的 t 别名标记。 */
     var reactI18nTFallbackToDollarT: Boolean = false
 
-    /** React 是否回退 getI18n 的结果缓存（同一 collect 只算一次）。 */
-    var reactFallbackChecked: Boolean = false
-    var reactFallbackResult: Boolean = false
+    /** React 是否回退 getI18n 的结果缓存（同一 collect 只算一次；null = 尚未计算）。 */
+    var reactFallback: Boolean? = null
 
     /**
      * 生成 collect 期产物的**不可变快照**（[CollectedResult]）。collect 结束后调用一次，
@@ -263,7 +273,6 @@ class CollectedPlan : com.pan.extractor.core.CollectionState {
         tFunctionName = "\$t"
         needInjectGlobalDollarT = false
         reactI18nTFallbackToDollarT = false
-        reactFallbackChecked = false
-        reactFallbackResult = false
+        reactFallback = null
     }
 }

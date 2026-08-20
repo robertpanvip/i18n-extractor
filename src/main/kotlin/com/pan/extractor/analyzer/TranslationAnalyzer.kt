@@ -2,6 +2,7 @@ package com.pan.extractor.analyzer
 
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSProperty
 import com.intellij.psi.PsiElement
 
 /**
@@ -98,6 +99,38 @@ object TranslationAnalyzer {
     }
 
     /**
+     * react-intl 结构化位置：字符串字面量是「消息描述符」属性值（`id` / `defaultMessage` /
+     * `description`），且外层由 `formatMessage` / `defineMessages` / `defineIntlConfig` /
+     * `formatList` / `formatPlural` 包裹。
+     *
+     * `formatMessage({ id: 'x' })` 的 id、`defineMessages({ a: { defaultMessage: '你好' } })`
+     * 的 defaultMessage 属**已结构化 i18n 资源**，不属需要再 $t 包装的裸硬编码 → 直接跳过。
+     */
+    private val REACT_INTL_MSG_FUNCTIONS = setOf(
+        "formatMessage", "defineMessages", "defineIntlConfig", "formatList", "formatPlural"
+    )
+
+    /** react-intl 消息描述符里承载文案的属性键。 */
+    private val REACT_INTL_MSG_PROPS = setOf("id", "defaultMessage", "description")
+
+    private fun isReactIntlStructuredPosition(lit: JSLiteralExpression): Boolean {
+        if (!lit.isStringLiteral) return false
+        val prop = lit.parent as? JSProperty ?: return false
+        if (prop.name !in REACT_INTL_MSG_PROPS) return false
+        // 沿祖先链向上找到最近调用表达式；若其函数名属于 react-intl 消息 API 即判定已结构化。
+        var cursor: PsiElement? = prop.parent
+        while (cursor != null) {
+            if (cursor is JSCallExpression) {
+                val fn = (cursor.methodExpression as? com.intellij.lang.javascript.psi.JSReferenceExpression)
+                    ?.referenceName
+                return fn in REACT_INTL_MSG_FUNCTIONS
+            }
+            cursor = cursor.parent
+        }
+        return false
+    }
+
+    /**
      * 计算字符串字面量在其外层调用上下文中的位置（用于提取 / 替换策略）。
      *
      * 判定规则：
@@ -109,6 +142,10 @@ object TranslationAnalyzer {
      *    参数表达式内部命中（`$t(cond ? 'a' : 'b')`）→ [StringContext.INSIDE_TRANSLATION_EXPRESSION]。
      */
     fun contextOf(stringExpr: JSLiteralExpression): StringContext {
+        // react-intl 结构化消息描述符（formatMessage({ id, defaultMessage }) / defineMessages）：
+        // 本身已是 i18n 资源，直接跳过，避免被再次 $t 包装。
+        if (isReactIntlStructuredPosition(stringExpr)) return StringContext.DIRECT_TRANSLATION_ARG
+
         val parent = stringExpr.parent
         val directCall = when {
             parent is JSCallExpression -> parent
