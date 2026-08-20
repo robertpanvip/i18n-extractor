@@ -53,7 +53,18 @@ intellijPlatform {
         }
 
         changeNotes = """
-             1.2.0 fix: optimize comment extraction logic
+            <h4>1.6.9</h4>
+            <ul>
+                <li>Multi-framework support with auto-detection: Vue (vue-i18n), React (react-i18next &amp; react-intl), Angular (ngx-translate), Solid (solid-i18n), Svelte (svelte-i18n)</li>
+                <li>Multi-language extraction for 10 languages (zh / ja / ko / en / fr / ru / de / es / it / pt), target languages configurable in Settings</li>
+                <li>Merge suggestions: public prefix / suffix grouping and digit-placeholder grouping to consolidate similar strings</li>
+                <li>Auto-injection of global ${'$'}t and import / hook planning per framework</li>
+                <li>More stable extraction, improved idempotency and expanded regression coverage</li>
+            </ul>
+            <h4>1.2.0</h4>
+            <ul>
+                <li>fix: optimize comment extraction logic</li>
+            </ul>
     """.trimIndent()
     }
 
