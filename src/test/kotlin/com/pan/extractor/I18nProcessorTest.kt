@@ -194,7 +194,7 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val extractedStr = processor.analyzer.extractedStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         val existingStr = processor.analyzer.existingStrings.entries.joinToString("; ") { "${it.key}=${it.value}" }
         if (processor.analyzer.extractedStrings.isNotEmpty()) {
-            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.analyzer.pendingChanges.size}")
+            throw RuntimeException("extractedStrings should be empty but got: $extractedStr; existingStrings: $existingStr; effects: ${processor.analyzer.rewrites.size}")
         }
     }
 

@@ -6,6 +6,7 @@ import com.pan.extractor.ImportManager
 import com.pan.extractor.I18nProcessor
 import com.pan.extractor.model.ExtractionContext
 import com.intellij.psi.PsiFile
+import com.pan.extractor.planner.RewritePlan
 
 /**
  * 单文件 i18n 编排器 —— 每文件流水线的「调度中枢」。
@@ -30,13 +31,13 @@ open class I18nFileOrchestrator {
         val Default: I18nFileOrchestrator = I18nFileOrchestrator()
     }
 
-    /** 编排 [I18nProcessor.collect]：返回待应用改写列表，与旧实现 1:1。 */
-    open fun collect(processor: I18nProcessor, context: ExtractionContext): MutableList<I18nProcessor.CollectedChange> {
+    /** 编排 [I18nProcessor.collect]：返回数据化重写配方，与旧实现 1:1。 */
+    open fun collect(processor: I18nProcessor, context: ExtractionContext): List<RewritePlan> {
         processor.analyzer.resetState()
         // Bug 2: 语言包/翻译资源文件本身跳过整个提取与注入流程。
         val containingFile = context.psiFile.containingFile
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) {
-            return processor.analyzer.pendingChanges
+            return processor.analyzer.rewrites
         }
 
         processor.analyzer.framework = I18nFrameworkRegistry.detect(context.psiFile.containingFile ?: context.psiFile)
@@ -53,9 +54,8 @@ open class I18nFileOrchestrator {
 
         processor.analyzer.collectExistingTKeys(context.psiFile)
         // collectExistingTKeys 可能基于现有调用把 tFunctionName 改成 i18n.t —— 不要覆盖回去。
-        val changes = processor.analyzer.collectFromPsi(context.psiFile)
-        processor.analyzer.pendingChanges = changes
-        return processor.analyzer.pendingChanges
+        processor.analyzer.collectFromPsi(context.psiFile)
+        return processor.analyzer.rewrites
     }
 
     /** 编排 [I18nProcessor.run]：执行改写 + 按框架注入，与旧实现 1:1。 */
@@ -65,7 +65,8 @@ open class I18nFileOrchestrator {
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
 
         val analyzer = processor.analyzer
-        analyzer.pendingChanges.forEach { if (it.siteId !in analyzer.blockedSiteIds) it.run() }
+        // Rewriter 阶段唯一入口：由解释器统一执行本处理器收集的数据配方（取代旧的 pendingChanges 闭包流）。
+        com.pan.extractor.rewriter.RewriteInterpreter.executeProcessor(processor)
 
         // 注入分支按框架拆到 ImportManager，本层只做派发。
         processor.injector.injectForFramework(

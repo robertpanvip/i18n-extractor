@@ -430,11 +430,11 @@ class I18nComprehensiveTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
 
         processor.collect()
-        val pending1 = processor.analyzer.pendingChanges.size
-        assertTrue("第一次 collect 应产生 pendingChanges", pending1 > 0)
+        val pending1 = processor.analyzer.rewrites.size
+        assertTrue("第一次 collect 应产生 rewrites", pending1 > 0)
 
         processor.collect()
-        assertEquals("重复 collect 后 pendingChanges 应被重置到同一大小", pending1, processor.analyzer.pendingChanges.size)
+        assertEquals("重复 collect 后 rewrites 应被重置到同一大小", pending1, processor.analyzer.rewrites.size)
         assertEquals("blockedSiteIds 应被清空", 0, processor.analyzer.blockedSiteIds.size)
     }
 

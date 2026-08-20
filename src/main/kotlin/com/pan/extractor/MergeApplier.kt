@@ -125,44 +125,32 @@ object MergeApplier {
             if (edtRunner != null) edtRunner.invoke(r) else r()
         }
 
-        // ③ 预构建骨架重写任务
+        // ③ 预构建骨架重写计划（数据化 [RewritePlan]，不再包闭包）
         //    计划由 Planner 层产出（ExtractionPlanner.buildRewritePlans）—— 差分占位表达式已按
-        //    每个 site 的 Vue/React 形态渲染好；此处把计划解析为「标签 → 待执行重写」的映射。
+        //    每个 site 的 Vue/React 形态渲染好；此处把计划解析为纯数据，交给统一解释器执行。
         indicator?.text = "生成骨架重写任务列表（公共前后缀/数字抽取）"
         val finalExtracted: MutableMap<String, String> = LinkedHashMap(extracted)
-        val rewriteTasks = mutableListOf<Pair<String, () -> Unit>>()
 
         val skeletonPlans = com.pan.extractor.planner.ExtractionPlanner
             .buildRewritePlans(mergePlan, processors, finalExtracted)
-        for (plan in skeletonPlans) {
-            val proc = processors[plan.processorIndex]
-            val site = proc.analyzer.collectedSites.firstOrNull { it.id == plan.siteId } ?: continue
-            val root = site.replaceRootPointer?.element ?: continue
-            if (!root.isValid) continue
-            val label = (site.containingFile?.name ?: "file") + "@L" + site.startLine
-            rewriteTasks += label to {
-                rewriteSiteToSkeleton(
-                    rootPsi = root,
-                    site = site,
-                    skeletonValue = plan.skeleton.orEmpty(),
-                    skeletonKey = plan.skeletonKey.orEmpty().ifBlank { plan.skeleton.orEmpty() },
-                    paramPairs = plan.params,
-                    proc = proc,
-                    finalExtracted = finalExtracted,
-                )
-            }
-        }
 
-        // ④ 逐个执行骨架重写（每个重写任务经 edtRunner 走 EDT，写入间更新进度）
+        // ④ 用统一解释器执行骨架重写计划（每次改写经 edtRunner 走 EDT，写入间更新进度）。
+        //    Apply 阶段唯一的数据源是计划本身 —— 与 ② 逐文件 processor.run()（同样走解释器）共用
+        //    同一执行入口，不再存在「计划 + 闭包」两条并行流。
         indicator?.text = "应用骨架合并重写（生成带 {N0} 的 \$t 调用）"
-        val taskTotal = rewriteTasks.size
-        rewriteTasks.forEachIndexed { idx, task ->
-            indicator?.fraction = 0.6 + (idx.toDouble() / taskTotal.coerceAtLeast(1)) * 0.32
-            indicator?.text2 = task.first
-            indicator?.checkCanceled()
-            val r = task.second
-            if (edtRunner != null) edtRunner.invoke(r) else r()
-        }
+        com.pan.extractor.rewriter.RewriteInterpreter.applyPlan(
+            processors = processors,
+            plan = com.pan.extractor.planner.ExtractionPlan(
+                selectedAffix = mergePlan.selectedAffix,
+                selectedDigit = mergePlan.selectedDigit,
+                blockedSiteIds = blockedByMerge,
+                rewrites = skeletonPlans,
+            ),
+            finalExtracted = finalExtracted,
+            indicator = indicator,
+            // edtRunner = null → 所有写入都在当前 command 内同步执行（单 command 原子 / 单元测试）。
+            onRewrite = edtRunner,
+        )
 
         // ⑤ 清理：删除被合并承载的原句 key，回填 extracted
         //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，

@@ -20,6 +20,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlText
+import com.pan.extractor.planner.RewriteKind
 
 /**
  * 「JS 字符串收集 与 $t 表达式生成」辅助类。
@@ -57,7 +58,6 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
 
     fun collectJSStringTemplate(
         raw: String,
-        changes: MutableList<I18nProcessor.CollectedChange>,
         ele: PsiElement,
         creator: (String) -> String
     ) {
@@ -112,20 +112,19 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
             if (paramKeyNeedsQuote) "\"$k\": $paramExpr" else "$k: $paramExpr"
         }
 
-        // 步骤6：添加替换逻辑（包装为 CollectedChange，允许后续因子化阻止旧替换）
-        processor.recordChange(
+        // 步骤6：登记为纯数据配方（RewritePlan，JS_TEMPLATE），Apply 阶段由解释器执行。
+        //   newExpression 在收集期定案（与旧闭包 apply 时算出的 tFunctionName 一致，见 detect 时序）。
+        //   注意用消毒后的 key（而非原始 message.trim()）作为 $t(...) 实参：与 extractedStrings
+        //   中的资源键保持一致，否则含 @/|/句末点 的文案会因键失配而在运行时查不到翻译（P0）。
+        val newExprText = buildTFunctionExpr(fw, key, paramsObject)
+        val text = creator(newExprText)
+        processor.recordRewrite(
             message = message,
             replaceRoot = ele,
             anchor = ele,
-            changes = changes
-        ) {
-            // 目标架构 Rewriter 层：JsRewriter 纯文本节点替换（行为与原闭包 1:1）
-            // 注意用消毒后的 key（而非原始 message.trim()）作为 $t(...) 实参：与 extractedStrings
-            // 中的资源键保持一致，否则含 @/|/句末点 的文案会因键失配而在运行时查不到翻译（P0）。
-            val newExprText = buildTFunctionExpr(fw, key, paramsObject)
-            val text = creator(newExprText)
-            com.pan.extractor.rewriter.JsRewriter.rewriteWithStringNode(ele, text)
-        }
+            kind = RewriteKind.JS_TEMPLATE,
+            newExpression = text,
+        )
     }
 
     /**
@@ -222,13 +221,13 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
     internal fun createJSStatementFromText(text: String, context: PsiElement): PsiElement =
         I18nPsiTools.createJSStatementFromText(text, context)
 
-    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression, changes: MutableList<I18nProcessor.CollectedChange>) {
+    fun collectJSStringTemplateFromExpression(stringExpr: JSLiteralExpression) {
         val raw = stringExpr.text
         if (raw.isEmpty()) return
         if (isTransformedCalled(stringExpr)) {
             return
         }
-        collectJSStringTemplate(raw, changes, stringExpr) { value -> value }
+        collectJSStringTemplate(raw, stringExpr) { value -> value }
     }
 
     /**
@@ -335,7 +334,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
     // ───────────────────────────────────────────────
 // JS 字符串字面量
 // ───────────────────────────────────────────────
-    internal fun collectJSStringChange(ele: JSLiteralExpression, changes: MutableList<I18nProcessor.CollectedChange>) {
+    internal fun collectJSStringChange(ele: JSLiteralExpression) {
         // 【Bug A1 修复】仅当字面量位于「纯字符串拼接」(`"a" + "b" + ...`，所有操作数都是字符串字面量)
         // 中时，其提取交由 collectJSBinaryExpressionChange 统一合并成一个 key，这里必须跳过，
         // 否则操作数会被重复提取，且 binary change 先替换整节点后操作数 change 会作用在失效 PSI 上。
@@ -376,7 +375,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         }
 
         if (processor.isJSTemplateLiteral(raw)) {
-            return collectJSStringTemplateFromExpression(ele, changes);
+            return collectJSStringTemplateFromExpression(ele);
         }
         //跳过Enum['中文']
         if (ele.parent is JSIndexedPropertyAccessExpression && ele.prevSibling.prevSibling is JSReferenceExpression && ele.prevSibling.prevSibling.reference?.resolve() is TypeScriptEnum) {
@@ -432,21 +431,21 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         }
         if (ele.text == newExprText) return
 
-        processor.recordChange(
+        // 登记为纯数据配方（RewritePlan，JS_LITERAL），Apply 阶段由解释器执行替换。
+        //   target=ele，解释器据此调 JsRewriter.rewriteLiteral（行为与原闭包 1:1）。
+        processor.recordRewrite(
             message = key,
             replaceRoot = ele,
             anchor = ele,
-            changes = changes
-        ) {
-            // 目标架构 Rewriter 层：JsRewriter 表达式替换（行为与原闭包 1:1）
-            com.pan.extractor.rewriter.JsRewriter.rewriteLiteral(ele, newExprText, processor.project)
-        }
+            kind = RewriteKind.JS_LITERAL,
+            newExpression = newExprText,
+        )
     }
 
     // ───────────────────────────────────────────────
 // JS 字符串拼接 (+)
 // ───────────────────────────────────────────────
-    internal fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression, changes: MutableList<I18nProcessor.CollectedChange>) {
+    internal fun collectJSBinaryExpressionChange(binaryExpr: JSBinaryExpression) {
         // 拼接形式的索引键（例：P['姓' + '名']）→ 也不翻译
         if (isInIndexKeyPosition(binaryExpr)) return
         if (binaryExpr.parent is JSBinaryExpression) {
@@ -458,7 +457,7 @@ class JsStringCollector(private val processor: I18nProcessorContract) {
         }
         val template = convertConcatTextToTemplate(binaryExpr)
         //println("template${template}${binaryExpr.text}")
-        collectJSStringTemplate(template, changes, binaryExpr) { value -> value }
+        collectJSStringTemplate(template, binaryExpr) { value -> value }
     }
 
     internal fun convertConcatTextToTemplate(binaryExpr: JSBinaryExpression): String =

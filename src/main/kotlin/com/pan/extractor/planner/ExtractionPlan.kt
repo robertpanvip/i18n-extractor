@@ -2,6 +2,9 @@ package com.pan.extractor.planner
 
 import com.pan.extractor.AffixGroupCandidate
 import com.pan.extractor.DigitGroupCandidate
+import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPsiElementPointer
+import com.intellij.psi.xml.XmlText
 
 /**
  * Planner 层 —— 把分析结果转换为「计划」（目标架构，迁移自 MergeApplier / ExtractedStringsDialog.MergePlan）。
@@ -13,9 +16,13 @@ import com.pan.extractor.DigitGroupCandidate
  */
 
 /**
- * 一次提取计划：全部待改写站点 + 骨架合并 + 数字抽取的完整描述。
- * 当前由 [com.pan.extractor.MergeApplier] 直接消费（selectedAffix / selectedDigit /
- * blockedSiteIds 语义来自 [com.pan.extractor.ExtractedStringsDialog.MergePlan]）。
+ * 一次提取计划：Apply 阶段「要改什么」的唯一事实来源。
+ *
+ * 中央化（单一数据流）：
+ *  - [rewrites] 承载**所有**站点改写动作（普通 `$t` 替换 + 骨架合并重写），全部数据化为
+ *    [RewritePlan]，由 Rewriter 阶段统一执行 —— 取代旧的 `pendingChanges/CollectedChange`
+ *    闭包并行流；
+ *  - [selectedAffix] / [selectedDigit] / [blockedSiteIds] 承载用户勾选的合并决策。
  *
  * P2（类型安全）：selectedAffix / selectedDigit 由曾经的 `List<Any>` 收紧为具体的
  * [AffixGroupCandidate] / [DigitGroupCandidate] 候选类型，与因式分解层模型直接对齐，
@@ -23,28 +30,62 @@ import com.pan.extractor.DigitGroupCandidate
  */
 data class ExtractionPlan(
     /** 用户勾选的公共前后缀合并组（原文承载：骨架 + 差异段）。 */
-    val selectedAffix: List<AffixGroupCandidate>,
+    val selectedAffix: List<AffixGroupCandidate> = emptyList(),
     /** 用户勾选的数字抽取组（差异段为数字字面量）。 */
-    val selectedDigit: List<DigitGroupCandidate>,
+    val selectedDigit: List<DigitGroupCandidate> = emptyList(),
     /** 被合并承载、应跳过普通单句替换的 siteId 集合。 */
     val blockedSiteIds: Set<String> = emptySet(),
+    /** 全部待执行站点改写（普通替换 + 骨架合并），按收集/规划顺序。 */
+    val rewrites: List<RewritePlan> = emptyList(),
     /** 计划附带说明（供 UI / 日志展示）。 */
     val description: String = "",
 )
 
-/** 单点改写计划：把某 site 替换为翻译调用。 */
+/** 单站点改写类型：决定 Rewriter 阶段采用哪种 PSI 写入原语。 */
+enum class RewriteKind {
+    /** 模板纯文本（一组仅空白分隔的 XmlText）→ `{{ $t('key') }}` / `{ $t('key') }`。 */
+    XML_TEXT,
+    /** XML 属性值 → 翻译调用（Vue `:` 绑定 / JSX `{ }` / Angular 插值）。 */
+    XML_ATTRIBUTE,
+    /** JS 模板字符串 / 字符串拼接 → 纯文本替换（内联 / 拼接场景）。 */
+    JS_TEMPLATE,
+    /** JS 字符串字面量 → 表达式替换（`'key'` 或 `$t('key')`）。 */
+    JS_LITERAL,
+    /** 骨架合并重写：被合并承载 site → `$t('骨架{N0}', { N0: diff })`，回填骨架资源 key。 */
+    SKELETON,
+}
+
+/**
+ * 单站点重写计划 —— Apply 阶段「改写动作」的唯一描述（纯数据，不含可执行闭包）。
+ *
+ * 取代旧的 `I18nProcessor.CollectedChange`（siteId + 闭包）双数据流：所有站点改写（含骨架
+ * 合并）统一以本类型登记进 [ExtractionPlan.rewrites]，由 Rewriter 按 [kind] 派发执行，
+ * 使 Apply 阶段只消费一个计划对象，不再有「计划 + 闭包」两条并行输入。
+ */
 data class RewritePlan(
-    /** 目标文件内的 site 标识。 */
+    /** 目标 site 标识（用于经处理器定位节点 / 判断是否被合并阻塞）。 */
     val siteId: String,
-    /** 目标处理器下标（processors 列表中的位置）。 */
+    /** 改写类型。 */
+    val kind: RewriteKind,
+    /** 处理器下标（processors 列表中的位置）。仅 SKELETON 需要，用于定位目标 processor。 */
     val processorIndex: Int,
-    /** 替换生成的调用表达式（如 `$t('key')`）。重写器执行时填充。 */
-    val newExpression: String = "",
-    /** 若为骨架合并：替换为 `$t('骨架{N0}', { N0: diff })`。原骨架文本（含 {N0} 占位）。 */
-    val skeleton: String? = null,
-    /** 重新生成资源 key 时使用的骨架 key（G：与 [skeleton] 同含 {N0} → {{0}} 变换）。 */
+    /** 替换表达式/新文本（收集期或规划期已按 framework/tFunctionName 定案）。 */
+    val newExpression: String,
+    /** 单节点目标（XML_ATTRIBUTE / JS_TEMPLATE / JS_LITERAL 的替换根指针）。 */
+    val target: SmartPsiElementPointer<PsiElement>? = null,
+    /** XML_TEXT：命中该句的一组 XmlText 节点指针（仅空白分隔，需整体重写/删除）。 */
+    val xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
+    /** XML_ATTRIBUTE / SKELETON：JSX 大括号形态旗标。 */
+    val isJSX: Boolean = false,
+    /** XML_ATTRIBUTE：Vue 指令属性（不加 `:` 前缀）。 */
+    val isDirective: Boolean = false,
+    /** XML_ATTRIBUTE：Angular 属性插值形态。 */
+    val isAngular: Boolean = false,
+    /** SKELETON：重写后回填资源用的骨架 key（`{{0}}`/`{N0}` 形态已变换）。 */
     val skeletonKey: String? = null,
-    /** 差异段表达式列表（占位符 N0/N1… → 表达式文本）。 */
+    /** SKELETON：原骨架文本（含 {N0} 占位，如 `请输入{N0}关键词`）。 */
+    val skeleton: String? = null,
+    /** SKELETON：差异段占位表达式列表（`N0` → diff 表达式文本）。 */
     val params: List<Pair<String, String>> = emptyList(),
 )
 
@@ -132,8 +173,10 @@ class CollectedPlan {
     val existingStrings = mutableMapOf<String, String>()
 
     // ── 收集期决策 ────────────────────────────────────────────────
-    /** 待应用的重写动作（collect 阶段收集，run 阶段逐个执行）。 */
-    val pendingChanges = mutableListOf<com.pan.extractor.I18nProcessor.CollectedChange>()
+    /** 待执行的全部站点改写（collect 阶段收集为数据配方，Apply 阶段经解释器执行）。
+     *  取代旧的 `pendingChanges`（闭包流）：站点改写一律数据化为 [RewritePlan]，使
+     *  Apply 阶段只消费计划、不再有「计划 + 闭包」两条并行输入。 */
+    val rewrites = mutableListOf<RewritePlan>()
 
     /** 当前文件检测到的框架策略。 */
     var framework: com.pan.extractor.I18nFramework? = null

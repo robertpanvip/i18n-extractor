@@ -100,7 +100,9 @@ object ExtractionPlanner {
                 }
                 plans += RewritePlan(
                     siteId = ref.siteId,
+                    kind = com.pan.extractor.planner.RewriteKind.SKELETON,
                     processorIndex = ref.processorIndex,
+                    newExpression = "",
                     skeleton = g.skeleton,
                     skeletonKey = g.skeletonKey.trim().ifBlank { g.skeleton },
                     params = listOf("N0" to paramsExpr),
@@ -116,7 +118,9 @@ object ExtractionPlanner {
                 )
                 plans += RewritePlan(
                     siteId = ref.siteId,
+                    kind = com.pan.extractor.planner.RewriteKind.SKELETON,
                     processorIndex = ref.processorIndex,
+                    newExpression = "",
                     skeleton = g.skeleton,
                     skeletonKey = g.skeletonKey.trim().ifBlank { g.skeleton },
                     params = listOf("N0" to digitText),

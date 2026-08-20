@@ -11,15 +11,18 @@ import com.intellij.psi.*
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.*
 import com.pan.extractor.analyzer.TranslationCallStatus
+import com.pan.extractor.planner.RewriteKind
+import com.pan.extractor.planner.RewritePlan
 
 /**
  * Analyzer 层 —— 一次提取的「收集 + 语义分析」宿主（目标架构 Phase 1，PROJECT_ANALYSIS §21.4 第 3 步）。
  *
  * 承载原本内联在 [I18nProcessor] 的收集期状态与收集业务：
  *  - 拥有收集期产物容器 [plan]（[CollectedPlan]），是 collectedSites / extractedStrings /
- *    existingStrings / tFunctionName / framework / needInject* / pendingChanges 的唯一事实来源；
+ *    existingStrings / tFunctionName / framework / needInject* / rewrites 的唯一事实来源；
  *  - 实现 `collectFromPsi` / `collectExistingTKeys`（**Scanner/Analyzer 段**），只做语义判断，
- *    不修改项目；所有改写动作仍以 [I18nProcessor.CollectedChange] 的姿态收集，交给 Rewriter 期执行。
+ *    不修改项目；所有改写动作统一数据化为 [RewritePlan]（见 [recordPlan]），
+ *    由 Rewriter 阶段的解释器 [com.pan.extractor.rewriter.RewriteInterpreter] 统一执行。
  *
  * 原则（PROJECT_ANALYSIS §4 / §21.2）：
  * > 分析阶段不修改项目；Plan 阶段只描述修改；Apply 阶段统一提交修改。
@@ -53,13 +56,8 @@ class I18nAnalyzer(
     /** 被骨架合并承载、应跳过普通替换的 siteId 集合。 */
     val blockedSiteIds: MutableSet<String> get() = plan.blockedSiteIds
 
-    /** 待应用的重写动作（collect 阶段收集，run 阶段逐个执行）。 */
-    var pendingChanges: MutableList<I18nProcessor.CollectedChange>
-        get() = plan.pendingChanges
-        set(value) {
-            plan.pendingChanges.clear()
-            plan.pendingChanges.addAll(value)
-        }
+    /** 收集期产出的全部站点改写配方（数据化，取代旧的 pendingChanges 闭包流）。 */
+    val rewrites: MutableList<RewritePlan> get() = plan.rewrites
 
     /** 新提取的 key -> 原文本。 */
     override val extractedStrings: MutableMap<String, String> get() = plan.extractedStrings
@@ -104,15 +102,23 @@ class I18nAnalyzer(
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 统一登记 site + 包装 change
+    // 统一登记 site + 数据配方（取代旧的 recordChange 闭包流）
     // ─────────────────────────────────────────────────────────────
-    fun recordChange(
+    /**
+     * 登记一个站点及其改写配方：注册 [com.pan.extractor.model.ExtractionSite] 到 collectedSites，
+     * 并把纯数据 [RewritePlan] 追加进 [rewrites]。不执行任何写——Apply 阶段由 Rewriter 解释器统一执行。
+     */
+    fun recordPlan(
         message: String,
         replaceRoot: PsiElement,
         anchor: PsiElement,
-        changes: MutableList<I18nProcessor.CollectedChange>,
-        replaceAction: () -> Unit,
-    ) {
+        kind: RewriteKind,
+        newExpression: String,
+        xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
+        isJSX: Boolean = false,
+        isDirective: Boolean = false,
+        isAngular: Boolean = false,
+    ): RewritePlan {
         val id = nextSiteId()
         val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
         val f = (anchor.containingFile ?: (anchor as? PsiFile))
@@ -133,7 +139,19 @@ class I18nAnalyzer(
             isReact = isReact,
             form = form,
         )
-        changes += I18nProcessor.CollectedChange(id, replaceAction)
+        val recipe = RewritePlan(
+            siteId = id,
+            kind = kind,
+            processorIndex = 0, // 常规站点由解释器按所在 processor 逐个执行，无需全局下标
+            newExpression = newExpression,
+            target = ptr,
+            xmlTextPointers = xmlTextPointers,
+            isJSX = isJSX,
+            isDirective = isDirective,
+            isAngular = isAngular,
+        )
+        plan.rewrites += recipe
+        return recipe
     }
 
     /** 给 Dialog/摘要展示用的起始行（1 基）。只读、失败返回 1。 */
@@ -243,35 +261,32 @@ class I18nAnalyzer(
     // ─────────────────────────────────────────────────────────────
     // Scanner/Analyzer 段：候选发现（collectFromPsi）
     // ─────────────────────────────────────────────────────────────
-    /** 从 [root] 发现候选节点并收集改写，返回待应用改写列表。与 [I18nProcessor.collectFromPsi] 行为 1:1。 */
-    fun collectFromPsi(root: PsiElement): MutableList<I18nProcessor.CollectedChange> {
-        val changes = mutableListOf<I18nProcessor.CollectedChange>()
-
+    /** 从 [root] 发现候选节点并收集**数据配方**（写入 [rewrites]，不执行任何写）。与 [I18nProcessor.collectFromPsi] 行为 1:1。 */
+    fun collectFromPsi(root: PsiElement) {
         fun handle(element: PsiElement) {
             when (element) {
                 is XmlText -> {
                     if (I18nPsiTools.isMustache(element.text)) {
-                        collectXmlText(element, changes)
+                        collectXmlText(element)
                     } else {
                         val run = I18nPsiTools.collectTextRun(element)
                         if (run.first() === element) {
-                            collectTemplateTextChange(run, changes)
+                            collectTemplateTextChange(run)
                         }
                     }
                 }
-                is XmlAttributeValue -> collectXmlAttributeValueChange(element, changes)
-                is JSLiteralExpression -> jsCollector.collectJSStringChange(element, changes)
-                is JSBinaryExpression -> jsCollector.collectJSBinaryExpressionChange(element, changes)
+                is XmlAttributeValue -> collectXmlAttributeValueChange(element)
+                is JSLiteralExpression -> jsCollector.collectJSStringChange(element)
+                is JSBinaryExpression -> jsCollector.collectJSBinaryExpressionChange(element)
             }
         }
 
         // §11 收敛点：扫描器分发已下沉到框架策略（framework.scanner，
         // Vue/React/Solid/Generic 各自声明单例 Scanner），消除原 is Vue/React/Solid 三岔。
         framework.scanner.scan(root) { handle(it) }
-        return changes
     }
 
-    private fun collectXmlText(element: PsiElement, changes: MutableList<I18nProcessor.CollectedChange>) {
+    private fun collectXmlText(element: PsiElement) {
         if (I18nPsiTools.isComment(element)) return
 
         val quote = "`"
@@ -304,15 +319,15 @@ class I18nAnalyzer(
                         if (e is JSLiteralExpression && !I18nPsiTools.isInComment(e)) {
                             if (PsiTreeUtil.getParentOfType(e, com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression::class.java) == null) {
                                 if (!jsCollector.isTransformedCalled(e)) {
-                                    jsCollector.collectJSStringChange(e, changes)
+                                    jsCollector.collectJSStringChange(e)
                                     foundStrings = true
                                 }
                             }
                         }
                         if (e is JSBinaryExpression && !I18nPsiTools.isInComment(e)) {
-                            val sizeBefore = changes.size
-                            jsCollector.collectJSBinaryExpressionChange(e, changes)
-                            if (changes.size > sizeBefore) foundStrings = true
+                            val sizeBefore = plan.rewrites.size
+                            jsCollector.collectJSBinaryExpressionChange(e)
+                            if (plan.rewrites.size > sizeBefore) foundStrings = true
                         }
                         super.visitElement(e)
                     }
@@ -325,10 +340,10 @@ class I18nAnalyzer(
             if (strippedContent.startsWith("//") || (strippedContent.startsWith("/*") && strippedContent.endsWith("*/"))) return
         }
 
-        jsCollector.collectJSStringTemplate(raw, changes, element) { value -> "{{${value}}}" }
+        jsCollector.collectJSStringTemplate(raw, element) { value -> "{{${value}}}" }
     }
 
-    private fun collectTemplateTextChange(nodes: List<XmlText>, changes: MutableList<I18nProcessor.CollectedChange>) {
+    private fun collectTemplateTextChange(nodes: List<XmlText>) {
         val first = nodes.first()
         val pureText = nodes.joinToString(" ") { jsCollector.getPureXmlText(it) }.trim()
         if (pureText.isEmpty()) return
@@ -339,22 +354,24 @@ class I18nAnalyzer(
             framework.getSiteForm(first) == SiteForm.SVELTE_BINDING
         val key = collectExtractedStrings(pureText, first) ?: return
 
-        recordChange(
+        // 调用形态由框架策略决定（CallExpressionStrategy）：Vue/react-i18next/Solid 沿用
+        // `fn(`key`)`；react-intl 覆盖为 `formatMessage({ id: `key` })`。
+        val callExpr = framework.buildCallExpression(tFunctionName, "`$key`", "{}")
+        val newContent =
+            if (!isJSX) "{{ $callExpr }}" else "{ $callExpr }"
+        recordPlan(
             message = pureText,
             replaceRoot = first,
             anchor = first,
-            changes = changes,
-        ) {
-            // 调用形态由框架策略决定（CallExpressionStrategy）：Vue/react-i18next/Solid 沿用
-            // `fn(`key`)`；react-intl 覆盖为 `formatMessage({ id: `key` })`。
-            val callExpr = framework.buildCallExpression(tFunctionName, "`$key`", "{}")
-            val newContent =
-                if (!isJSX) "{{ $callExpr }}" else "{ $callExpr }"
-            com.pan.extractor.rewriter.VueRewriter.rewriteXmlTextNodes(nodes, newContent)
-        }
+            kind = RewriteKind.XML_TEXT,
+            newExpression = newContent,
+            xmlTextPointers = nodes.map {
+                SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it)
+            },
+        )
     }
 
-    private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue, changes: MutableList<I18nProcessor.CollectedChange>) {
+    private fun collectXmlAttributeValueChange(attrValue: XmlAttributeValue) {
         val originalText = attrValue.value.trim()
         val isJSX = ProjectStructure.isJSX(attrValue) ||
             framework.getSiteForm(attrValue) == SiteForm.SVELTE_BINDING
@@ -390,20 +407,16 @@ class I18nAnalyzer(
 
         if (newText == originalText) return
 
-        recordChange(
+        recordPlan(
             message = originalText,
             replaceRoot = attrValue,
             anchor = attrValue,
-            changes = changes,
-        ) {
-            com.pan.extractor.rewriter.VueRewriter.rewriteAttribute(
-                attrValue = attrValue,
-                newText = newText,
-                isJSX = isJSX,
-                isDirective = I18nPsiTools.isVueDirective(attr.name),
-                isAngular = isAngular,
-            )
-        }
+            kind = RewriteKind.XML_ATTRIBUTE,
+            newExpression = newText,
+            isJSX = isJSX,
+            isDirective = I18nPsiTools.isVueDirective(attr.name),
+            isAngular = isAngular,
+        )
     }
 
     /** 用已合并好的 [pureText] 生成 key 并登记（供跨节点合并的文本段使用）。 */

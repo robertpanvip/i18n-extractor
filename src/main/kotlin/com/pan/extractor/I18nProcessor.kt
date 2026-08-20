@@ -5,9 +5,13 @@ import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPsiElementPointer
 import com.intellij.psi.XmlElementFactory
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlTag
+import com.intellij.psi.xml.XmlText
+import com.pan.extractor.planner.RewriteKind
+import com.pan.extractor.planner.RewritePlan
 
 /**
  * 【薄 Orchestrator】单文件 i18n 处理入口。
@@ -40,14 +44,6 @@ class I18nProcessor @JvmOverloads constructor(
     /** 编排 / 重写器定位文件根用。 */
     internal val rootElement: PsiElement get() = psiFile
 
-    /**
-     * 一次提取命中的「改写动作」：收集期登记、应用期执行（可被骨架合并阻塞跳过）。
-     * 驻留在此是因为它作为 [extract] 的返回类型与 [I18nAnalyzer] 的收集载体，全工程引用。
-     */
-    class CollectedChange(val siteId: String, private val runnable: () -> Unit) {
-        fun run() = runnable()
-    }
-
     // ─────────────────────────────────────────────────────────────
     // 依赖注入（薄编排器持有的全部「零件」）
     // ─────────────────────────────────────────────────────────────
@@ -76,12 +72,12 @@ class I18nProcessor @JvmOverloads constructor(
     // ─────────────────────────────────────────────────────────────
     // 中央调度：仅把控制流交给 Orchestrator，自身不做任何业务决策
     // ─────────────────────────────────────────────────────────────
-    /** 【Phase A：收集】Scanner/Analyzer 段（只读）。 */
-    fun extract(context: ExtractionContext = ExtractionContext(project, psiFile)): MutableList<CollectedChange> =
+    /** 【Phase A：收集】Scanner/Analyzer 段（只读），产出纯数据改写配方。 */
+    fun extract(context: ExtractionContext = ExtractionContext(project, psiFile)): List<RewritePlan> =
         orchestrator.collect(this, context)
 
     /** 兼容入口：等价于 [extract]。 */
-    fun collect(): MutableList<CollectedChange> = extract()
+    fun collect(): List<RewritePlan> = extract()
 
     /** 【Phase B：应用】Rewriter/Injector 段（写）。 */
     fun apply(context: ExtractionContext = ExtractionContext(project, psiFile)) {
@@ -125,15 +121,20 @@ class I18nProcessor @JvmOverloads constructor(
     override fun extractPureStringContent(text: String): String? =
         I18nPsiTools.extractPureStringContent(text)
 
-    override fun recordChange(
+    override fun recordRewrite(
         message: String,
         replaceRoot: PsiElement,
         anchor: PsiElement,
-        changes: MutableList<CollectedChange>,
-        replaceAction: () -> Unit
-    ) {
-        analyzer.recordChange(message, replaceRoot, anchor, changes, replaceAction)
-    }
+        kind: RewriteKind,
+        newExpression: String,
+        xmlTextPointers: List<SmartPsiElementPointer<XmlText>>,
+        isJSX: Boolean,
+        isDirective: Boolean,
+        isAngular: Boolean,
+    ): RewritePlan = analyzer.recordPlan(
+        message, replaceRoot, anchor, kind, newExpression,
+        xmlTextPointers, isJSX, isDirective, isAngular,
+    )
 
     override fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
         jsCollector.createStringExpressionNode(text, context)

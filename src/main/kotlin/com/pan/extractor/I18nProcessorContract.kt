@@ -2,7 +2,11 @@ package com.pan.extractor
 
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPsiElementPointer
 import com.intellij.psi.xml.XmlTag
+import com.intellij.psi.xml.XmlText
+import com.pan.extractor.planner.RewriteKind
+import com.pan.extractor.planner.RewritePlan
 
 /**
  * 收集/注入器访问到的「处理器契约」—— 窄接口。
@@ -26,13 +30,27 @@ interface I18nProcessorContract {
 
     fun isJSTemplateLiteral(text: String): Boolean
 
-    fun recordChange(
+    /**
+     * 把一次站点改写登记为纯数据 [RewritePlan] 配方（取代旧的 `recordChange(message, …, closure)`
+     * 闭包流）。收集期只描述「要改什么」，不执行任何写；Apply 阶段由编译器统一执行。
+     *
+     * @param replaceRoot 替换目标根（Analyzer 会据此建 site 与指针）。
+     * @param kind        改写类型，决定 Apply 阶段采用哪种 PSI 写入原语。
+     * @param newExpression 替换表达式/新文本（收集期已按 framework/tFunctionName 定案）。
+     * @param xmlTextPointers XML_TEXT：命中该句的一组 XmlText 节点指针。
+     * @return 已登记进 Analyzer 的 [RewritePlan]（含新分配的 siteId）。
+     */
+    fun recordRewrite(
         message: String,
         replaceRoot: PsiElement,
         anchor: PsiElement,
-        changes: MutableList<I18nProcessor.CollectedChange>,
-        replaceAction: () -> Unit,
-    )
+        kind: RewriteKind,
+        newExpression: String,
+        xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
+        isJSX: Boolean = false,
+        isDirective: Boolean = false,
+        isAngular: Boolean = false,
+    ): RewritePlan
 
     /** 定位 SFC 的 `<script>` 标签；无则返回 null。 */
     fun getScriptTag(): XmlTag?
