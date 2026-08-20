@@ -1,8 +1,8 @@
 package com.pan.extractor.planner
 
-import com.pan.extractor.I18nFramework
-import com.pan.extractor.ImportManager
-import com.pan.extractor.I18nProcessor
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.core.ImportManager
+import com.pan.extractor.core.I18nProcessor
 import com.intellij.psi.PsiElement
 
 /**
@@ -12,7 +12,7 @@ import com.intellij.psi.PsiElement
  * > 分析阶段不修改项目；Plan 阶段只描述修改；Apply 阶段统一提交修改。
  *
  * §11 收敛点：注入决策（要注入哪些 import / setup / hook / 全局别名）已下沉到各自框架策略
- * 的 [ImportBuildStrategy.buildImportPlan]（[com.pan.extractor.VueI18nStrategy] /
+ * 的 [ImportBuildStrategy.buildImportPlan]（[com.pan.extractor.strategy.VueI18nStrategy] /
  * [ReactI18nextStrategy] / [SolidI18nStrategy] / [GenericStrategy]），这里不再出现
  * `isVue/isReact/isSolid` 三岔——本对象只负责「把决策交给框架，再把返回的 [ImportPlan] 透传」，
  * 并为无有效文件等边界情形返回一个仅描述文件信息的空计划。

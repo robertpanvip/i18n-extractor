@@ -1,5 +1,8 @@
-package com.pan.extractor
+package com.pan.extractor.strategy
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.core.CollectionState
+import com.pan.extractor.core.ImportManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
@@ -305,7 +308,7 @@ interface ScanStrategy {
 /**
  * 能力 9 — [CallExpressionStrategy]：翻译调用「表达式」的组装。
  *
- * §react-intl 收敛点：原 [com.pan.extractor.JsStringCollector.buildTFunctionExpr] 把翻译调用
+ * §react-intl 收敛点：原 [com.pan.extractor.core.JsStringCollector.buildTFunctionExpr] 把翻译调用
  * **硬编码**成 `fn('key'[, params])` 形态——函数名 + 裸字符串首参。这无法承载 react-intl 的
  * `formatMessage({ id: 'key' }, values)`（首参是对象描述符而非裸字符串），属于「表达式生成」
  * 未被策略化。本能力把"如何把 key + 参数对象拼成调用表达式"下沉为策略自身实现：

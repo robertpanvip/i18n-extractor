@@ -1,15 +1,15 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.EnglishExtractor
-import com.pan.extractor.FrenchExtractor
-import com.pan.extractor.GermanExtractor
-import com.pan.extractor.ItalianExtractor
-import com.pan.extractor.LanguageRegistry
-import com.pan.extractor.LanguageExtractor
-import com.pan.extractor.PortugueseExtractor
-import com.pan.extractor.SiteKind
-import com.pan.extractor.SpanishExtractor
-import com.pan.extractor.Util
+import com.pan.extractor.lang.EnglishExtractor
+import com.pan.extractor.lang.FrenchExtractor
+import com.pan.extractor.lang.GermanExtractor
+import com.pan.extractor.lang.ItalianExtractor
+import com.pan.extractor.lang.LanguageExtractor
+import com.pan.extractor.lang.LanguageRegistry
+import com.pan.extractor.lang.PortugueseExtractor
+import com.pan.extractor.lang.SiteKind
+import com.pan.extractor.lang.SpanishExtractor
+import com.pan.extractor.project.Util
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

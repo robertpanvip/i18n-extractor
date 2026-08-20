@@ -6,10 +6,10 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlText
-import com.pan.extractor.I18nPsiTools
+import com.pan.extractor.project.I18nPsiTools
 
 /**
- * Scanner 层 —— 候选站点发现（迁移自 [com.pan.extractor.I18nProcessor.collectFromPsi] 的
+ * Scanner 层 —— 候选站点发现（迁移自 [com.pan.extractor.core.I18nProcessor.collectFromPsi] 的
  * PsiRecursiveElementWalkingVisitor 遍历）。
  *
  * 职责（PROJECT_ANALYSIS §3）：
@@ -36,7 +36,7 @@ interface SourceScanner {
 
 /**
  * 模板 + JS 统一遍历（Vue 模板 / React JSX / Solid JSX / 纯 JS/TS 共用同一 PSI 遍历形态）。
- * 框架差异（占位符、站点形态、注入）由 [com.pan.extractor.I18nFramework] / Analyzer 层区分，
+ * 框架差异（占位符、站点形态、注入）由 [com.pan.extractor.strategy.I18nFramework] / Analyzer 层区分，
  * Scanner 只做节点发现 —— 与原 collectFromPsi 对所有文件类型遍历同一组节点类型行为 1:1 等价。
  */
 abstract class NodeScanner : SourceScanner {

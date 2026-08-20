@@ -1,9 +1,9 @@
 package com.pan.extractor.orchestrator
 
-import com.pan.extractor.EntryFileLocator
-import com.pan.extractor.I18nFrameworkRegistry
-import com.pan.extractor.ImportManager
-import com.pan.extractor.I18nProcessor
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.strategy.I18nFrameworkRegistry
+import com.pan.extractor.core.ImportManager
+import com.pan.extractor.core.I18nProcessor
 import com.pan.extractor.model.ExtractionContext
 import com.intellij.psi.PsiFile
 import com.pan.extractor.planner.RewritePlan

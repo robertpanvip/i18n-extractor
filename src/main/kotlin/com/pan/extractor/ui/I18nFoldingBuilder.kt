@@ -1,5 +1,7 @@
 package com.pan.extractor.ui
 
+import com.pan.extractor.strategy.I18nFrameworkRegistry
+import com.pan.extractor.messages.LocaleMessages
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
 

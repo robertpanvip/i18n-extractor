@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.locate.I18nInstanceLocator
+
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

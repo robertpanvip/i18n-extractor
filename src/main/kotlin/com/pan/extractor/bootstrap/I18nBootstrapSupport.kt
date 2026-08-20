@@ -1,5 +1,9 @@
-package com.pan.extractor
+package com.pan.extractor.bootstrap
 
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.strategy.VueI18nStrategy
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.SolidI18nStrategy
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser

@@ -1,5 +1,10 @@
-package com.pan.extractor
+package com.pan.extractor.strategy
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.core.CollectionState
+import com.pan.extractor.core.ImportManager
 import com.pan.extractor.planner.HookInjectPlan
 import com.pan.extractor.planner.HookTarget
 import com.pan.extractor.planner.ImportPlan

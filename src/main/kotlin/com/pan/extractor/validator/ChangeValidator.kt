@@ -3,8 +3,8 @@ package com.pan.extractor.validator
 import com.pan.extractor.ui.*
 
 import com.pan.extractor.ui.ExtractedStringsDialog
-import com.pan.extractor.I18nProcessor
-import com.pan.extractor.SiteRef
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.merge.SiteRef
 
 /**
  * ChangeValidator —— 应用前完整性校验（目标架构 Validator 层）。
@@ -14,7 +14,7 @@ import com.pan.extractor.SiteRef
  * site 失效（文件已被外部修改 / PSI 失效）时，抛出 [IllegalStateException]，
  * 调用方可在写入任何文件之前中止整批操作，避免留下"部分文件已改、其余未改"的半完成状态。
  *
- * 迁移自 [com.pan.extractor.MergeApplier.validateAllModifiableSites]（原实现保留为委托，
+ * 迁移自 [com.pan.extractor.merge.MergeApplier.validateAllModifiableSites]（原实现保留为委托，
  * 行为 1:1 不变）。
  */
 object ChangeValidator {

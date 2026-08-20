@@ -1,5 +1,10 @@
-package com.pan.extractor
+package com.pan.extractor.core
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.locate.I18nInstanceLocator
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.JSBlockStatement
 import com.intellij.lang.javascript.psi.JSCallExpression

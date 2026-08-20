@@ -1,5 +1,9 @@
-package com.pan.extractor
+package com.pan.extractor.messages
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.lang.LanguageRegistry
+import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.ui.*
 
 import com.google.gson.JsonParser

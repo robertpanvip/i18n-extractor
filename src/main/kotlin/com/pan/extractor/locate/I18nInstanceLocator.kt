@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.locate
 
+import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.ui.*
 
 import com.intellij.lang.javascript.psi.JSCallExpression

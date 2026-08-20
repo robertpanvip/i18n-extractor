@@ -1,6 +1,6 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.TsFileEditor
+import com.pan.extractor.editor.TsFileEditor
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

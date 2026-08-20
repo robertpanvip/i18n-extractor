@@ -1,5 +1,7 @@
-package com.pan.extractor
+package com.pan.extractor.strategy
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.core.ImportManager
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile

@@ -1,4 +1,4 @@
-package com.pan.extractor
+package com.pan.extractor.merge
 
 import com.pan.extractor.ui.*
 

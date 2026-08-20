@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.editor
 
+import com.pan.extractor.project.Util
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile

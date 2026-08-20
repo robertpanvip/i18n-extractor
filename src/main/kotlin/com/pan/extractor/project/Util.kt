@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.project
 
+import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.ui.*
 
 import com.intellij.ide.util.PropertiesComponent

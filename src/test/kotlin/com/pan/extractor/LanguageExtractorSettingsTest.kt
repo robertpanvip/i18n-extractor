@@ -1,5 +1,19 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.lang.ChineseExtractor
+import com.pan.extractor.lang.EnglishExtractor
+import com.pan.extractor.lang.FrenchExtractor
+import com.pan.extractor.lang.GermanExtractor
+import com.pan.extractor.lang.ItalianExtractor
+import com.pan.extractor.lang.JapaneseExtractor
+import com.pan.extractor.lang.KoreanExtractor
+import com.pan.extractor.lang.PortugueseExtractor
+import com.pan.extractor.lang.RussianExtractor
+import com.pan.extractor.lang.SiteKind
+import com.pan.extractor.lang.SpanishExtractor
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.project.Util
 import com.pan.extractor.ui.*
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase

@@ -1,5 +1,6 @@
 package com.pan.extractor.model
 
+import com.pan.extractor.strategy.SiteForm
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPsiElementPointer
@@ -35,7 +36,7 @@ data class ExtractionSiteLocation(
  * 一个提取/改写站点。
  *
  * [id] 是站点在所属处理器内的稳定标识（与
- * [com.pan.extractor.I18nProcessor.CollectedSite.id] 同源）；[replaceRoot] 是可选的
+ * [com.pan.extractor.core.I18nProcessor.CollectedSite.id] 同源）；[replaceRoot] 是可选的
  * 替换目标指针——仅用于定位与实际生效前的校验，不在模型内做任何 PSI 改写。
  */
 data class ExtractionSite(
@@ -45,7 +46,7 @@ data class ExtractionSite(
     val location: ExtractionSiteLocation? = null,
     val isVue: Boolean = false,
     val isReact: Boolean = false,
-    val form: com.pan.extractor.SiteForm? = null,
+    val form: com.pan.extractor.strategy.SiteForm? = null,
 ) {
     /** 兼容访问：替换目标（旧 CollectedSite.replaceRootPointer 的同义名）。 */
     val replaceRootPointer: SmartPsiElementPointer<PsiElement>?

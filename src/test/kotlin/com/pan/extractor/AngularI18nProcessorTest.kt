@@ -1,5 +1,9 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.project.Util
+import com.pan.extractor.strategy.I18nFrameworkRegistry
+
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals

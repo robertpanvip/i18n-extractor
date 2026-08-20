@@ -1,5 +1,8 @@
-package com.pan.extractor
+package com.pan.extractor.bootstrap
 
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.locate.I18nInstanceLocator
+import com.pan.extractor.editor.TsFileEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile

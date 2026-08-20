@@ -1,5 +1,19 @@
 package com.pan.extractor.analyzer
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.strategy.SiteForm
+import com.pan.extractor.strategy.GenericStrategy
+import com.pan.extractor.strategy.VueI18nStrategy
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.core.I18nProcessorContract
+import com.pan.extractor.core.CollectionState
+import com.pan.extractor.core.JsStringCollector
+import com.pan.extractor.core.ImportManager
+import com.pan.extractor.locate.I18nInstanceLocator
+import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.*
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
@@ -37,7 +51,7 @@ class I18nAnalyzer(
     private val injector: ImportManager,
     /** 与 [jsCollector]/[injector] 共享的收集期容器（同一个实例，打破构造循环；reset 时原位 [clear]）。 */
     private val plan: com.pan.extractor.planner.CollectedPlan,
-) : com.pan.extractor.CollectionState {
+) : com.pan.extractor.core.CollectionState {
 
     /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。
      *  BUG_ANALYSIS 3.4：去掉 [^

@@ -4,14 +4,14 @@ import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import com.intellij.openapi.vfs.VirtualFile
-import com.pan.extractor.TsFileEditor
+import com.pan.extractor.editor.TsFileEditor
 import java.nio.charset.StandardCharsets
 
 /**
- * Resource 层 —— 翻译资源读写（迁移自 [com.pan.extractor.TsFileEditor] 的 JSON 写回部分）。
+ * Resource 层 —— 翻译资源读写（迁移自 [com.pan.extractor.editor.TsFileEditor] 的 JSON 写回部分）。
  *
  * 职责：负责 JSON / TS 等翻译资源的 merge、写回和格式保持。
- * [com.pan.extractor.TsFileEditor] 的对应方法已改为委托本对象（行为 1:1，测试不破坏）。
+ * [com.pan.extractor.editor.TsFileEditor] 的对应方法已改为委托本对象（行为 1:1，测试不破坏）。
  */
 
 /** 记录原 JSON 文件的编码/换行特征，供写回时保持格式。 */
@@ -32,7 +32,7 @@ object JsonWriter {
 
     /**
      * 去掉 JSON 文本的最外层花括号（供拼入 TS 对象 / 已有文件 merge 使用）。
-     * 迁移自 [com.pan.extractor.Util.getJsonContent]。
+     * 迁移自 [com.pan.extractor.project.Util.getJsonContent]。
      */
     fun innerJsonContent(json: String): String {
         return json.trim().removePrefix("{").removeSuffix("}").trim()
@@ -52,7 +52,7 @@ object JsonWriter {
 
     /**
      * JSON 入口文件写回：解析 + 合并扁平 JSON（点式 key 尝试展开嵌套，冲突以新为准）+ 重新生成。
-     * 迁移自 [com.pan.extractor.TsFileEditor.regenerateJsonFileWithNewJson]（实现体 1:1）。
+     * 迁移自 [com.pan.extractor.editor.TsFileEditor.regenerateJsonFileWithNewJson]（实现体 1:1）。
      * 写回时保持原文件的 UTF-8 BOM 与换行风格（LF / CRLF），并 disableHtmlEscaping 保证非 ASCII 原文写出。
      */
     fun regenerateJsonFile(

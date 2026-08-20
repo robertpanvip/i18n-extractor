@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.project.I18nPsiTools
+
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase

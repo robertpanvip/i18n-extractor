@@ -1,5 +1,14 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.merge.AffixGroupCandidate
+import com.pan.extractor.merge.AffixVariant
+import com.pan.extractor.merge.DigitGroupCandidate
+import com.pan.extractor.merge.DigitPerSite
+import com.pan.extractor.merge.DigitSlot
+import com.pan.extractor.merge.MergeApplier
+import com.pan.extractor.merge.SiteRef
 import com.pan.extractor.ui.*
 
 import com.intellij.psi.PsiFile
@@ -572,7 +581,7 @@ class MergeApplierTest : BasePlatformTestCase() {
         // 单 command：代码改写 + import 注入 + 资源落盘，三者共享同一 undo 组
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             val finalRes = MergeApplier.apply(processors, extracted, plan)
-            val newResource = com.pan.extractor.TsFileEditor.regenerateTsFileWithNewJson(project, entryVf!!, finalRes)
+            val newResource = com.pan.extractor.editor.TsFileEditor.regenerateTsFileWithNewJson(project, entryVf!!, finalRes)
             assertNotNull("资源应能重新生成，finalRes=$finalRes", newResource)
             entryVf.setBinaryContent(newResource!!.toByteArray())
         }

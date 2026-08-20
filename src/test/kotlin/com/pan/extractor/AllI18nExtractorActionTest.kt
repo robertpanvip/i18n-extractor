@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.action.AllI18nExtractorAction
+
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext

@@ -1,9 +1,10 @@
 package com.pan.extractor.planner
 
-import com.pan.extractor.AffixGroupCandidate
-import com.pan.extractor.DigitGroupCandidate
-import com.pan.extractor.GenericStrategy
-import com.pan.extractor.I18nFramework
+import com.pan.extractor.core.CollectionState
+import com.pan.extractor.merge.AffixGroupCandidate
+import com.pan.extractor.merge.DigitGroupCandidate
+import com.pan.extractor.strategy.GenericStrategy
+import com.pan.extractor.strategy.I18nFramework
 import com.pan.extractor.model.ExtractionSite
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPsiElementPointer
@@ -178,7 +179,7 @@ data class ResourcePlan(
 )
 
 /**
- * 收集期产物容器 —— 把 [com.pan.extractor.I18nProcessor] 散落的收集期可变状态收敛为单一对象
+ * 收集期产物容器 —— 把 [com.pan.extractor.core.I18nProcessor] 散落的收集期可变状态收敛为单一对象
  * （目标架构 Phase 1，PROJECT_ANALYSIS §5）。
  *
  * 原则：
@@ -191,7 +192,7 @@ data class ResourcePlan(
  *  2. 收集期决策（改写动作 / 框架 / 翻译函数名 / 注入意图）：
  *     [pendingChanges] / [framework] / [tFunctionName] / [needInject*] / react fallback 缓存。
  */
-class CollectedPlan : com.pan.extractor.CollectionState {
+class CollectedPlan : com.pan.extractor.core.CollectionState {
     // ── 收集期产物 ────────────────────────────────────────────────
     /** 一次提取命中站点列表（领域模型 site，见 [com.pan.extractor.model.ExtractionSite]）。 */
     val collectedSites = mutableListOf<com.pan.extractor.model.ExtractionSite>()
@@ -215,7 +216,7 @@ class CollectedPlan : com.pan.extractor.CollectionState {
     val rewrites = mutableListOf<RewritePlan>()
 
     /** 当前文件检测到的框架策略。 */
-    var framework: com.pan.extractor.I18nFramework? = null
+    var framework: com.pan.extractor.strategy.I18nFramework? = null
 
     /** 检测到的翻译函数名（\$t / t / i18n.t / i18n.global.t），默认 \$t。 */
     override var tFunctionName: String = "\$t"

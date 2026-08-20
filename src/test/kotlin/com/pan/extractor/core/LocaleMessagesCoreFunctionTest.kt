@@ -1,6 +1,6 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.LocaleMessages
+import com.pan.extractor.messages.LocaleMessages
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

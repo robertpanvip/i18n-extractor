@@ -1,5 +1,6 @@
 package com.pan.extractor.ui
 
+import com.pan.extractor.lang.LanguageRegistry
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
 

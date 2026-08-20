@@ -1,5 +1,7 @@
-package com.pan.extractor
+package com.pan.extractor.project
 
+import com.pan.extractor.locate.I18nInstanceLocator
+import com.pan.extractor.bootstrap.I18nBootstrapSupport
 import com.intellij.lang.ecmascript6.psi.ES6ExportDefaultAssignment
 import com.intellij.lang.javascript.psi.JSArrayLiteralExpression
 import com.intellij.lang.javascript.psi.JSAssignmentExpression

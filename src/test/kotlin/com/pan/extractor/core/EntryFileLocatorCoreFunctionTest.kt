@@ -1,6 +1,6 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.EntryFileLocator
+import com.pan.extractor.locate.EntryFileLocator
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

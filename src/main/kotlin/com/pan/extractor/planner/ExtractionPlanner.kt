@@ -1,5 +1,8 @@
 package com.pan.extractor.planner
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.core.I18nProcessor
 import com.pan.extractor.ui.*
 import com.pan.extractor.ui.ExtractedStringsDialog.MergePlan
 
@@ -78,7 +81,7 @@ object ExtractionPlanner {
     @JvmStatic
     fun buildRewritePlans(
         mergePlan: MergePlan,
-        procs: List<com.pan.extractor.I18nProcessor>,
+        procs: List<com.pan.extractor.core.I18nProcessor>,
         diffKeys: MutableMap<String, String>,
     ): List<RewritePlan> {
         val plans = mutableListOf<RewritePlan>()
@@ -88,11 +91,11 @@ object ExtractionPlanner {
                 val proc = procs.getOrNull(ref.processorIndex) ?: continue
                 val site = proc.analyzer.collectedSites.firstOrNull { it.id == ref.siteId } ?: continue
                 val diffKey = v.diff.trim()
-                val diffWillBeKey = com.pan.extractor.Util.containsTargetLanguage(v.diff)
+                val diffWillBeKey = com.pan.extractor.project.Util.containsTargetLanguage(v.diff)
                 if (diffWillBeKey) diffKeys.putIfAbsent(diffKey, v.diff)
                 // 差分占位表达式：中文→`$t('中文')`（纯文本生成，无 PSI 副作用）；否则字面量
                 val paramsExpr = if (diffWillBeKey) {
-                    com.pan.extractor.I18nPsiTools.buildTExprForRawText(
+                    com.pan.extractor.project.I18nPsiTools.buildTExprForRawText(
                         v.diff, "{}", site.isVue, site.isReact, framework = proc.analyzer.framework
                     )
                 } else {

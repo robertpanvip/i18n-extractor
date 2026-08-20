@@ -1,5 +1,8 @@
-package com.pan.extractor
+package com.pan.extractor.project
 
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.strategy.ReactIntlStrategy
+import com.pan.extractor.lang.SiteKind
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.JSTokenTypes
 import com.intellij.lang.javascript.psi.JSBinaryExpression
@@ -666,7 +669,7 @@ object I18nPsiTools {
         isVue: Boolean,
         isReact: Boolean,
         skeletonKeyOverride: String? = null,
-        framework: com.pan.extractor.I18nFramework? = null,
+        framework: com.pan.extractor.strategy.I18nFramework? = null,
     ): String {
         val trimmedMsg = message.trim()
         val escapedMsg = if (trimmedMsg.contains("\n")) {
@@ -678,7 +681,7 @@ object I18nPsiTools {
         val key = skeletonKeyOverride?.trim()?.ifBlank { null } ?: trimmedMsg
         // Vue 用 $t，React 用 t；避免长形式 i18n.global.t / i18n.t
         // react-intl 用其真实函数名 formatMessage（否则 isReact 会把它错写成 t）。
-        val fn = if (framework is com.pan.extractor.ReactIntlStrategy) {
+        val fn = if (framework is com.pan.extractor.strategy.ReactIntlStrategy) {
             framework.tFunctionName
         } else if (isReact) {
             "t"

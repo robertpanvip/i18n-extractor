@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.strategy
 
+import com.pan.extractor.core.ImportManager
 import com.pan.extractor.planner.ImportPlan
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile

@@ -1,4 +1,4 @@
-package com.pan.extractor
+package com.pan.extractor.lang
 
 /**
  * 提取站点的“上下文类型”（Approach A：更看节点在语法树里的角色，而非只看字符）。

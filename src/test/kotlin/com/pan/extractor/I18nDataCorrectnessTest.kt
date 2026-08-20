@@ -1,5 +1,12 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.merge.CommonPrefixSuffixFactorizer
+import com.pan.extractor.merge.SiteRef
+import com.pan.extractor.strategy.GenericStrategy
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.VueI18nStrategy
+
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

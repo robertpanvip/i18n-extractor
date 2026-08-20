@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.project.I18nPsiTools
 import com.pan.extractor.ui.*
 
 import com.intellij.openapi.command.WriteCommandAction

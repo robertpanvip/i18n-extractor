@@ -1,5 +1,7 @@
-package com.pan.extractor
+package com.pan.extractor.strategy
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.core.ImportManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression

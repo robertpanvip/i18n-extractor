@@ -1,5 +1,8 @@
 package com.pan.extractor
 
+import com.pan.extractor.action.AllI18nExtractorAction
+import com.pan.extractor.project.Util
+
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse

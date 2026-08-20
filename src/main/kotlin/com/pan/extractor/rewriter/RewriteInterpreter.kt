@@ -3,8 +3,8 @@ package com.pan.extractor.rewriter
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.psi.PsiElement
 import com.intellij.psi.xml.XmlAttributeValue
-import com.pan.extractor.I18nProcessor
-import com.pan.extractor.MergeApplier
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.merge.MergeApplier
 import com.pan.extractor.model.ExtractionSite
 import com.pan.extractor.planner.CollectedResult
 import com.pan.extractor.planner.ExtractionPlan

@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.editor.TsFileEditor
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

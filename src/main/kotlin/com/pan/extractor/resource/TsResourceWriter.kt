@@ -6,24 +6,24 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import com.pan.extractor.TsFileEditor
-import com.pan.extractor.Util
+import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.project.Util
 import java.nio.charset.StandardCharsets
 
 /**
- * Resource 层 —— TS/JS 翻译资源写回（迁移自 [com.pan.extractor.TsFileEditor] 的 TS 写回部分）。
+ * Resource 层 —— TS/JS 翻译资源写回（迁移自 [com.pan.extractor.editor.TsFileEditor] 的 TS 写回部分）。
  *
  * 职责：负责 TS 对象字面量翻译资源的 merge、写回和格式保持。
- * [com.pan.extractor.TsFileEditor] 的对应方法已改为委托本对象（行为 1:1，测试不破坏）。
+ * [com.pan.extractor.editor.TsFileEditor] 的对应方法已改为委托本对象（行为 1:1，测试不破坏）。
  * 底层解析/merge helper（parseTsExportedObject / mergeFlatIntoNested / regenerateObjectLiteralBody /
  * findSpreadRefs / resolveSpreadTarget / newRegionText / applyRangeReplacements）暂留在
- * [com.pan.extractor.TsFileEditor]，作为本层的底层实现，后续可继续内迁。
+ * [com.pan.extractor.editor.TsFileEditor]，作为本层的底层实现，后续可继续内迁。
  */
 object TsResourceWriter {
 
     /**
      * TS 入口文件写回：解析 export default/const 对象字面量 → 合并扁平 JSON → 重新生成对象体。
-     * 迁移自 [com.pan.extractor.TsFileEditor.regenerateTsFileWithNewJson]（实现体 1:1）。
+     * 迁移自 [com.pan.extractor.editor.TsFileEditor.regenerateTsFileWithNewJson]（实现体 1:1）。
      *
      * @return 新文件文本；无法解析时返回 null（调用方回退剪贴板）。
      */
@@ -56,7 +56,7 @@ object TsResourceWriter {
 
     /**
      * TS 入口 + spread 路由写回：识别 `...common` 等 spread 引用并定向写入目标文件。
-     * 迁移自 [com.pan.extractor.TsFileEditor.regenerateTsFileWithSpreadRouting]（实现体 1:1）。
+     * 迁移自 [com.pan.extractor.editor.TsFileEditor.regenerateTsFileWithSpreadRouting]（实现体 1:1）。
      *
      * @return (VirtualFile, 新文本) 列表（首项为入口文件）；无 spread 或全部无法解析时返回 null（回退旧逻辑）。
      */
@@ -144,7 +144,7 @@ object TsResourceWriter {
 
     /**
      * 把 VirtualFile 内容替换为新文本（Write 安全封装）。
-     * 迁移自 [com.pan.extractor.TsFileEditor.writeVirtualFileText]（实现体 1:1）。
+     * 迁移自 [com.pan.extractor.editor.TsFileEditor.writeVirtualFileText]（实现体 1:1）。
      * 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
      * 返回是否写入成功；newText 若以 \uFEFF 开头则以 UTF-8 BOM 写盘（跨平台保留）。
      *

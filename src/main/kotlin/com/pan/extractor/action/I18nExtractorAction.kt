@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.action
 
+import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.orchestrator.ApplyOptions
 import com.pan.extractor.orchestrator.I18nExtractionOrchestrator as Orchestrator
 import com.pan.extractor.ui.*

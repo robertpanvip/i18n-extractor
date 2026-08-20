@@ -3,9 +3,9 @@ package com.pan.extractor.resource
 /**
  * Resource 层内部的「扁平 key → 嵌套」合并原语。
  *
- * §12 解耦：原本驻留在代码编辑器 [com.pan.extractor.TsFileEditor] 的合并 helper 内迁到本包，
+ * §12 解耦：原本驻留在代码编辑器 [com.pan.extractor.editor.TsFileEditor] 的合并 helper 内迁到本包，
  * 使 resource 包彻底不依赖编辑 / 框架 / PSI —— 本层只处理纯数据（Map），由 [JsonWriter] /
- * [TsResourceWriter] 在写回时调用。[com.pan.extractor.TsFileEditor] 保留同名委托以兼容既有调用。
+ * [TsResourceWriter] 在写回时调用。[com.pan.extractor.editor.TsFileEditor] 保留同名委托以兼容既有调用。
  */
 internal object ResourceMerge {
 

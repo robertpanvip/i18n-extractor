@@ -6,7 +6,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.pan.extractor.ui.I18nSettings
 
 /**
- * Planner 层 —— 骨架合并计划描述（迁移自 [com.pan.extractor.MergeApplier] 的纯函数）。
+ * Planner 层 —— 骨架合并计划描述（迁移自 [com.pan.extractor.merge.MergeApplier] 的纯函数）。
  *
  * 职责：把「公共前后缀 / 数字抽取」合并组描述成 RewritePlan 的素材——
  * 占位符映射（`{N0}` → Vue `{N0}` / React `{{0}}`）、参数对象文本、差异段/数字的字面量渲染。

@@ -1,13 +1,13 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.EnglishExtractor
-import com.pan.extractor.FrenchExtractor
-import com.pan.extractor.GermanExtractor
-import com.pan.extractor.ItalianExtractor
-import com.pan.extractor.PortugueseExtractor
-import com.pan.extractor.SpanishExtractor
-import com.pan.extractor.TsFileEditor
-import com.pan.extractor.isLatinAlphabetSentence
+import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.lang.EnglishExtractor
+import com.pan.extractor.lang.FrenchExtractor
+import com.pan.extractor.lang.GermanExtractor
+import com.pan.extractor.lang.isLatinAlphabetSentence
+import com.pan.extractor.lang.ItalianExtractor
+import com.pan.extractor.lang.PortugueseExtractor
+import com.pan.extractor.lang.SpanishExtractor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

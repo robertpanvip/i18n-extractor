@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.locate.I18nInstanceLocator
+
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

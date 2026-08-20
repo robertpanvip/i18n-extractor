@@ -1,4 +1,4 @@
-package com.pan.extractor
+package com.pan.extractor.core
 
 /**
  * 「收集期结果/状态」窄契约 —— 供 `JsStringCollector` / `ImportManager` 读写分析器身上

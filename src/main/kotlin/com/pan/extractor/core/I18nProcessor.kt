@@ -1,5 +1,7 @@
-package com.pan.extractor
+package com.pan.extractor.core
 
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.model.ExtractionContext
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.command.WriteCommandAction

@@ -3,7 +3,13 @@ package com.pan.extractor
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.pan.extractor.core.ImportManager
 import com.pan.extractor.planner.ImportPlan
+import com.pan.extractor.strategy.GenericStrategy
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.strategy.I18nFrameworkRegistry
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.VueI18nStrategy
 import org.junit.Assert.assertSame
 
 /**

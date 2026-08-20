@@ -1,5 +1,27 @@
 package com.pan.extractor
 
+import com.pan.extractor.bootstrap.I18nBootstrapSupport
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.lang.EnglishExtractor
+import com.pan.extractor.lang.FrenchExtractor
+import com.pan.extractor.lang.GermanExtractor
+import com.pan.extractor.lang.ItalianExtractor
+import com.pan.extractor.lang.LanguageExtractor
+import com.pan.extractor.lang.LanguageRegistry
+import com.pan.extractor.lang.PortugueseExtractor
+import com.pan.extractor.lang.SiteKind
+import com.pan.extractor.lang.SpanishExtractor
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.messages.LocaleMessages
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.project.Util
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.ReactIntlStrategy
+import com.pan.extractor.strategy.SolidI18nStrategy
+import com.pan.extractor.strategy.VueI18nStrategy
+import com.pan.extractor.ui.*
+
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals

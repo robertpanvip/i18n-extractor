@@ -1,9 +1,9 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.I18nBootstrapSupport
-import com.pan.extractor.ReactI18nextStrategy
-import com.pan.extractor.SolidI18nStrategy
-import com.pan.extractor.VueI18nStrategy
+import com.pan.extractor.bootstrap.I18nBootstrapSupport
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.SolidI18nStrategy
+import com.pan.extractor.strategy.VueI18nStrategy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

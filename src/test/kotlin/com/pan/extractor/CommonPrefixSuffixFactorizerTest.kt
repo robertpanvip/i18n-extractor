@@ -1,5 +1,8 @@
 package com.pan.extractor
 
+import com.pan.extractor.merge.CommonPrefixSuffixFactorizer
+import com.pan.extractor.merge.SiteRef
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

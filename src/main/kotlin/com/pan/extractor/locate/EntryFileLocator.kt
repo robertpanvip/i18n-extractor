@@ -1,5 +1,9 @@
-package com.pan.extractor
+package com.pan.extractor.locate
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.lang.LanguageExtractor
+import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.ui.*
 
 import com.intellij.openapi.project.Project

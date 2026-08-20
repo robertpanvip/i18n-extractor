@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.editor.TsFileEditor
+
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals

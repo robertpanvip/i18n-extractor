@@ -1,5 +1,11 @@
 package com.pan.extractor.orchestrator
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.merge.MergeApplier
+import com.pan.extractor.merge.AffixGroupCandidate
+import com.pan.extractor.merge.DigitGroupCandidate
+import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.*
 import com.pan.extractor.resource.ResourceApplier
 import com.pan.extractor.ui.*
@@ -15,7 +21,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import com.pan.extractor.Util.getJsonContent
+import com.pan.extractor.project.Util.getJsonContent
 import java.awt.datatransfer.StringSelection
 
 /**

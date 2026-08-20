@@ -1,5 +1,8 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.project.Util
+
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -494,7 +497,7 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         )
 
         val element = file.firstChild
-        val isReact = com.pan.extractor.Util.isReact(element)
+        val isReact = com.pan.extractor.project.Util.isReact(element)
 
         assertTrue(
             "React 项目中的 .ts 文件 isReact 应为 true，因为 package.json 中包含 react 依赖",

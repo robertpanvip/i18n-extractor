@@ -1,5 +1,7 @@
 package com.pan.extractor
 
+import com.pan.extractor.merge.MergeApplier
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test

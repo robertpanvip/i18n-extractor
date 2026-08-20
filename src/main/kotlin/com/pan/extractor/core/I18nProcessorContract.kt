@@ -1,5 +1,6 @@
-package com.pan.extractor
+package com.pan.extractor.core
 
+import com.pan.extractor.lang.SiteKind
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPsiElementPointer

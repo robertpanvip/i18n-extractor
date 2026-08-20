@@ -3,7 +3,7 @@ package com.pan.extractor.staticparser
 /**
  * staticparser 子包 —— TS/JS 翻译文件的静态解析层。
  *
- * 把 [com.pan.extractor.TsFileEditor] 中**纯文本级**的静态解析逻辑抽离到此处，
+ * 把 [com.pan.extractor.editor.TsFileEditor] 中**纯文本级**的静态解析逻辑抽离到此处，
  * 形成独立的、可纯单元测试的解析模块（不依赖 IntelliJ PSI / Application）。
  *
  * 职责：
@@ -33,7 +33,7 @@ data class TsExportedObjectInfo(
 
 /**
  * 静态对象字面量解析器（无状态，线程安全）。
- * 迁移自 [com.pan.extractor.TsFileEditor] 的解析方法群（行为 1:1，TsFileEditor 改为委托）。
+ * 迁移自 [com.pan.extractor.editor.TsFileEditor] 的解析方法群（行为 1:1，TsFileEditor 改为委托）。
  */
 object StaticObjectParser {
 

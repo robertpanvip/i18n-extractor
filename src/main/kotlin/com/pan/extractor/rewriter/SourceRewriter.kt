@@ -1,5 +1,8 @@
 package com.pan.extractor.rewriter
 
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.core.ImportManager
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.lang.javascript.psi.JSBlockStatement
 import com.intellij.lang.javascript.psi.JSCallExpression
@@ -14,16 +17,16 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlText
-import com.pan.extractor.I18nPsiTools
-import com.pan.extractor.ProjectStructure
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.planner.HookInjectPlan
 import com.pan.extractor.planner.HookTarget
 import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ImportPlanner
 
 /**
- * Rewriter 层 —— 修改源码 PSI（迁移自 [com.pan.extractor.I18nProcessor] /
- * [com.pan.extractor.JsStringCollector] 的 recordChange 替换闭包）。
+ * Rewriter 层 —— 修改源码 PSI（迁移自 [com.pan.extractor.core.I18nProcessor] /
+ * [com.pan.extractor.core.JsStringCollector] 的 recordChange 替换闭包）。
  *
  * 职责（PROJECT_ANALYSIS §3）：
  * > Rewriter 根据 Plan 修改源码 PSI；只有最终 Apply 阶段进入 Write Action。
@@ -136,7 +139,7 @@ object ImportRewriter : SourceRewriter {
      *  2. 注入 aliases（位于最后一个 import 之后）；
      *  3. 依 [HookInjectPlan] 逐类注入函数体 useI18n / useTranslation。
      */
-    fun applyImportPlan(processor: com.pan.extractor.I18nProcessor, psiFile: PsiElement, plan: ImportPlan) {
+    fun applyImportPlan(processor: com.pan.extractor.core.I18nProcessor, psiFile: PsiElement, plan: ImportPlan) {
         val containingFile = psiFile.containingFile ?: return
 
         if (plan.rewriteI18nTCallsToT) {
@@ -179,10 +182,10 @@ object ImportRewriter : SourceRewriter {
      * （行为 1:1）。
      */
     fun injectForFramework(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
-        framework: com.pan.extractor.I18nFramework,
-        decision: com.pan.extractor.ImportManager.InjectionDecision,
+        framework: com.pan.extractor.strategy.I18nFramework,
+        decision: com.pan.extractor.core.ImportManager.InjectionDecision,
     ) {
         val plan = ImportPlanner.buildImportPlan(processor, psiFile, framework, decision)
         applyImportPlan(processor, psiFile, plan)
@@ -192,7 +195,7 @@ object ImportRewriter : SourceRewriter {
 
     /** 取 .vue <script> 的内容节点（JSEmbeddedContent）；无则返回 null。 */
     private fun getScriptContent(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
     ): PsiElement? {
         val scriptTag = processor.getScriptTag() ?: return null
@@ -208,7 +211,7 @@ object ImportRewriter : SourceRewriter {
         container: PsiElement,
         importTexts: List<String>,
         anchor: PsiElement?,
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
     ) {
         var prev: PsiElement? = null
         for (text in importTexts) {
@@ -228,7 +231,7 @@ object ImportRewriter : SourceRewriter {
 
     /** 依 [hook] 类型定位目标并注入 [HookInjectPlan.statement]。 */
     private fun injectHook(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         hook: HookInjectPlan,
     ) {
@@ -252,7 +255,7 @@ object ImportRewriter : SourceRewriter {
 
     /** Vue .vue <script> 顶层注入一次 `const { t: \$t } = useI18n()`（镜像 ensureVueI18nImported 的 const 分支）。 */
     private fun injectVueSfcScriptConst(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         statement: String,
     ) {
@@ -275,7 +278,7 @@ object ImportRewriter : SourceRewriter {
 
     /** 给一组函数体首行注入 [statement]（从后往前插入，避免 offset 偏移；镜像 ensure* 的逐体注入）。 */
     private fun injectIntoFunctionBodies(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         funcs: List<JSFunction>,
         statement: String,
@@ -292,7 +295,7 @@ object ImportRewriter : SourceRewriter {
 
     /** Vue TSX 组件（defineComponent / setup / 函数式组件）函数体注入（镜像 ensureVueComponentI18nInjected）。 */
     private fun injectIntoVueComponents(
-        processor: com.pan.extractor.I18nProcessor,
+        processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         statement: String,
     ) {

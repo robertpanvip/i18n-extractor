@@ -1,6 +1,6 @@
 package com.pan.extractor.core
 
-import com.pan.extractor.I18nPsiTools
+import com.pan.extractor.project.I18nPsiTools
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -179,14 +179,14 @@ class I18nPsiToolsCoreFunctionTest {
             "formatMessage({ id: '标题' })",
             I18nPsiTools.buildTExprForRawText(
                 "标题", "{}", isVue = false, isReact = true,
-                framework = com.pan.extractor.ReactIntlStrategy
+                framework = com.pan.extractor.strategy.ReactIntlStrategy
             )
         )
         assertEquals(
             "formatMessage({ id: '标题' }, { N0: 'x' })",
             I18nPsiTools.buildTExprForRawText(
                 "标题", "{ N0: 'x' }", isVue = false, isReact = true,
-                framework = com.pan.extractor.ReactIntlStrategy
+                framework = com.pan.extractor.strategy.ReactIntlStrategy
             )
         )
     }

@@ -1,5 +1,8 @@
-package com.pan.extractor
+package com.pan.extractor.merge
 
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.core.I18nProcessor
 import com.pan.extractor.ui.*
 
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil

@@ -1,5 +1,9 @@
 package com.pan.extractor
 
+import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.merge.CommonPrefixSuffixFactorizer
+import com.pan.extractor.merge.SiteRef
+import com.pan.extractor.project.Util
 import com.pan.extractor.ui.*
 
 import com.intellij.psi.PsiFile
@@ -769,7 +773,7 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
 
         val element = file.firstChild
-        val isReact = com.pan.extractor.Util.isReact(element)
+        val isReact = com.pan.extractor.project.Util.isReact(element)
 
         assertFalse(
             "Vue 项目中的 .tsx 文件 isReact 应为 false，因为 package.json 中包含 vue 依赖",

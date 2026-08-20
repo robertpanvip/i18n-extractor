@@ -1,5 +1,15 @@
 package com.pan.extractor.ui
 
+import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.strategy.VueI18nStrategy
+import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.merge.AffixGroupCandidate
+import com.pan.extractor.merge.DigitGroupCandidate
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.bootstrap.I18nBootstrap
+import com.pan.extractor.bootstrap.I18nBootstrapSupport
+import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
 

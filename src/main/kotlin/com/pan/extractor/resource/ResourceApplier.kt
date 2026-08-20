@@ -42,7 +42,7 @@ object ResourceApplier {
      *    否则再生入口文件（[TsResourceWriter.regenerateTsFile]）。
      *
      * §12 解耦：本方法只依赖 [ResourcePlan] 与 resource 包内各自的 writer，不再经代码编辑器
-     * [com.pan.extractor.TsFileEditor] 门面派发 —— Resource 层不感知框架 / PSI / UI。
+     * [com.pan.extractor.editor.TsFileEditor] 门面派发 —— Resource 层不感知框架 / PSI / UI。
      */
     fun apply(project: Project, plan: ResourcePlan): List<Pair<VirtualFile, String>>? {
         val entryVf = LocalFileSystem.getInstance().findFileByPath(plan.targetPath) ?: return null

@@ -1,5 +1,9 @@
 package com.pan.extractor
 
+import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.project.Util
+
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull

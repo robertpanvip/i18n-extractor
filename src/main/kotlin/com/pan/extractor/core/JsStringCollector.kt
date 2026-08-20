@@ -1,5 +1,9 @@
-package com.pan.extractor
+package com.pan.extractor.core
 
+import com.pan.extractor.project.I18nPsiTools
+import com.pan.extractor.strategy.I18nFramework
+import com.pan.extractor.strategy.I18nFrameworkRegistry
+import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.ui.*
 
 import com.intellij.lang.javascript.JSTokenTypes
@@ -136,7 +140,7 @@ class JsStringCollector(
      * 默认策略沿用历史拼法（行为 1:1）；react-intl 覆盖为 `formatMessage({ id: 'key' }[, values])`。
      * 本方法只负责：解析 key 文本 → 按换行/引号转义打包成 key 字面量 → 交给 [fw] 完成成型。
      *
-     * @param fw 当前文件命中的框架策略（由调用方用 [com.pan.extractor.I18nFrameworkRegistry.detect] 得到）。
+     * @param fw 当前文件命中的框架策略（由调用方用 [com.pan.extractor.strategy.I18nFrameworkRegistry.detect] 得到）。
      */
     fun buildTFunctionExpr(fw: I18nFramework, message: String, paramsObject: String): String {
         // 步骤1：处理 message（trim 并转义特殊字符）
