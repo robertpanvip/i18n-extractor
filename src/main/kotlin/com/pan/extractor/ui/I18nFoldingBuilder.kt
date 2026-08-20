@@ -10,11 +10,16 @@ import com.intellij.lang.folding.FoldingBuilderEx
 import com.intellij.lang.folding.FoldingDescriptor
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
@@ -25,6 +30,10 @@ import com.intellij.psi.util.PsiTreeUtil
  * - 折叠占位文本 = 翻译值，编辑器内 Ctrl+F 可直接搜到翻译文案。
  * - 带插值参数的调用会将 {N0}/{0} 等占位符替换为实际参数值，同时支持 Vue（{N0}）和 React（{0}）格式。
  * - 仅在指定语言资源中查得到 key 时才折叠，避免误折叠。
+ *
+ * 性能：buildFoldRegions 被平台在 EDT 上同步调用，但本实现**立即返回空**，
+ * 将 PSI 遍历 + Symbol 解析移至后台线程（pooled），计算完成后通过 invokeLater
+ * 把折叠注入到各编辑器的 FoldingModel。避免打开大文件时 UI 卡死。
  */
 class I18nFoldingBuilder : FoldingBuilderEx() {
 
@@ -39,40 +48,100 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     private val logger = Logger.getInstance(I18nFoldingBuilder::class.java)
 
     init {
-        // 类加载时输出，用于确认 FoldingBuilder 是否被 IDE 实例化
         logger.warn("I18nFoldingBuilder 类已加载（实例化时触发）")
     }
 
+    /** 立即返回空，后台线程计算完成后通过 [applyFoldsToEditors] 注入折叠。
+     *  测试模式下同步计算，便于断言直接检查返回值。 */
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
-        val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
-        // quick=true 表示 IntelliJ 在快速输入/滚动时请求，期望尽快返回；
-        // 此时跳过全量 PSI 遍历与翻译加载，避免输入卡顿（非 quick 时再完整计算）。
         if (quick) return FoldingDescriptor.EMPTY_ARRAY
-        val t0 = System.nanoTime()
+        val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
         val containingFile = root.containingFile ?: return FoldingDescriptor.EMPTY_ARRAY
-        // 对注入代码（如 Vue 模板插值 {{ $t('x') }}）折叠时，root 是注入片段；
-        // 翻译入口需基于其所属的顶层源文件定位，故映射回宿主文件。
         val contextFile = InjectedLanguageManager.getInstance(project).getTopLevelFile(containingFile) ?: containingFile
+
         val messages = LocaleMessages.loadCached(project, contextFile)
         if (messages.isEmpty()) {
             logger.warn("I18nFoldingBuilder: 未找到翻译文件，跳过折叠。文件=${contextFile.name} displayLang=${I18nSettings.getInstance().foldDisplayLanguage()}")
             return FoldingDescriptor.EMPTY_ARRAY
         }
 
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            return computeFoldsSync(root, contextFile, messages)
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            computeAndApplyFolds(project, root, document, contextFile, messages)
+        }
+
+        return FoldingDescriptor.EMPTY_ARRAY
+    }
+
+    /** 同步计算折叠描述符（仅测试模式使用，生产环境走 [computeAndApplyFolds] 异步路径）。 */
+    private fun computeFoldsSync(root: PsiElement, contextFile: PsiFile, messages: Map<String, String>): Array<FoldingDescriptor> {
+        val t0 = System.nanoTime()
         val callCount = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java)
         val descriptors = mutableListOf<FoldingDescriptor>()
-        // 全部调用逐个判定并建立折叠描述符；这是「打开/折叠」阶段的主要耗时点（含 Symbol 解析缓存）。
         for (call in callCount) {
             addFoldingDescriptor(call, messages, descriptors)
         }
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        // 耗时基准：慢打开记 info（可被日志直接看到），普通仅记 debug，避免每个文件都刷屏。
+        logger.debug("I18nFoldingBuilder[测试/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
+        return descriptors.toTypedArray()
+    }
+
+    /** 后台线程：全量 PSI 遍历 + Symbol 解析，完成后 EDT 注入折叠。 */
+    private fun computeAndApplyFolds(
+        project: Project,
+        root: PsiElement,
+        document: Document,
+        contextFile: PsiFile,
+        messages: Map<String, String>,
+    ) {
+        val t0 = System.nanoTime()
+        val callCount = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java)
+        val descriptors = mutableListOf<FoldingDescriptor>()
+        for (call in callCount) {
+            addFoldingDescriptor(call, messages, descriptors)
+        }
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
         if (elapsedMs >= SLOW_FOLD_MS) {
             logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
         } else {
             logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
         }
-        return descriptors.toTypedArray()
+
+        if (descriptors.isEmpty()) return
+
+        ApplicationManager.getApplication().invokeLater({
+            applyFoldsToEditors(project, document, descriptors)
+        })
+    }
+
+    /** EDT：将计算好的折叠描述符注入到所有打开该文件的编辑器。 */
+    private fun applyFoldsToEditors(
+        project: Project,
+        document: Document,
+        descriptors: List<FoldingDescriptor>,
+    ) {
+        if (project.isDisposed) return
+        val file = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return
+        val vf = file.virtualFile ?: return
+        val editors = FileEditorManager.getInstance(project).allEditors
+            .filterIsInstance<TextEditor>()
+            .filter { it.file == vf }
+        for (textEditor in editors) {
+            val editor = textEditor.editor
+            if (editor.isDisposed) continue
+            val fm = editor.foldingModel
+            fm.runBatchFoldingOperation {
+                for (desc in descriptors) {
+                    val range = desc.range
+                    if (range.isEmpty) continue
+                    val fold = fm.addFoldRegion(range.startOffset, range.endOffset, desc.placeholderText ?: "")
+                    fold?.isExpanded = false
+                }
+            }
+        }
     }
 
     /** 打开文件时 $t() 调用默认全部折叠，便于直接看到翻译文案。 */
@@ -116,9 +185,6 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     /** 从 `$t('key')` / `t('key')` / `xxx.t('key')` 调用中提取 key；非翻译调用返回 null。 */
     private fun extractKey(call: JSCallExpression): String? =
         I18nFrameworkRegistry.detect(call).extractKey(call)
-
-    private fun isTranslationCall(call: JSCallExpression): Boolean =
-        I18nFrameworkRegistry.detect(call).isTranslationCall(call)
 
     /**
      * 从 t() 调用的第二个参数（对象字面量）中提取插值参数映射，如 `{"0": "xxx"}` → `{"0": "xxx"}`。

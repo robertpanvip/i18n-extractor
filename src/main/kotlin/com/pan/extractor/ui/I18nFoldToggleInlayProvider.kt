@@ -28,6 +28,10 @@ import java.awt.event.MouseEvent
  */
 class I18nFoldToggleInlayProvider : EditorFactoryListener {
 
+    companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java)
+    }
+
     override fun editorCreated(event: EditorFactoryEvent) {
         val editor = event.editor
         val project = editor.project ?: return
@@ -40,9 +44,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
             val messages = LocaleMessages.loadCached(project, file)
             if (messages.isEmpty()) return@invokeLater
 
-            addFoldToggleInlays(editor, file, messages)
-
-            // 点击 inlay 时切换折叠状态
+            // 点击 inlay 时切换折叠状态（鼠标监听器轻量，保留在 EDT）
             editor.addEditorMouseListener(object : EditorMouseListener {
                 override fun mouseClicked(e: EditorMouseEvent) {
                     if (e.mouseEvent.button != MouseEvent.BUTTON1) return
@@ -54,7 +56,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
                         val offset = clickedInlay.offset
                         val fm = editor.foldingModel
                         fm.runBatchFoldingOperation {
-                            // 取覆盖 offset 的最小折叠区域，避免误匹配到外层函数折叠
                             val fold = fm.allFoldRegions
                                 .filter { it.startOffset <= offset && offset <= it.endOffset }
                                 .minByOrNull { it.endOffset - it.startOffset }
@@ -65,6 +66,11 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
                     }
                 }
             })
+
+            // 翻译调用收集 + inlay 添加：后台线程计算 → EDT 写 UI
+            ApplicationManager.getApplication().executeOnPooledThread {
+                addFoldToggleInlaysAsync(editor, file, messages)
+            }
         }
     }
 
@@ -75,32 +81,41 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
             lower.endsWith(".vue")
     }
 
-    private fun addFoldToggleInlays(editor: Editor, file: PsiFile, messages: Map<String, String>) {
+    /**
+     * 后台线程：遍历 PSI 收集翻译调用，完成后 EDT 写入 inlay。
+     * 将耗时的 PSI 遍历 + Symbol 解析从 UI 线程剥离，避免打开大文件时卡顿。
+     */
+    private fun addFoldToggleInlaysAsync(editor: Editor, file: PsiFile, messages: Map<String, String>) {
         val t0 = System.nanoTime()
-        val inlayModel = editor.inlayModel
         val fw = I18nFrameworkRegistry.detect(file)
 
+        // 数据类：记录每个翻译调用的 offset（轻量，不持 PSI 引用）
+        data class InlayTarget(val offset: Int)
+
+        val targets = mutableListOf<InlayTarget>()
         var translationCallCount = 0
         PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
             if (!fw.isTranslationCall(call)) return@forEach
             translationCallCount++
-
             val key = fw.extractKey(call) ?: return@forEach
             if (key !in messages) return@forEach
-
-            // 在 t() 调用末尾添加可点击的 ↩ inlay
-            val offset = call.textRange.endOffset
-            inlayModel.addInlineElement(offset, true, I18nFoldToggleRenderer(editor))
+            targets.add(InlayTarget(call.textRange.endOffset))
         }
 
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        // 耗时基准：慢打开记 info，普通仅记 debug，避免每个编辑器都刷屏。
         val msg = "I18nFoldToggleInlay[打开] file=${file.name} size=${file.textLength}B translationCalls=$translationCallCount elapsed=${elapsedMs}ms"
-        if (elapsedMs >= 100) {
-            com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java).info(msg)
-        } else {
-            com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java).debug(msg)
-        }
+        if (elapsedMs >= 100) LOG.info(msg) else LOG.debug(msg)
+
+        if (targets.isEmpty()) return
+
+        // EDT：写入 inlay（仅在 UI 线程安全）
+        ApplicationManager.getApplication().invokeLater({
+            if (editor.isDisposed) return@invokeLater
+            val inlayModel = editor.inlayModel
+            for (t in targets) {
+                inlayModel.addInlineElement(t.offset, true, I18nFoldToggleRenderer(editor))
+            }
+        })
     }
 
 }
