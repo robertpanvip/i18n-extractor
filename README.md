@@ -10,7 +10,7 @@
 
 ## Features
 
-- **Multi-framework support**: auto-detects Vue / React projects and uses vue-i18n / react-i18next syntax accordingly
+- **Multi-framework support**: auto-detects the project framework and uses the matching i18n syntax accordingly
 - **Multi-language extraction**: extracts Chinese, Japanese, Korean, English, French, Russian, German, Spanish, Italian and Portuguese — the target languages are configurable in Settings
 - **Smart extraction**: scans template text, attribute values, TS string literals, string concatenation and template literals
 - **Context-aware**: decides whether a string is user-facing copy based on its role in the syntax tree (text node, attribute, JS string, etc.), not just raw characters
@@ -21,6 +21,8 @@
 - **Undo support**: all edits are wrapped in `WriteCommandAction`, so Ctrl+Z works fully
 - **Template interpolation**: supports `${variable}` template-literal interpolation and converts it into the i18n placeholder format
 - **Merge suggestions**: automatically detects common prefixes/suffixes and digit placeholders to suggest merging similar strings
+
+> **Framework support status**: **Vue** (`vue-i18n`) and **React** (`react-i18next`) are the primary, fully-tested targets. Other frameworks (e.g. Angular / `ngx-translate`, Svelte, i18next standalone) are **experimental** — the code paths exist but are not covered by the test suite, are not guaranteed to produce correct output, and may change without notice. If you rely on a non-Vue/React framework in production, validate the generated code before applying it.
 
 ## Supported File Types
 
