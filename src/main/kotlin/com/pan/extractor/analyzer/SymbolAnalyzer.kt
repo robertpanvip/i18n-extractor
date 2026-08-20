@@ -14,6 +14,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
+import com.intellij.psi.search.FilenameIndex
+import com.intellij.psi.search.ProjectScope
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
@@ -115,16 +117,31 @@ object SymbolAnalyzer {
     /** 本地同名变量"不存在"的哨兵：ConcurrentHashMap.computeIfAbsent 存不了 null，用它占位。 */
     private object NO_LOCAL_VAR
 
+    /** `resolve()` 返回 null 的哨兵（obj 为 VirtualFile 本体的占位，非冲突）。 */
+    private object NO_RESOLVE
+
     private class FileScanMemo(val stamp: Long) {
+        /** findLocalVariableNamed / resolve 等"可能为 null"结果的低成本缓存 */
         val localVar = java.util.concurrent.ConcurrentHashMap<String, Any>()   // JSVariable | NO_LOCAL_VAR
         val localFunction = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-        val shadowText = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
         val i18nImport = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
         val anyModuleImport = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
         val hookDestructure = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+        /** #4 `resolve()` 去重：键 = 引用表达式 offset（PSI 元素），值 = PsiElement | NO_RESOLVE */
+        val resolveResult = java.util.concurrent.ConcurrentHashMap<Int, Any>()
+
+        /** #3 同一 call 在 detect / collect 阶段被重复 analyze → 键 = call offset，值 = 完整分析结果 */
+        val calleeAnalysis = java.util.concurrent.ConcurrentHashMap<Int, CalleeAnalysis>()
+
+        /** #5 本文件所有"声明名"集合（一次正则扫出全部，替代按名逐次对 file.text 正则） */
+        val shadowNames = java.util.concurrent.atomic.AtomicReference<Set<String>?>(null)
     }
 
     private val fileScanMemo = java.util.concurrent.ConcurrentHashMap<String, FileScanMemo>()
+
+    /** #2 barrel/re-export 跟随结果缓存：key = "$path#$stamp#$localName"，跨调用复用，赢在消除对同一 barrel 链的重复递归。 */
+    private val reexportCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /** 取 [file] 对应缓存代。公式变时（WriteAction bump modificationStamp）整代重建，杜绝读陈旧 PSI。 */
     private fun fileScanGen(file: PsiFile): FileScanMemo? {
@@ -138,6 +155,17 @@ object SymbolAnalyzer {
             if (fileScanMemo.size > 2048) fileScanMemo.clear()   // 长期会话防无限增长
         }
         return memo
+    }
+
+    /** #4 按引用表达式 offset 缓存 resolve() 结果；同一引用在 detect/collect/祖先链里只解析一次。 */
+    private fun resolvedOf(ref: JSReferenceExpression?): PsiElement? {
+        if (ref == null) return null
+        val memo = fileScanGen(ref.containingFile as? PsiFile ?: return ref.resolve())
+            ?: return ref.resolve()
+        return when (val v = memo.resolveResult.computeIfAbsent(ref.textRange.startOffset) { ref.resolve() ?: NO_RESOLVE }) {
+            NO_RESOLVE -> null
+            else -> v as PsiElement
+        }
     }
 
     /** 找文件中名为 [name] 的本地变量声明（排除 import 绑定），带全文件级缓存。 */
@@ -157,9 +185,9 @@ object SymbolAnalyzer {
     }
 
     private fun hasLocalShadowDeclarationTextCached(file: PsiFile, name: String): Boolean {
-        val memo = fileScanGen(file)
-        if (memo == null) return hasLocalShadowDeclarationText(file, name)
-        return memo.shadowText.computeIfAbsent(name) { hasLocalShadowDeclarationText(file, it) }
+        val memo = fileScanGen(file) ?: return hasLocalShadowDeclarationText(file, name)
+        val set = memo.shadowNames.get() ?: buildShadowNames(file).also { memo.shadowNames.compareAndSet(null, it) }
+        return name in set
     }
 
     private fun importedFromI18nFrameworkInCached(file: PsiFile, name: String): Boolean {
@@ -181,11 +209,36 @@ object SymbolAnalyzer {
     }
 
     /**
+     * 【#5】一次扫描 [file] 文本，提取所有"类声明名"（namespace/module/class/interface/type、
+     * function、const/let/var 关键字后紧跟的标识符）。与 [hasLocalShadowDeclarationText] 逐名正则
+     * 语义完全一致（正则同样不跳过注释/字符串，故提取组也如此），只是改成"每文件一次"。
+     */
+    private fun buildShadowNames(file: PsiFile): Set<String> {
+        val text = file.text
+        val names = java.util.HashSet<String>()
+        // A/B：namespace/module/class/interface/type/function 后紧跟的名字
+        kotlin.text.Regex("""\b(?:namespace|module|class|interface|type|function)\s+([A-Za-z_$][\w$]*)""")
+            .findAll(text).forEach { names.add(it.groupValues[1]) }
+        // C：const/let/var 后紧跟的名字，且后面必须是 = / : / , / ; / ) / 空白（与逐名正则语义一致）
+        kotlin.text.Regex("""\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(=|\b:|[,;)\s])""")
+            .findAll(text).forEach { names.add(it.groupValues[1]) }
+        return names
+    }
+
+    /**
      * 分析一个翻译候选调用。
      *
      * @return 分解 + 来源分析；[CalleeAnalysis.origin] 为最终判定。
      */
+    /** #3 同一 call 在 detect / collect 阶段被重复 analyze → 按 call offset 缓存完整分析结果。 */
     fun analyze(call: JSCallExpression): CalleeAnalysis {
+        val file = call.containingFile as? PsiFile
+        val memo = if (file != null) fileScanGen(file) else null
+        if (memo == null) return analyzeUncached(call)
+        return memo.calleeAnalysis.computeIfAbsent(call.textRange.startOffset) { analyzeUncached(call) }
+    }
+
+    private fun analyzeUncached(call: JSCallExpression): CalleeAnalysis {
         val method = call.methodExpression
         if (method !is JSReferenceExpression) {
             // 复杂 callee（如 `(cond ? t : f)('x')`、`obj[method]('x')`）无法分解 → 保守 UNKNOWN
@@ -205,14 +258,14 @@ object SymbolAnalyzer {
             if (name in PLUGIN_DOLLAR_T_NAMES) {
                 return CalleeAnalysis(
                     shape = CalleeShape.BARE_NAME, name = name,
-                    baseReference = method, resolved = method.resolve(),
+                    baseReference = method, resolved = resolvedOf(method),
                     origin = SymbolOrigin.PLUGIN_DOLLAR_T,
                 )
             }
             // 裸名（无论是否 t/tc 形状）：来源证明决定一切。
             //  - `import { t as translate }; translate('x')` 名字非 t → 由框架 import 证明兜住；
             //  - `foo('x')` 名字非 t 且无 import 证明 → 非翻译通道 / UNKNOWN。
-            val resolved = method.resolve()
+            val resolved = resolvedOf(method)
             return CalleeAnalysis(
                 shape = CalleeShape.BARE_NAME, name = name,
                 baseReference = method, resolved = resolved,
@@ -222,7 +275,7 @@ object SymbolAnalyzer {
 
         // ── 链式形态：`X.t(...)` / `i18n.global.t(...)` ──
         val baseRef = deepestBaseReference(method)
-        val resolvedBase = baseRef?.resolve()
+        val resolvedBase = resolvedOf(baseRef)
         return CalleeAnalysis(
             shape = CalleeShape.CHAINED,
             name = name,
@@ -253,7 +306,7 @@ object SymbolAnalyzer {
      */
     fun resolveOrigin(
         ref: JSReferenceExpression?,
-        resolved: PsiElement? = ref?.resolve(),
+        resolved: PsiElement? = resolvedOf(ref),
         instanceTrust: Boolean = false,
     ): SymbolOrigin {
         if (ref == null) return SymbolOrigin.UNKNOWN
@@ -508,34 +561,57 @@ object SymbolAnalyzer {
         return localName
     }
 
+    /** 【#2】barrel/re-export 缓存键：path + 文件版本 + 收敛名，文件修改后整键失效。 */
+    private fun barrelCacheKey(barrel: PsiFile, localName: String): String {
+        val vf = barrel.virtualFile
+        return if (vf != null) "${vf.path}#${vf.modificationStamp}#$localName"
+        else "${barrel.name}#x#$localName"
+    }
+
+    /** 【#2】把 barrel 跟随结果写入缓存；超大时整表清空防长期会话内存膨胀。 */
+    private fun cacheBarrelResult(key: String, value: Boolean) {
+        reexportCache[key] = value
+        if (reexportCache.size > 8192) reexportCache.clear()
+    }
+
     /** barrel 是否从框架导出【任意】符号，或本地导出 i18n 惯例实例（namespace import 专用证明）。 */
     private fun fileExportsAnythingFromFramework(barrel: PsiFile, visited: MutableSet<String>): Boolean {
-        val key = barrel.virtualFile?.path ?: barrel.name
-        if (!visited.add(key)) return false
+        val cacheKey = barrelCacheKey(barrel, "*")
+        reexportCache[cacheKey]?.let { return it }
+        if (!visited.add(barrel.virtualFile?.path ?: barrel.name)) return false // 环形跟随：剪枝（不落缓存，避免污染）
         val text = barrel.text
+        var result = false
         // 直接/星号 re-export 自 i18n 框架包
         if (MODULES_PROVIDING_NATIVE_T_RESOLVED.any {
                 Regex("""from\s*['"]\Q$it\E['"]""").containsMatchIn(text)
             }
-        ) return true
-        // 本地导出 i18n 惯例实例（`export const i18n = createI18n(...)`)
-        if (CONVENTIONAL_INSTANCE_NAMES.any { n ->
+        ) {
+            result = true
+        } else if (CONVENTIONAL_INSTANCE_NAMES.any { n ->
                 Regex("""\bexport\s+const\s+\Q$n\E\b""").containsMatchIn(text) &&
                     Regex("""create(I18n|I18next|AppI18n)\s*\(""").containsMatchIn(text)
             }
-        ) return true
-        // 递归：跟随嵌套 barrel
-        for (m in EXPORT_STAR_FROM_RE.findAll(text)) {
-            resolveSourceFile(barrel, m.groupValues[1])?.let {
-                if (fileExportsAnythingFromFramework(it, visited)) return true
+        ) {
+            result = true
+        } else {
+            // 递归：跟随嵌套 barrel（每个嵌套子问题同样经缓存收敛）
+            for (m in EXPORT_STAR_FROM_RE.findAll(text)) {
+                resolveSourceFile(barrel, m.groupValues[1])?.let {
+                    if (fileExportsAnythingFromFramework(it, visited)) result = true
+                }
+                if (result) break
+            }
+            if (!result) {
+                for (m in Regex("""export\s*\{[^}]*\}\s*from\s*['"]([^'"]+)['"]""").findAll(text)) {
+                    resolveSourceFile(barrel, m.groupValues[1])?.let {
+                        if (fileExportsAnythingFromFramework(it, visited)) result = true
+                    }
+                    if (result) break
+                }
             }
         }
-        for (m in Regex("""export\s*\{[^}]*\}\s*from\s*['"]([^'"]+)['"]""").findAll(text)) {
-            resolveSourceFile(barrel, m.groupValues[1])?.let {
-                if (fileExportsAnythingFromFramework(it, visited)) return true
-            }
-        }
-        return false
+        cacheBarrelResult(cacheKey, result)
+        return result
     }
 
     /**
@@ -572,25 +648,16 @@ object SymbolAnalyzer {
     private fun toPsi(project: Project, vf: VirtualFile?): PsiFile? =
         if (vf == null) null else PsiManager.getInstance(project).findFile(vf)
 
-    /** 从项目内容根递归查找以 [suffix]（如 `src/i18n.ts`）结尾的文件。 */
+    /**
+     * 【#1】用项目**文件名索引**查以 [suffix]（如 `src/i18n.ts`）结尾的文件，替代原先对
+     * 所有内容根的整目录 `walkFind` 递归遍历。索引按 basename 定位后仅用后缀收尾校验，
+     * 把「全项目扫一次」降为「索引 O(1) + 少量候选过滤」。
+     */
     private fun findSiblingSuffix(project: Project, suffix: String): VirtualFile? {
-        val contentRoots = com.intellij.openapi.roots.ProjectRootManager.getInstance(project).contentRoots
-        for (root in contentRoots) {
-            walkFind(root, suffix)?.let { return it }
-        }
-        return null
-    }
-
-    private fun walkFind(dir: VirtualFile, suffix: String): VirtualFile? {
-        if (!dir.isDirectory || !dir.isValid) return null
-        for (child in dir.children) {
-            if (child.isDirectory) {
-                walkFind(child, suffix)?.let { return it }
-            } else if (child.path.endsWith(suffix)) {
-                return child
-            }
-        }
-        return null
+        val name = suffix.substringAfterLast('/')
+        return FilenameIndex.getVirtualFilesByName(project, name, ProjectScope.getAllScope(project))
+            .asSequence()
+            .firstOrNull { it.path.endsWith(suffix) }
     }
 
     /**
@@ -613,15 +680,18 @@ object SymbolAnalyzer {
         localName: String,
         visited: MutableSet<String>,
     ): Boolean {
-        val key = barrel.virtualFile?.path ?: barrel.name
-        if (!visited.add(key)) return false
+        val cacheKey = barrelCacheKey(barrel, localName)
+        reexportCache[cacheKey]?.let { return it }
+        if (!visited.add(barrel.virtualFile?.path ?: barrel.name)) return false // 环形跟随：剪枝（不落缓存）
         val text = barrel.text
         val name = Regex.escape(localName)
+        var result = false
 
         val namedFrom = Regex("""export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]""")
 
         // 形态 1 / 2：具名直转（含别名）。逐个 specifier 判断，别名时还原原始导出名跟随。
         for (m in namedFrom.findAll(text)) {
+            if (result) break
             val src = m.groupValues[2].trim()
             val specifiers = m.groupValues[1].split(',').map { it.trim() }.filter { it.isNotEmpty() }
             val hit = specifiers.firstOrNull { spec ->
@@ -632,43 +702,44 @@ object SymbolAnalyzer {
             val rawName = Regex("""^([A-Za-z_$][\w$]*)\s+as\s+\Q$localName\E\b""")
                 .find(hit)?.groupValues?.get(1) ?: localName
             if (isTranslationLikeOrConventional(rawName)) {
-                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
+                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) { result = true; break }
                 val nested = resolveSourceFile(barrel, src) ?: continue
-                if (fileReExportsNameFromFramework(nested, rawName, visited)) return true
+                if (fileReExportsNameFromFramework(nested, rawName, visited)) { result = true; break }
             }
         }
 
         // 形态 3：星号全量 re-export，且 localName 是翻译候选/惯例名（保守限定，避免全项目误命中）
-        if (isTranslationLikeOrConventional(localName)) {
+        if (!result && isTranslationLikeOrConventional(localName)) {
             for (m in EXPORT_STAR_FROM_RE.findAll(text)) {
                 val src = m.groupValues[1].trim()
-                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
+                if (src.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) { result = true; break }
                 val nested = resolveSourceFile(barrel, src) ?: continue
-                if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+                if (fileReExportsNameFromFramework(nested, localName, visited)) { result = true; break }
             }
         }
 
         // 形态 4：本地导出 i18n 实例（`export const i18n = createI18n(...)`）——
         // 名字为惯例实例名时视为 i18n 实例（跨文件 instance resolve，P1）。
-        if (localName in CONVENTIONAL_INSTANCE_NAMES &&
+        if (!result && localName in CONVENTIONAL_INSTANCE_NAMES &&
             Regex("""\bexport\s+const\s+\Q$localName\E\b\s*=\s*[^;\n]*?""")
                 .containsMatchIn(text)
         ) {
-            return true
+            result = true
         }
 
         // 形态 5：`export { localName }`（无 from）—— 该名字需在本文件 import 自框架再导出
-        if (Regex("""export\s*\{[^}]*\b$name\b[^}]*\}""").containsMatchIn(text)) {
+        if (!result && Regex("""export\s*\{[^}]*\b$name\b[^}]*\}""").containsMatchIn(text)) {
             for (imp in PsiTreeUtil.findChildrenOfType(barrel, ES6ImportDeclaration::class.java)) {
                 if (!importLocalNameMatches(imp.text, localName)) continue
                 val impSrc = FROM_SOURCE_RE.find(imp.text)
                     ?.groupValues?.get(1)?.trim() ?: continue
-                if (impSrc.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) return true
+                if (impSrc.lowercase() in MODULES_PROVIDING_NATIVE_T_RESOLVED) { result = true; break }
                 val nested = resolveSourceFile(barrel, impSrc) ?: continue
-                if (fileReExportsNameFromFramework(nested, localName, visited)) return true
+                if (fileReExportsNameFromFramework(nested, localName, visited)) { result = true; break }
             }
         }
-        return false
+        cacheBarrelResult(cacheKey, result)
+        return result
     }
 
     /** 名字是翻译候选或惯例实例名（用于限定是否需要跨模块跟随，避免对普通 import 全项目误扫）。 */
