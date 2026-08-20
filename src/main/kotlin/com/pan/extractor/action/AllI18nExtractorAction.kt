@@ -250,55 +250,111 @@ class AllI18nExtractorAction : AnAction() {
     // ═════════════════════════════════════════════════════════════
 
     override fun update(e: AnActionEvent) {
-        val file = e.getData(CommonDataKeys.PSI_FILE)
+        // "全项目提取"入口的启用策略：只要当前 project 打开即可（不需要 focus 在特定 PsiFile）。
+        // 原先要求必须有 PSI_FILE，会出现「菜单可点但点了无反馈」的假象：
+        // actionPerformed 里 "if (PSI_FILE == null) return" 直接静默 return。
+        val project = e.project
+        if (project == null) {
+            e.presentation.isEnabledAndVisible = false
+            return
+        }
+        // 如果用户在 Project View 中选中了翻译资源目录/语言包文件，也禁用作为保险。
+        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        if (virtualFile != null && !virtualFile.isDirectory &&
+            EntryFileLocator.isTranslationResourceFile(virtualFile)
+        ) {
+            e.presentation.isEnabledAndVisible = false
+            return
+        }
+        e.presentation.isEnabledAndVisible = true
+    }
 
-        e.presentation.isEnabledAndVisible =
-            file?.let {
-                // Bug 2: 翻译资源文件禁用菜单
-                if (EntryFileLocator.isTranslationResourceFile(it)) return@let false
-                val name = it.name.lowercase()
-                name.endsWith(".js") ||
-                        name.endsWith(".jsx") ||
-                        name.endsWith(".ts") ||
-                        name.endsWith(".tsx") ||
-                        name.endsWith(".vue")
-            } ?: false
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        // 上下文 PsiFile：可空；若在 Project View 目录触发则为 null，后续仍能正常工作
+        val contextPsi: PsiFile? = e.getData(CommonDataKeys.PSI_FILE)
+
+        // ── Bug 修复：Scanner + collect（Analyzer）必须在后台任务里跑 ─────────────────
+        //   旧实现直接在 actionPerformed（EDT）里做 resolveScanFiles + collect，
+        //   这两步都是重工作（FilenameIndex 全局扫描 + 每文件 PSI 分析），EDT 被占住
+        //   导致 IntelliJ 的 Progress 重绘完全阻塞 ⇒ 用户看到的就是"进度条一直 0% / 不动"。
+        //   这里改成 Task.Backgroundable，onSuccess 里再在 EDT 弹对话框并启动写入任务。
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            project,
+            "i18n 全项目：扫描文件并分析中文…",
+            true
+        ) {
+            private var files: List<VirtualFile> = emptyList()
+            private var collection: Orchestrator.Collection? = null
+            private var err: Throwable? = null
+
+            override fun run(indicator: ProgressIndicator) {
+                indicator.isIndeterminate = false
+                indicator.text = "发现待处理文件（tsconfig include / 全局回退）"
+                indicator.fraction = 0.05
+                indicator.checkCanceled()
+                val allFiles = try {
+                    resolveScanFiles(project)
+                } catch (t: Throwable) {
+                    err = t; return
+                }
+                // Bug 2: 翻译资源文件不进入 Processor
+                files = allFiles.filterNot { EntryFileLocator.isTranslationResourceFile(it) }
+                if (files.isEmpty()) return
+                indicator.text = "分析 ${files.size} 个文件中的硬编码中文"
+                indicator.fraction = 0.2
+                try {
+                    collection = Orchestrator.collect(project, files, contextPsi)
+                } catch (t: Throwable) {
+                    err = t
+                }
+                indicator.fraction = 1.0
+            }
+
+            override fun onSuccess() {
+                val t = err
+                if (t != null) {
+                    LOG.error("i18n 全项目扫描/分析阶段异常：${t.message?.take(120)}", t)
+                    Orchestrator.notifyNothingExtracted(
+                        project,
+                        "整个项目（内部异常: ${t.javaClass.simpleName}）"
+                    )
+                    return
+                }
+                if (files.isEmpty()) {
+                    Orchestrator.notifyNothingExtracted(project, "整个项目（没有可处理的 TS/TSX/VUE 文件）")
+                    return
+                }
+                val c = collection ?: return
+                if (c.processors.isEmpty()) {
+                    if (c.extracted.isEmpty()) {
+                        Orchestrator.notifyNothingExtracted(project, "整个项目")
+                    }
+                    return
+                }
+                // 收集成功，进入对话框 → 后台写入
+                launchWriteAfterDialog(project, c)
+            }
+        })
     }
 
     /**
-     * 全项目 transform 编排：
-     * 文件发现（Scanner）→ Orchestrator.collect（Analyzer，只读）→ Dialog → Orchestrator.apply（原子写入）。
-     *
-     * 注意：不要在 actionPerformed 里把 transform() 整体包进 WriteCommandAction；
-     * 全项目 transform 会弹出模态对话框 + 跑后台写入任务，若外层抢占了 EDT 写锁，
-     * 后台进度条无法重绘（问题 1）。真正需要写锁的工作都在 Backgroundable 内部
-     * 通过 invokeAndWait + WriteCommandAction 由 Orchestrator 自行拿取。
+     * 收集完成后：在 EDT 弹对话框；用户确认则启动【后台写入】Task。
+     * 对话框本身是模态的（showAndGet），必须运行在 EDT（onSuccess 正好就是 EDT）。
      */
-    fun transform(e: AnActionEvent) {
-        val project = e.project ?: return
-        // 上下文 PsiFile：给 Dialog 推断入口文件位置用
-        val contextPsi: PsiFile? = e.getData(CommonDataKeys.PSI_FILE)
-        val allFiles = resolveScanFiles(project)
-        // Bug 2: 翻译资源文件不进入 Processor，避免提取/注入到语言包中
-        val files = allFiles.filterNot { EntryFileLocator.isTranslationResourceFile(it) }
-
-        // Scanner + Analyzer 阶段（只读，Write Action 之外）
-        val collection = Orchestrator.collect(project, files, contextPsi)
-        if (collection.processors.isEmpty()) {
-            if (collection.extracted.isEmpty()) Orchestrator.notifyNothingExtracted(project, "整个项目")
-            return
-        }
-
+    private fun launchWriteAfterDialog(
+        project: Project,
+        collection: Orchestrator.Collection,
+    ) {
         val dialog = ExtractedStringsDialog(
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
         if (dialog.showAndGet()) {
-            // 【问题 1 / 用户反馈修复：写 $t 阶段没有进度条 → UI 冻结没反馈】
             ProgressManager.getInstance().run(object : Task.Backgroundable(
                 project,
                 "i18n 全项目写入中…",
-                true   // canBeCancelled：用户点进度条 X 可以中断（break 循环）
+                true
             ) {
                 private var output: Orchestrator.OutputResult =
                     Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
@@ -308,7 +364,6 @@ class AllI18nExtractorAction : AnAction() {
                     indicator.fraction = 0.0
                     indicator.text = "准备写入：预计算合并分组..."
                     indicator.text2 = ""
-                    // 单 command 原子写入（import + $t + 骨架 + 资源写回），失败整体回滚。
                     output = Orchestrator.apply(
                         project, collection,
                         ApplyOptions(
@@ -335,10 +390,5 @@ class AllI18nExtractorAction : AnAction() {
         } else if (collection.extracted.isEmpty()) {
             Orchestrator.notifyNothingExtracted(project, "整个项目")
         }
-    }
-
-    override fun actionPerformed(e: AnActionEvent) {
-        if (e.project == null || e.getData(CommonDataKeys.PSI_FILE) == null) return
-        transform(e)
     }
 }

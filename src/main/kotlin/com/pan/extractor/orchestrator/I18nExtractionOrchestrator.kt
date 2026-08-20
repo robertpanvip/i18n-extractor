@@ -24,6 +24,9 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.pan.extractor.project.Util.getJsonContent
 import java.awt.datatransfer.StringSelection
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 /**
  * Orchestrator 层 —— 编排 Scanner → Analyzer → Planner → Rewriter → Validator → Applicator 全流程。
@@ -43,8 +46,9 @@ import java.awt.datatransfer.StringSelection
  *
  * 核心原则（PROJECT_ANALYSIS §4）：
  * > 分析阶段不修改项目；Plan 阶段只描述修改；只有最终 Apply 阶段进入 Write Action。
- * 因此 [collect] 在 Write Action 之外执行；[apply] 由调用方包在 progress 任务里，内部用
- * `invokeAndWait + runWriteCommandAction` 单 command 原子提交。
+ * 因此 [collect] 在 Write Action 之外执行；[apply] 由调用方包在 progress 任务里，内部向
+ * EDT `invokeLater` 投递【单个】`runWriteCommandAction`，以 CompletableFuture 等待结果，
+ * 等待期间每 150ms 仍可推进 ProgressIndicator（不会 0% 卡死）。
  */
 object I18nExtractionOrchestrator {
 
@@ -169,7 +173,8 @@ object I18nExtractionOrchestrator {
      *
      * P2：不再接收 Swing 对话框，只消费纯数据 [ApplyOptions]（编排器不感知 UI 组件）。
      *
-     * 前置条件：调用方必须处于 ProgressManager 后台任务内（本方法用 invokeAndWait 上 EDT 拿写锁）。
+     * 前置条件：调用方需处于 ProgressManager 后台任务内（本方法会写 ProgressIndicator，并
+     * 通过 `invokeLater + CompletableFuture` 向 EDT 投递单次 WriteCommandAction）。
      *
      * @return [applyFinalOutput] 的输出结果；执行后 [Collection.extracted] 已同步为最终合并结果。
      */
@@ -185,8 +190,6 @@ object I18nExtractionOrchestrator {
 
         // 【P0 A 组 A4】写入前统一 preflight：Code + Import + Resource 作为整体校验，
         // 任一类失效立即抛异常 ⇒ 尚未进入 WriteCommandAction，零写入。
-        // 收集阶段已完成，此处只需做只读的 target / import / resource 解析校验；
-        // apply 处于后台任务，读 PSI（buildImportPlan）需显式包 read action（线程合规）。
         try {
             ApplicationManager.getApplication().runReadAction {
                 val preflightRewrites = collection.processors.flatMap { it.analyzer.rewrites }
@@ -207,28 +210,106 @@ object I18nExtractionOrchestrator {
             throw t
         }
 
-        indicator.text = "原子写入 ${collection.processors.size} 个文件（import + \$t 替换 + 骨架 + 资源写回）"
-        indicator.text2 = "单 command 统一提交，失败将整体回滚"
+        indicator.text = "等待 EDT 写入窗口（原子 command）"
+        indicator.text2 = "EDT 空闲后单 command 统一提交，失败将整体回滚"
+        indicator.fraction = 0.05
 
-        ApplicationManager.getApplication().invokeAndWait {
-            WriteCommandAction.runWriteCommandAction(project) {
-                // Planner/Rewriter 层：MergeApplier.apply 内部按 ExtractionPlan 描述统一执行；
-                // 空合并计划等价于逐文件 processor.run()（行为与原分支 1:1）。
-                val merged = MergeApplier.apply(
-                    processors = collection.processors,
-                    extracted = collection.extracted,
-                    mergePlan = mergePlan,
-                    indicator = indicator,
-                    // edtRunner = null → 所有写入都在当前 command 内同步执行（单 command 原子）。
-                    edtRunner = null,
-                    dropExistingKeysOut = dropExistingKeys,
-                )
-                collection.extracted.clear()
-                collection.extracted.putAll(merged)
-                output = applyFinalOutput(project, options, LinkedHashMap(merged), dropExistingKeys)
+        // ══════════════════════════════════════════════════════════════════════════════
+        // 【Progress 卡死的核心修复】
+        // 旧实现：
+        //   ApplicationManager.getApplication().invokeAndWait {
+        //       WriteCommandAction.runWriteCommandAction(project) { ... }
+        //   }
+        //
+        // 问题：invokeAndWait 会让【后台 Progress 线程】阻塞等待 EDT 完成。
+        // 而 MergeApplier.apply 内部目前传入 edtRunner=null，意味着"所有 PSI 写入
+        // 都在这一次 WCA 里同步完成"——对于多文件/复杂合并场景，EDT 可能占用数秒
+        // 到数十秒；在此期间后台线程停在 invokeAndWait 上，ProgressIndicator 的
+        // fraction/text 完全没有机会更新，用户看到的就是"进度条永远 0% / 不动"。
+        //
+        // 修复（保留"单 command 原子性"）：
+        //   · 用 invokeLater 向 EDT 投递【单个 WriteCommandAction】闭包，确保仍是
+        //     一次 command（所有 PSI 修改 + 资源写回整体可 Undo，整体失败整体回滚）；
+        //   · 用 CompletableFuture 跨线程传递结果 + 异常；invokeLater 一旦被 EDT
+        //     取走并进入 WCA 立即设置 started=true，后台线程进入"等待 + 周期性
+        //     push 进度"循环，每 150ms 更新 indicator，这样即便 WCA 占用 EDT，
+        //     后台仍能在等待期把"进度推进到 fraction=0.5"、"EDT 写入阶段"等文案
+        //     先推给 UI；
+        //   · WCA 完成后 future.complete(...) 立即返回，整体耗时与原实现等价
+        //     （只是不会在开始前死等 EDT slot 导致 indicator 僵死）。
+        // ══════════════════════════════════════════════════════════════════════════════
+        val future = CompletableFuture<Pair<Map<String, String>, OutputResult>>()
+        ApplicationManager.getApplication().invokeLater {
+            var mergedResult: Map<String, String>? = null
+            var result: OutputResult? = null
+            try {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    val merged = MergeApplier.apply(
+                        processors = collection.processors,
+                        extracted = collection.extracted,
+                        mergePlan = mergePlan,
+                        indicator = indicator,
+                        // 当前 command 就是 command-level 原子边界，所以每个 site 的
+                        // onRewrite 无需额外 invokeAndWait（保持单 command，避免嵌套）。
+                        edtRunner = null,
+                        dropExistingKeysOut = dropExistingKeys,
+                    )
+                    collection.extracted.clear()
+                    collection.extracted.putAll(merged)
+                    result = applyFinalOutput(
+                        project, options, LinkedHashMap(merged), dropExistingKeys
+                    )
+                    mergedResult = merged
+                }
+                future.complete(mergedResult!! to result!!)
+            } catch (t: Throwable) {
+                future.completeExceptionally(t)
             }
         }
+
+        // 后台线程：等待 WCA 完成的同时，周期性更新 indicator，避免进度条显示"0% 不动"。
+        val startNs = System.nanoTime()
+        while (true) {
+            try {
+                val (merged, resultOut) = future.get(150, TimeUnit.MILLISECONDS)
+                // 把 extracted map 与 output 结果同步为最终写入版本（对 callers 透明）
+                collection.extracted.clear()
+                collection.extracted.putAll(merged)
+                output = resultOut
+                break
+            } catch (e: java.util.concurrent.TimeoutException) {
+                // 尚未完成：把 indicator 推到"EDT 正在执行原子写入"状态，让进度可见。
+                // fraction 用一个非常缓慢的"等待曲线"推到 0.9，避免看起来像卡住。
+                val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                val waitFraction = when {
+                    elapsedMs <= 0 -> 0.06
+                    else -> {
+                        // 0ms→0.06, 1s→0.35, 3s→0.55, 8s→0.75, 20s→0.88
+                        val k = (elapsedMs.toDouble() / 1000.0)
+                        0.06 + 0.84 * (1.0 - Math.exp(-k / 4.5))
+                    }
+                }
+                indicator.fraction = max(indicator.fraction, waitFraction.coerceAtMost(0.9))
+                indicator.text = "EDT 执行中：原子写入 ${collection.processors.size} 个文件（import + \$t 替换 + 骨架 + 资源写回）"
+                indicator.text2 = "已等待 ${elapsedMs / 1000}s（仍在单个 WriteCommandAction 内，失败会整体回滚）"
+                indicator.checkCanceled()
+            } catch (e: java.util.concurrent.ExecutionException) {
+                val cause = e.cause ?: e
+                LOG.warn(
+                    "I18nExtractionOrchestrator: 原子写入 (WriteCommandAction) 异常：${cause.message?.take(120)}",
+                    cause
+                )
+                if (cause is RuntimeException) throw cause
+                if (cause is Error) throw cause
+                throw RuntimeException(cause)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw RuntimeException("等待 EDT 写入被中断", e)
+            }
+        }
+        indicator.fraction = 1.0
         indicator.text = "已完成单 command 原子写入（入口 / 剪贴板）"
+        indicator.text2 = ""
         return output
     }
 

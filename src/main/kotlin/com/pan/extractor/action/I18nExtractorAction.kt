@@ -85,29 +85,19 @@ class I18nExtractorAction : AnAction() {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // 单文件 / 目录：统一走 Orchestrator 编排
-    // ─────────────────────────────────────────────────────────────
-
     /**
-     * 单个文件提取：Scanner+Analyzer（Orchestrator.collectSingle）→ Dialog → 原子 Apply。
+     * 单文件写入：在【EDT】接受用户确认后启动后台写入任务。
+     * 从 [launchAnalyzeThen] 传入已完成分析的 Collection。
      */
-    private fun processPsiFile(project: Project, psiFile: PsiFile) {
-        // Bug 2（保险）：即便 update() 放过了，到这里仍要拦截语言包文件
-        if (isTranslationResource(psiFile)) return
-
-        val collection = Orchestrator.collectSingle(project, psiFile)
-        if (collection.processors.isEmpty()) {
-            if (collection.extracted.isEmpty()) Orchestrator.notifyNothingExtracted(project, "当前文件")
-            return
-        }
-
+    private fun launchSingleWrite(
+        project: Project,
+        collection: Orchestrator.Collection,
+    ) {
         val dialog = ExtractedStringsDialog(
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
         if (dialog.showAndGet()) {
-            // 【问题 1 修复：写入过程加进度提示，避免点确定后"卡住没反馈"】
             ProgressManager.getInstance().run(
                 object : Task.Backgroundable(
                     project,
@@ -119,7 +109,6 @@ class I18nExtractorAction : AnAction() {
 
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = false
-                        // —— 写入 PSI 替换（含合并计划应用），单 command 原子提交 ——
                         indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
                         indicator.fraction = 0.1
                         output = Orchestrator.apply(
@@ -151,6 +140,57 @@ class I18nExtractorAction : AnAction() {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // 单文件 / 目录：先后台扫描分析（Task.Backgroundable）→ onSuccess 里弹 Dialog → 后台写入
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 单个文件提取：先后台跑 Orchestrator.collectSingle（PSI 重分析不应阻塞 EDT）→
+     * 分析结束后在 EDT 弹 Dialog → 用户确认再启动后台写入 Task。
+     *
+     * 旧实现：collectSingle 在 EDT 同步执行，分析大型 Vue/TSX 文件时 EDT 被占住
+     * 整个 IDE 看起来"卡住 0%"（其实还没进入写入阶段）。
+     */
+    private fun processPsiFile(project: Project, psiFile: PsiFile) {
+        if (isTranslationResource(psiFile)) return
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            project,
+            "i18n 提取：分析当前文件…",
+            true
+        ) {
+            private var collection: Orchestrator.Collection? = null
+            private var err: Throwable? = null
+
+            override fun run(indicator: ProgressIndicator) {
+                indicator.isIndeterminate = true
+                indicator.text = "解析 PSI 并提取候选字符串（含已有 \$t 调用）"
+                try {
+                    collection = Orchestrator.collectSingle(project, psiFile)
+                } catch (t: Throwable) {
+                    err = t
+                }
+            }
+
+            override fun onSuccess() {
+                val t = err
+                if (t != null) {
+                    Orchestrator.notifyNothingExtracted(
+                        project,
+                        "当前文件（内部异常: ${t.javaClass.simpleName}）"
+                    )
+                    return
+                }
+                val c = collection ?: return
+                if (c.processors.isEmpty()) {
+                    if (c.extracted.isEmpty()) Orchestrator.notifyNothingExtracted(project, "当前文件")
+                    return
+                }
+                launchSingleWrite(project, c)
+            }
+        })
+    }
+
     /**
      * 递归收集文件夹内所有受支持的文件。
      */
@@ -160,7 +200,6 @@ class I18nExtractorAction : AnAction() {
             if (child.isDirectory) {
                 result.addAll(collectSupportedFiles(child))
             } else if (isSupportedFile(child.name) && !isTranslationResource(child)) {
-                // Bug 2: 目录批量扫描时直接排除翻译资源文件，避免后续被 Processor 处理
                 result.add(child)
             }
         }
@@ -168,32 +207,72 @@ class I18nExtractorAction : AnAction() {
     }
 
     /**
-     * 目录批量提取：递归发现文件 → Orchestrator.collect → Dialog → 原子 Apply。
+     * 目录批量提取：
+     *
+     * 旧实现用 `runProcessWithProgressSynchronously(..., true, project)` 在 EDT
+     * **同步阻塞等待**收集完成，ModalProgressManager 会把事件泵开到特定级别，但 EDT
+     * 仍在该调用栈内"等待 future 完成"，一旦 collect 耗时长 + 调用栈被压，就表现为
+     * 「进度条一直 0%、点取消无效」。
+     *
+     * 修复：统一改为 Task.Backgroundable（非模态后台）→ onSuccess 里弹 Dialog → 再后台写入。
      */
     private fun processDirectory(project: Project, dir: VirtualFile) {
         val files = collectSupportedFiles(dir)
         if (files.isEmpty()) return
 
-        // 用模态进度框包裹收集阶段，避免文件过多时 UI 冻结（收集本身是纯 PSI 读）。
-        val holder = arrayOfNulls<Orchestrator.Collection>(1)
-        ProgressManager.getInstance().runProcessWithProgressSynchronously({
-            val indicator = ProgressManager.getInstance().progressIndicator
-            indicator.isIndeterminate = false
-            indicator.text = "Extracting i18n strings..."
-            holder[0] = Orchestrator.collect(project, files, null)
-        }, "I18n Extraction", true, project)
-        val collection = holder[0] ?: return
-        if (collection.processors.isEmpty()) {
-            Orchestrator.notifyNothingExtracted(project, "目录 ${dir.presentableUrl}")
-            return
-        }
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            project,
+            "i18n 目录提取：递归扫描并分析 ${files.size} 个文件…",
+            true
+        ) {
+            private var collection: Orchestrator.Collection? = null
+            private var err: Throwable? = null
 
+            override fun run(indicator: ProgressIndicator) {
+                indicator.isIndeterminate = false
+                indicator.text = "递归扫描目录：$dir"
+                indicator.fraction = 0.05
+                indicator.checkCanceled()
+                try {
+                    indicator.text = "分析 ${files.size} 个文件中的硬编码中文"
+                    indicator.fraction = 0.2
+                    collection = Orchestrator.collect(project, files, null)
+                } catch (t: Throwable) {
+                    err = t
+                }
+                indicator.fraction = 1.0
+            }
+
+            override fun onSuccess() {
+                val t = err
+                if (t != null) {
+                    Orchestrator.notifyNothingExtracted(
+                        project,
+                        "目录 ${dir.presentableUrl}（内部异常: ${t.javaClass.simpleName}）"
+                    )
+                    return
+                }
+                val c = collection ?: return
+                if (c.processors.isEmpty()) {
+                    Orchestrator.notifyNothingExtracted(project, "目录 ${dir.presentableUrl}")
+                    return
+                }
+                launchDirWrite(project, c, dir)
+            }
+        })
+    }
+
+    /** 目录收集完成后，弹 Dialog → 确认后起写入 Task（与单文件写入完全相同的编排）。 */
+    private fun launchDirWrite(
+        project: Project,
+        collection: Orchestrator.Collection,
+        dir: VirtualFile,
+    ) {
         val dialog = ExtractedStringsDialog(
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
         if (dialog.showAndGet()) {
-            // 【问题 1 修复：目录写入阶段加进度条 + 逐文件反馈】单 command 原子写入。
             ProgressManager.getInstance().run(
                 object : Task.Backgroundable(
                     project,
