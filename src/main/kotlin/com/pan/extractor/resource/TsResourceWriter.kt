@@ -7,8 +7,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.project.Util
+import com.pan.extractor.staticparser.StaticObjectParser
 import java.nio.charset.StandardCharsets
 
 /**
@@ -16,9 +16,8 @@ import java.nio.charset.StandardCharsets
  *
  * 职责：负责 TS 对象字面量翻译资源的 merge、写回和格式保持。
  * [com.pan.extractor.editor.TsFileEditor] 的对应方法已改为委托本对象（行为 1:1，测试不破坏）。
- * 底层解析/merge helper（parseTsExportedObject / mergeFlatIntoNested / regenerateObjectLiteralBody /
- * findSpreadRefs / resolveSpreadTarget / newRegionText / applyRangeReplacements）暂留在
- * [com.pan.extractor.editor.TsFileEditor]，作为本层的底层实现，后续可继续内迁。
+ * 底层 merge/regenerate/spread 逻辑由同包 [TsObjectMerger] 承载，本对象与其自包含地
+ * 构成 Resource 写回层，不反向依赖 [com.pan.extractor.editor.TsFileEditor]。
  */
 object TsResourceWriter {
 
@@ -50,12 +49,12 @@ object TsResourceWriter {
         // 最后再把整个结果统一转回原风格，避免重写后 \r\n 与 \n 混用。
         val isCrlf = rawText.contains("\r\n")
         val text = if (isCrlf) rawText.replace("\r\n", "\n") else rawText
-        val info = TsFileEditor.parseTsExportedObject(text) ?: return null
-        val merged = TsFileEditor.mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
+        val info = StaticObjectParser.parseTsExportedObject(text) ?: return null
+        val merged = TsObjectMerger.mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
         // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
         // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
         val oldObjBody = text.substring(info.objectRange.first, info.objectRange.last + 1)
-        val newObjBody = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
+        val newObjBody = TsObjectMerger.regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
         val newText = text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.last + 1)
         return if (isCrlf) newText.replace("\n", "\r\n") else newText
     }
@@ -73,9 +72,9 @@ object TsResourceWriter {
         dropExistingKeys: Set<String> = emptySet()
     ): List<Pair<VirtualFile, String>>? {
         val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
-        val entryInfo = TsFileEditor.parseTsExportedObject(entryText) ?: return null
+        val entryInfo = StaticObjectParser.parseTsExportedObject(entryText) ?: return null
         val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.last + 1)
-        val spreadRefs = TsFileEditor.findSpreadRefs(entryObjBody, emptyList())
+        val spreadRefs = TsObjectMerger.findSpreadRefs(entryObjBody, emptyList())
         if (spreadRefs.isEmpty()) return null
         val entryKeys = entryInfo.staticKV.keys.toSet()
 
@@ -83,25 +82,25 @@ object TsResourceWriter {
         // 共享 visited 集合防止 const 相互 spread 造成重复解析/循环依赖。
         val visited = HashSet<String>()
         val resolved = spreadRefs.mapNotNull { ref ->
-            TsFileEditor.resolveSpreadTarget(project, entryVf, entryText, ref.varName, ref.path, visited)?.let { ref to it }
+            TsObjectMerger.resolveSpreadTarget(project, entryVf, entryText, ref.varName, ref.path, visited)?.let { ref to it }
         }
         if (resolved.isEmpty()) return null // 全部无法解析 → 回退旧逻辑
         // 所有目标已识别的 key（按各自容器路径展开成入口扁平 key），用于避免重复写入
         val covered = resolved.flatMap { (ref, target) ->
-            target.existingKeys.keys.map { TsFileEditor.joinPath(ref.path, it) }
+            target.existingKeys.keys.map { TsObjectMerger.joinPath(ref.path, it) }
         }.toSet()
         val writableResolved = resolved.filter { !it.second.readOnly }
 
         // 只有只读（node_modules）目标 → 识别内容，真正新增的 key 写入口对象
         if (writableResolved.isEmpty()) {
             val entryAll = newFlatJson.filterKeys { it in entryKeys || it !in covered }
-            return listOf(entryVf to TsFileEditor.applyRangeReplacements(entryText, listOf(
-                entryInfo.objectRange to TsFileEditor.newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV, dropExistingKeys)
+            return listOf(entryVf to TsObjectMerger.applyRangeReplacements(entryText, listOf(
+                entryInfo.objectRange to TsObjectMerger.newRegionText(entryText, entryInfo.objectRange, entryAll, entryInfo.staticKV, dropExistingKeys)
             )))
         }
 
         // 为每个真正新增的 key 决定去向：优先最深的可写容器 spread 目标，否则入口
-        data class WriteUnit(val target: TsFileEditor.ResolvedSpreadTarget, val path: List<String>, val relative: MutableMap<String, String>)
+        data class WriteUnit(val target: TsObjectMerger.ResolvedSpreadTarget, val path: List<String>, val relative: MutableMap<String, String>)
         val targetWrites = linkedMapOf<String, WriteUnit>() // key = 目标文件 path
         val entryNew = mutableMapOf<String, String>()
 
@@ -109,22 +108,22 @@ object TsResourceWriter {
             if (k in entryKeys) { entryNew[k] = v; continue }
             if (k in covered) continue // 已被某个 spread 提供的 key 覆盖
             val best = writableResolved
-                .filter { TsFileEditor.isUnder(it.first.path, k) }
+                .filter { TsObjectMerger.isUnder(it.first.path, k) }
                 .maxByOrNull { it.first.path.size }
             if (best == null) { entryNew[k] = v; continue }
-            val rel = TsFileEditor.relativeKey(best.first.path, k) ?: run { entryNew[k] = v; continue }
+            val rel = TsObjectMerger.relativeKey(best.first.path, k) ?: run { entryNew[k] = v; continue }
             targetWrites.getOrPut(best.second.file.path) { WriteUnit(best.second, best.first.path, linkedMapOf()) }
                 .relative[rel] = v
         }
 
         // 组装入口写盘（含同文件 const 目标范围）
         val entryReplacements = mutableListOf<Pair<IntRange, String>>(entryInfo.objectRange to
-                TsFileEditor.newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV, dropExistingKeys))
+                TsObjectMerger.newRegionText(entryText, entryInfo.objectRange, entryNew, entryInfo.staticKV, dropExistingKeys))
         val separateWrites = mutableListOf<Pair<VirtualFile, String>>()
         for ((_, unit) in targetWrites) {
             val target = unit.target
             // 入口扁平 drop key → 该容器下的相对 key（best-effort；历史整句 key 通常在入口对象里）
-            val relativeDrop = dropExistingKeys.mapNotNull { TsFileEditor.relativeKey(unit.path, it) }.toSet()
+            val relativeDrop = dropExistingKeys.mapNotNull { TsObjectMerger.relativeKey(unit.path, it) }.toSet()
             when (target.kind) {
                 "json" -> {
                     val newTarget = JsonWriter.regenerateJsonFile(target.file, unit.relative, relativeDrop) ?: return null
@@ -132,25 +131,25 @@ object TsResourceWriter {
                 }
                 "ts" -> {
                     val targetText = Util.readVirtualFileText(project, target.file) ?: return null
-                    val newTarget = TsFileEditor.applyRangeReplacements(targetText, listOf(
-                        target.objRangeInText to TsFileEditor.newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
+                    val newTarget = TsObjectMerger.applyRangeReplacements(targetText, listOf(
+                        target.objRangeInText to TsObjectMerger.newRegionText(targetText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
                     ))
                     separateWrites.add(target.file to newTarget)
                 }
                 else -> { // const：与入口同文件，合并进同一文本替换
                     entryReplacements.add(
-                        target.objRangeInText to TsFileEditor.newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
+                        target.objRangeInText to TsObjectMerger.newRegionText(entryText, target.objRangeInText, unit.relative, target.existingKeys, relativeDrop)
                     )
                 }
             }
         }
-        val entryCombined = TsFileEditor.applyRangeReplacements(entryText, entryReplacements)
+        val entryCombined = TsObjectMerger.applyRangeReplacements(entryText, entryReplacements)
         return listOf(entryVf to entryCombined) + separateWrites
     }
 
     /**
      * 把 VirtualFile 内容替换为新文本（Write 安全封装）。
-     * 迁移自 [com.pan.extractor.editor.TsFileEditor.writeVirtualFileText]（实现体 1:1）。
+     * 迁移自 [com.pan.extractor.editor.TsObjectMerger.writeVirtualFileText]（实现体 1:1）。
      * 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
      * 返回是否写入成功；newText 若以 \uFEFF 开头则以 UTF-8 BOM 写盘（跨平台保留）。
      *

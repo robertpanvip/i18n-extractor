@@ -5,7 +5,6 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
-import com.pan.extractor.editor.TsFileEditor
 import java.nio.charset.StandardCharsets
 
 /**
@@ -79,7 +78,7 @@ object JsonWriter {
             return applyJsonWriteFormat(prettyGson.toJson(newFlatJson), fmt)
         }
         val existingMap = jsonElementToNestedMap(rootJson)
-        val merged = TsFileEditor.mergeFlatIntoNested(existingMap, newFlatJson, dropExistingKeys)
+        val merged = TsObjectMerger.mergeFlatIntoNested(existingMap, newFlatJson, dropExistingKeys)
         return applyJsonWriteFormat(prettyGson.toJson(merged), fmt)
     }
 
