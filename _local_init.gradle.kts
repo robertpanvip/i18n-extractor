@@ -53,6 +53,122 @@ run {
     }
 }
 
+// ---------------- 0b. Java 21 toolchain 自动探测 ----------------
+//   背景：build.gradle.kts 里 `java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }`
+//   要求编译期必须使用 Java 21。但在 mise / sdkman 等版本管理器环境下，经常出现：
+//     - JAVA_HOME 默认指向 Java 25（最新 shim）；
+//     - Gradle toolchain 自动探测不会扫 mise / sdkman 的 installs 目录（或漏扫）；
+//     - 于是报错：Cannot find a Java installation matching {languageVersion=21}.
+//   解决：在 Gradle 构建最早期（settingsEvaluated 之前），主动扫描常见的 Java 管理器安装
+//   目录，把真实存在的 Java 21 根目录注入到 `org.gradle.java.installations.paths` 这个
+//   system property，让 Gradle toolchain 在后续 project configure 阶段能直接识别它们。
+//
+//   这样做的好处：
+//     · 不需要每次手工 export JAVA_HOME=.../java/21.0.2；
+//     · Gradle Launcher / Daemon 可以继续使用 JAVA_HOME（例如 Java 25）运行，
+//       toolchain 只在编译/测试等任务里切换到 Java 21（行为完全符合 Gradle 设计）；
+//     · 找不到任何 Java 21 安装时自动打印 warning，提示用户装一下（或 mise use java@21）。
+run {
+    val userHome = System.getProperty("user.home") ?: System.getenv("HOME") ?: ""
+    val expectedMajor = 21
+
+    val candidates: MutableList<java.io.File> = mutableListOf<java.io.File>().apply {
+        // mise
+        val miseRoot =
+            (System.getenv("MISE_INSTALLS_PATH") ?: System.getenv("MISE_DATA_DIR")?.let { "$it/installs" }
+            ?: "$userHome/.local/share/mise/installs").let { java.io.File(it, "java") }
+        if (miseRoot.isDirectory) miseRoot.listFiles()?.let { addAll(it) }
+        // sdkman
+        val sdkCandidates = java.io.File(System.getenv("SDKMAN_CANDIDATES_DIR") ?: "$userHome/.sdkman/candidates/java")
+        if (sdkCandidates.isDirectory) sdkCandidates.listFiles()?.let { addAll(it) }
+        // asdf
+        val asdfInstalls = java.io.File(System.getenv("ASDF_DATA_DIR") ?: "$userHome/.asdf/installs/java")
+        if (asdfInstalls.isDirectory) asdfInstalls.listFiles()?.let { addAll(it) }
+        // Linux 发行版 /usr/lib/jvm
+        val libJvm = java.io.File("/usr/lib/jvm")
+        if (libJvm.isDirectory) libJvm.listFiles()?.let { addAll(it) }
+        // macOS system JavaVirtualMachines
+        val jvmsDir = java.io.File("/Library/Java/JavaVirtualMachines")
+        if (jvmsDir.isDirectory) jvmsDir.listFiles()?.forEach { f -> add(java.io.File(f, "Contents/Home")) }
+        // 用户显式的 JAVA_HOME（如果正好是 21 也算进去，保险）
+        System.getenv("JAVA_HOME")?.also { add(java.io.File(it)) }
+    }.distinct().toMutableList()
+
+    fun javaMajorOf(home: java.io.File): Int? {
+        val binJava = java.io.File(home, "bin/java")
+        if (!binJava.isFile || !binJava.canExecute()) return null
+        val release = java.io.File(home, "release")
+        if (release.isFile) {
+            try {
+                val implVersionLine: String? = release.useLines { lines ->
+                    lines.firstOrNull { line ->
+                        line.startsWith("JAVA_VERSION=") || line.startsWith("IMPLEMENTOR_VERSION=")
+                    }
+                }
+                if (implVersionLine != null) {
+                    // JAVA_VERSION="21.0.2" / IMPLEMENTOR_VERSION="Temurin-21.0.2+13" -> 21
+                    val v = implVersionLine.substringAfter('=', missingDelimiterValue = "")
+                        .trim('"', '\'', ' ')
+                        .split('-', '.').firstNotNullOfOrNull { tok -> tok.toIntOrNull() }
+                    if (v != null) return v
+                }
+            } catch (_: Throwable) { /* 继续 fallback 到 `java -version` */ }
+        }
+        // fallback: java -version 读 stderr 第一行
+        return try {
+            val pb = ProcessBuilder(binJava.absolutePath, "-version")
+                .redirectErrorStream(true)
+            val proc = pb.start()
+            val firstLine = proc.inputStream.bufferedReader().use { it.readLine() }.orEmpty()
+            proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
+            // 'openjdk version "21.0.2" 2024-01-16' -> 21
+            Regex(""""(\d+)""").find(firstLine)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        } catch (_: Throwable) { null }
+    }
+
+    val found: MutableList<String> = mutableListOf()
+    val seen = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    for (c in candidates) {
+        if (!c.isDirectory) continue
+        val path = c.canonicalPath
+        if (!seen.add(path)) continue
+        val major = javaMajorOf(c) ?: continue
+        if (major != expectedMajor) continue
+        found.add(path)
+    }
+
+    val detectedJava21: java.io.File? = found.firstOrNull()?.let { java.io.File(it) }
+
+    // 把结果挂到 gradle.extra，让下方 allprojects {}（每个 Project 的 receiver 上下文）能取到
+    try {
+        gradle.extra.set("DETECTED_JAVA21", detectedJava21)
+    } catch (_: Throwable) { /* init script 某些版本 extra 可能不可用；fallback 到 system prop */
+        if (detectedJava21 != null) {
+            System.setProperty("init.detectedJava21", detectedJava21.absolutePath)
+        }
+    }
+
+    if (detectedJava21 != null) {
+        // 同时也顺手设一下 installations.paths，给 Gradle 将来版本的 toolchain 自动探测一个提示。
+        val curPaths = System.getProperty("org.gradle.java.installations.paths").orEmpty().trim()
+        val all = (curPaths.split(',').map { it.trim() }.filter { it.isNotEmpty() } + found).distinct()
+        System.setProperty("org.gradle.java.installations.paths", all.joinToString(","))
+        System.setProperty("org.gradle.java.installations.auto-download", "false")
+        println(
+            "  [init:java21] 已探测到 Java $expectedMajor：${detectedJava21.path.takeLast(48)}"
+        )
+        println("  [init:java21] 将在每个 project 中用 task-level javaHome/jdkHome 强制使用该 JDK")
+    } else {
+        val warn = StringBuilder().apply {
+            appendLine("  [init:java21] ⚠ 未在本地检测到 Java $expectedMajor 安装。")
+            appendLine("    build.gradle.kts 要求 toolchain languageVersion=21，Gradle 可能报")
+            appendLine("    \"Cannot find a Java installation matching {languageVersion=21}\".")
+            appendLine("    建议：mise install java@21 ; 或 sdk install java 21-tem ; 或 apt install openjdk-21-jdk")
+        }.toString()
+        System.err.println(warn)
+    }
+}
+
 // ---------------- pluginManagement: 腾讯优先，官方兜底 ----------------
 //   若腾讯镜像不可达（某些容器环境只有 IPv6 公网、腾讯 IPv6 不通），Gradle 会继续尝试下一
 //   个仓库；所以保证 gradlePluginPortal() / mavenCentral() 也同时存在，避免"只有腾讯、
@@ -90,6 +206,96 @@ settingsEvaluated {
 //       方的 mavenCentral()/gradlePluginPortal()/JetBrains 仓在后面，Gradle 在腾讯 408/
 //       ConnectException 后会自动 fallthrough 到下一个 repo，保证构建能跑起来。
 allprojects {
+    // ────────────────────────── Java 21 toolchain 强制覆写 ──────────────────────────
+    // 从顶部探测段拿结果：gradle.extra（首选）or system prop（fallback）
+    val detectedJava21: java.io.File? =
+        (try { gradle.extra["DETECTED_JAVA21"] as? java.io.File } catch (_: Throwable) { null })
+            ?: (System.getProperty("init.detectedJava21")?.let { java.io.File(it) }
+                ?.takeIf { it.isDirectory })
+
+    if (detectedJava21 != null) {
+        val runningMajor = System.getProperty("java.specification.version")?.toIntOrNull() ?: 21
+
+        // java-base 插件生效后：
+        //   · 让 toolchain 接受"当前 Gradle 运行的 JDK major"，保证 resolution 一定成功；
+        //   · 字节码输出仍为 21（sourceCompatibility/targetCompatibility=21）；
+        //   · 真正执行编译/测试/Javadoc 的可执行文件强制切换到我们探测到的 JDK 21。
+        // 【注意】用 afterEvaluate 包裹：build.gradle.kts 里通常会在插件 apply 之后再显式
+        // `java { toolchain { languageVersion = 21 } }`；afterEvaluate 确保"我们最后写"，
+        // 把用户的 toolchain 强制软降级到 runningMajor，否则 resolution 仍然找 21。
+        pluginManager.withPlugin("java-base") {
+            afterEvaluate {
+                configure<org.gradle.api.plugins.JavaPluginExtension> {
+                    toolchain {
+                        languageVersion.set(
+                            org.gradle.jvm.toolchain.JavaLanguageVersion.of(runningMajor)
+                        )
+                    }
+                    sourceCompatibility = org.gradle.api.JavaVersion.VERSION_21
+                    targetCompatibility = org.gradle.api.JavaVersion.VERSION_21
+                }
+                tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
+                    // 让 compileJava 产出 Java 21 字节码（与 Kotlin jvmTarget=21 对齐，
+                    // 过 IntelliJ Kotlin Gradle 插件的 "Java/Kotlin JVM-target 一致性校验"）。
+                    options.release.set(21)
+                    options.isFork = true
+                    // 真正用探测到的 JDK 21 的 javac 来编译（release=21 要求 JDK 21）
+                    options.forkOptions.javaHome = detectedJava21
+                }
+                // ══════════════════════════════════════════════════════════════════════════
+                // 说明：Test / Javadoc / JavaExec 这种"运行类"任务不再强制 executable=JDK21。
+                // 原因：Gradle 9.x 为这些任务额外维护了一个 `javaLauncher` Property（由 project
+                // toolchain 推导出 runningMajor=25），直接覆写 executable 会触发：
+                //   "Toolchain from `executable` property does not match toolchain from
+                //    `javaLauncher` property"
+                // 而我们只关心**编译产出字节码=21**（运行执行器 JDK 向上兼容字节码），直接运行
+                // JVM 25 完全能正常执行已编译成 Java 21 的 class/test class，所以保持默认即可。
+                // ══════════════════════════════════════════════════════════════════════════
+            }
+        }
+
+        // org.jetbrains.kotlin.jvm 插件：KotlinCompile.jdkHome / jvmTarget
+        // 用 Class.forName 反射，避免 init script 必须在 classpath 里有 Kotlin Gradle
+        // 插件 jar（buildscript 还没 resolve 插件就会跑 allprojects）。
+        // 同样放在 afterEvaluate 里，避免 build.gradle.kts 在插件 apply 之后再设 jvmTarget
+        // 把我们的 "21" 覆盖掉；jdkHome 通常不会被 build.gradle.kts 覆盖，但也后写以稳妥。
+        pluginManager.withPlugin("org.jetbrains.kotlin.jvm") {
+            afterEvaluate {
+                val kCompileClass: Class<*>? = try {
+                    Class.forName("org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile")
+                } catch (_: Throwable) { null }
+                if (kCompileClass != null) {
+                    val action = object : Action<org.gradle.api.Task> {
+                        override fun execute(task: org.gradle.api.Task) {
+                            if (!kCompileClass.isInstance(task)) return
+                            try {
+                                val kTaskObj: Any = task as Any
+                                val kOpts = try {
+                                    (kTaskObj.javaClass).methods
+                                        .firstOrNull { m -> m.name == "getKotlinOptions" && m.parameterCount == 0 }
+                                        ?.invoke(kTaskObj)
+                                } catch (_: Throwable) { null }
+                                if (kOpts != null) {
+                                    val kc: Class<*> = kOpts.javaClass
+                                    try {
+                                        kc.getMethod("setJdkHome", String::class.java)
+                                            .invoke(kOpts, detectedJava21.absolutePath)
+                                    } catch (_: Throwable) { /* ignore */ }
+                                    try {
+                                        kc.getMethod("setJvmTarget", String::class.java)
+                                            .invoke(kOpts, "21")
+                                    } catch (_: Throwable) { /* ignore */ }
+                                }
+                            } catch (_: Throwable) { /* 反射异常不影响构建 */ }
+                        }
+                    }
+                    tasks.configureEach(action)
+                }
+            }
+        }
+    }
+    // ────────────────────────── Java 21 toolchain 覆写结束 ──────────────────────────
+
     buildscript {
         repositories {
             // 先加腾讯前置（如后面对象为同一个 URL 不会被重复 add）
