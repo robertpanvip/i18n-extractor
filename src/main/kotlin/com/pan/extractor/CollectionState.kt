@@ -14,4 +14,10 @@ interface CollectionState {
 
     /** 探测到的翻译函数名（`t` / `$t` / `i18n.t` …），写入替换文本时使用。 */
     var tFunctionName: String
+
+    /**
+     * 全局 `$t` 别名注入标记（P1 收敛三岔）：由策略 [onGlobalDollarTNeeded] 回调在纯工具
+     * 文件命中时写入；[ImportManager.run]/[InjectionDecision] 据此决定是否注入全局别名。
+     */
+    var needInjectGlobalDollarT: Boolean
 }

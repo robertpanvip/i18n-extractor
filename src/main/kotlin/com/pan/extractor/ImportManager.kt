@@ -378,10 +378,10 @@ class ImportManager(private val processor: I18nProcessorContract) {
             val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
             val reSimple = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
             return vars.any {
-                re.containsMatchIn(it.text.replace("\\s+".toRegex(), "")) ||
+                re.containsMatchIn(it.text.replace(Util.WS_COMPACT_RE, "")) ||
                     reSimple.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+".toRegex(), "").let { t ->
-                        t.contains("const\$t=i18n.global.t")
+                    it.text.replace(Util.WS_COMPACT_RE, "").let { t ->
+                        t.contains(Util.SIGNATURE_VUE_GLOBAL_T)
                     }
             }
         }
@@ -395,10 +395,10 @@ class ImportManager(private val processor: I18nProcessorContract) {
                 reT.containsMatchIn(it.text) ||
                     reDollarT.containsMatchIn(it.text) ||
                     reTLocale.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+".toRegex(), "").let { t ->
-                        t.contains("constt=getI18n().t") ||
-                            t.contains("const\$t=getI18n().t") ||
-                            t.contains("constt=i18n.t")
+                    it.text.replace(Util.WS_COMPACT_RE, "").let { t ->
+                        t.contains(Util.SIGNATURE_REACT_GET_I18N_T) ||
+                            t.contains(Util.SIGNATURE_REACT_GET_I18N_DOLLAR_T) ||
+                            t.contains(Util.SIGNATURE_REACT_I18N_T)
                     }
             }
         }
@@ -409,7 +409,7 @@ class ImportManager(private val processor: I18nProcessorContract) {
             val re = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
             return vars.any {
                 re.containsMatchIn(it.text) ||
-                    it.text.replace("\\s+".toRegex(), "").let { t -> t.contains("consti18n=getI18n()") }
+                    it.text.replace(Util.WS_COMPACT_RE, "").let { t -> t.contains(Util.SIGNATURE_REACT_GET_I18N_ALIAS) }
             }
         }
         // React 版：检查是否已存在 getI18n 的 const 别名（$t 或 i18n 均可）
@@ -736,8 +736,6 @@ class ImportManager(private val processor: I18nProcessorContract) {
     /** run() 注入决策的参数包，把 I18nProcessor 的布尔/字符串状态收敛成一个对象。 */
     data class InjectionDecision(
         val needInjectGlobalDollarT: Boolean,
-        val needInjectReactGlobalDollarT: Boolean,
-        val needInjectSolidGlobalDollarT: Boolean,
         val reactI18nTFallbackToDollarT: Boolean,
         val tFunctionName: String,
         val hasExtractedStrings: Boolean,

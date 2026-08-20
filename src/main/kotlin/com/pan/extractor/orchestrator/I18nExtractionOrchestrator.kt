@@ -152,11 +152,13 @@ object I18nExtractionOrchestrator {
     // Phase 2 · Validate + Planner + Rewriter（单 command 原子写入）
     // ─────────────────────────────────────────────────────────────
     /**
-     * 应用阶段：把 [dialog] 的合并计划 + 输出方式落地。
+     * 应用阶段：把 [options] 的合并计划 + 输出方式落地。
      *
      * 【P0 多文件修改原子性】import 注入 + $t 替换 + 骨架合并重写 + 资源写回全部放进
      * 【单个】WriteCommandAction：任一步抛异常，IntelliJ 撤销整个 command，不做留半完成状态。
      * 写入前由 [ChangeValidator]（经 [MergeApplier.validateAllModifiableSites]）做完整校验。
+     *
+     * P2：不再接收 Swing 对话框，只消费纯数据 [ApplyOptions]（编排器不感知 UI 组件）。
      *
      * 前置条件：调用方必须处于 ProgressManager 后台任务内（本方法用 invokeAndWait 上 EDT 拿写锁）。
      *
@@ -165,10 +167,10 @@ object I18nExtractionOrchestrator {
     fun apply(
         project: Project,
         collection: Collection,
-        dialog: ExtractedStringsDialog,
+        options: ApplyOptions,
         indicator: ProgressIndicator,
     ): OutputResult {
-        val mergePlan = dialog.mergePlan
+        val mergePlan = options.mergePlan
         val dropExistingKeys = LinkedHashSet<String>()
         var output: OutputResult = OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
 
@@ -190,7 +192,7 @@ object I18nExtractionOrchestrator {
                 )
                 collection.extracted.clear()
                 collection.extracted.putAll(merged)
-                output = applyFinalOutput(project, dialog, LinkedHashMap(merged), dropExistingKeys)
+                output = applyFinalOutput(project, options, LinkedHashMap(merged), dropExistingKeys)
             }
         }
         indicator.text = "已完成单 command 原子写入（入口 / 剪贴板）"
@@ -201,19 +203,19 @@ object I18nExtractionOrchestrator {
     // 最终输出（Rewriter 层：资源写回 / 剪贴板）
     // ─────────────────────────────────────────────────────────────
     /**
-     * 最终输出：根据 dialog.outputMode + selectedEntryFile，
+     * 最终输出：根据 [options.outputMode] + [options.entryFile]，
      * 要么写回入口文件（TS/JSON），要么拷贝到剪贴板。
      * 必须在 EDT + WriteCommandAction 内部调用（调用方负责包裹）。
      */
     fun applyFinalOutput(
         project: Project,
-        dialog: ExtractedStringsDialog,
+        options: ApplyOptions,
         finalFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet(),
     ): OutputResult {
         val prettyGson = com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
-        val mode = dialog.outputMode
-        val entryVf = dialog.selectedEntryFile
+        val mode = options.outputMode
+        val entryVf = options.entryFile
         val jsonPretty = prettyGson.toJson(finalFlatJson)
 
         if (mode == OutputDestination.FILE && entryVf != null) {
@@ -256,8 +258,8 @@ object I18nExtractionOrchestrator {
             }
         }
 
-        if (dialog.json != null) {
-            val content = Util.getJsonContent(dialog.json!!)
+        if (options.clipboardJson != null) {
+            val content = Util.getJsonContent(options.clipboardJson!!)
             CopyPasteManager.getInstance().setContents(StringSelection(content))
         }
         return OutputResult(copiedToClipboard = true, overwroteEntryFile = false)

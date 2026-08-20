@@ -1,6 +1,7 @@
 package com.pan.extractor.planner
-import com.pan.extractor.ui.*
 
+import com.pan.extractor.AffixGroupCandidate
+import com.pan.extractor.DigitGroupCandidate
 
 /**
  * Planner 层 —— 把分析结果转换为「计划」（目标架构，迁移自 MergeApplier / ExtractedStringsDialog.MergePlan）。
@@ -15,12 +16,16 @@ import com.pan.extractor.ui.*
  * 一次提取计划：全部待改写站点 + 骨架合并 + 数字抽取的完整描述。
  * 当前由 [com.pan.extractor.MergeApplier] 直接消费（selectedAffix / selectedDigit /
  * blockedSiteIds 语义来自 [com.pan.extractor.ExtractedStringsDialog.MergePlan]）。
+ *
+ * P2（类型安全）：selectedAffix / selectedDigit 由曾经的 `List<Any>` 收紧为具体的
+ * [AffixGroupCandidate] / [DigitGroupCandidate] 候选类型，与因式分解层模型直接对齐，
+ * 避免下游用 `as?` 强转 / 类型擦除。
  */
 data class ExtractionPlan(
     /** 用户勾选的公共前后缀合并组（原文承载：骨架 + 差异段）。 */
-    val selectedAffix: List<Any>,
+    val selectedAffix: List<AffixGroupCandidate>,
     /** 用户勾选的数字抽取组（差异段为数字字面量）。 */
-    val selectedDigit: List<Any>,
+    val selectedDigit: List<DigitGroupCandidate>,
     /** 被合并承载、应跳过普通单句替换的 siteId 集合。 */
     val blockedSiteIds: Set<String> = emptySet(),
     /** 计划附带说明（供 UI / 日志展示）。 */
@@ -136,14 +141,8 @@ class CollectedPlan {
     /** 检测到的翻译函数名（\$t / t / i18n.t / i18n.global.t），默认 \$t。 */
     var tFunctionName: String = "\$t"
 
-    /** 全局 \$t 别名注入标记（Vue 非 SFC 纯 TS）。 */
+    /** 全局 \$t 别名注入标记（Vue/React/Solid 纯工具文件，由策略回调写入）。 */
     var needInjectGlobalDollarT: Boolean = false
-
-    /** React 全局 t 别名注入标记（React 纯工具 TS）。 */
-    var needInjectReactGlobalDollarT: Boolean = false
-
-    /** Solid 全局 \$t 别名注入标记（Solid 纯工具 TS）。 */
-    var needInjectSolidGlobalDollarT: Boolean = false
 
     /** React i18n.t 回退 getI18n 的 t 别名标记。 */
     var reactI18nTFallbackToDollarT: Boolean = false

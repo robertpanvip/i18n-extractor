@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.pan.extractor.orchestrator.ApplyOptions
 import com.pan.extractor.orchestrator.I18nExtractionOrchestrator as Orchestrator
 import com.pan.extractor.ui.*
 
@@ -182,7 +183,16 @@ class AllI18nExtractorAction : AnAction() {
                     indicator.text = "准备写入：预计算合并分组..."
                     indicator.text2 = ""
                     // 单 command 原子写入（import + $t + 骨架 + 资源写回），失败整体回滚。
-                    output = Orchestrator.apply(project, collection, dialog, indicator)
+                    output = Orchestrator.apply(
+                        project, collection,
+                        ApplyOptions(
+                            mergePlan = dialog.mergePlan,
+                            outputMode = dialog.outputMode,
+                            entryFile = dialog.selectedEntryFile,
+                            clipboardJson = dialog.json,
+                        ),
+                        indicator,
+                    )
                     indicator.fraction = 1.0
                 }
 

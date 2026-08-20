@@ -74,7 +74,7 @@ object I18nPsiTools {
      * ES6ImportDeclaration 内部属性名变化很大，`decl.text` 即源代码字符串是稳定的。
      */
     fun hasImportedSpecifier(decl: ES6ImportDeclaration, moduleName: String, wantedName: String): Boolean {
-        val text = decl.text.replace("\\s+".toRegex(), " ")
+        val text = decl.text.replace(Util.WS_COMPACT_RE, " ")
         // 1. from 路径检查（单双引号 / 分号 / 末尾空白 / index 尾缀 都容忍）
         val want = moduleName.lowercase()
         val fromMatch = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
@@ -123,7 +123,7 @@ object I18nPsiTools {
         destructureNameFrom: String,
         destructureAlias: String,
     ): Boolean {
-        val text = scope.text.replace("\\s+".toRegex(), " ")
+        val text = scope.text.replace(Util.WS_COMPACT_RE, " ")
         if (!text.contains("$callee(")) return false
 
         // 插件注入的规范形式：const { t: $t } = useI18n()（用户手写同款也算）
@@ -384,7 +384,7 @@ object I18nPsiTools {
         // 它并非真实 i18n 实例 → 视为普通调用，参数中的中文正常进入提取（宁可多提不漏提）。
         if (isLocalPlainReceiverShadowingBase(method)) return false
         // 多行链式（如 i18n\n.global\n.t）的 text 会含空白，需剥除后再匹配。
-        val text = method.text?.replace("\\s".toRegex(), "")
+        val text = method.text?.replace(Util.WS_COMPACT_RE, "")
         // 接收者必须是 i18n（支持 i18n.t / i18n.global.t / i18n.tc / i18n.global.tc 等）
         return text != null && text.startsWith("i18n.") && (text.endsWith(".t") || text.endsWith(".tc"))
     }

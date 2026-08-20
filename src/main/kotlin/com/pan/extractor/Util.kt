@@ -13,6 +13,37 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 
 object Util {
+
+    /**
+     * 空白压缩正则：把连续空白（含空格 / Tab / 换行）整体替换为空串。
+     *
+     * P2（重复内联 Regex 收敛）：各策略做「宽松文本特征匹配」时先用它压缩空白
+     * （`const $t = i18n.global.t` → `const$t=i18n.global.t`），避免在十余处散落
+     * `"\\s+".toRegex()`。行为与旧内联用法完全一致。
+     */
+    val WS_COMPACT_RE: Regex = "\\s+".toRegex()
+
+    // ────────────────────────────────────────────────────────────────
+    // 全局 `$t` / `i18n` 别名「紧凑签名」常量表（P2 收敛硬编码文本特征）。
+    //
+    // 各策略检测「文件里是否已存在等价别名」时，会先把源码文本用 [WS_COMPACT_RE]
+    // 压掉空白（`const $t = i18n.global.t` → 紧凑串）再做 contains 匹配。这些签名串
+    // 集中在此，避免在 ImportManager / Vue / React / Solid 策略里散落重复字面量；
+    // 若要新增一种别名写法，只改这一处即可（常量表语义，行为与旧内联一致）。
+    // ────────────────────────────────────────────────────────────────
+    /** `const $t = i18n.global.t`（Vue 全局别名）。 */
+    const val SIGNATURE_VUE_GLOBAL_T = "const\$t=i18n.global.t"
+    /** `const $t = …`（Solid 全局别名，宽松前缀）。 */
+    const val SIGNATURE_SOLID_GLOBAL_T = "const\$t="
+    /** `const t = getI18n().t`（React 回落别名）。 */
+    const val SIGNATURE_REACT_GET_I18N_T = "constt=getI18n().t"
+    /** `const $t = getI18n().t`（React 回落别名，\$t 变体）。 */
+    const val SIGNATURE_REACT_GET_I18N_DOLLAR_T = "const\$t=getI18n().t"
+    /** `const t = i18n.t`（React 直连别名）。 */
+    const val SIGNATURE_REACT_I18N_T = "constt=i18n.t"
+    /** `const i18n = getI18n()`（React i18n 全局别名）。 */
+    const val SIGNATURE_REACT_GET_I18N_ALIAS = "consti18n=getI18n()"
+
     /** 常见 helper：文本中是否包含至少 1 个目标语言的字符。
      *  - 用于判断差异段是否要嵌套 `$t('差异')`（含目标语言→嵌套；纯英文/数字→直接写字符串字面量）。
      *  - 目标语言取决于全局设置（默认仅中文，向后兼容）。*/

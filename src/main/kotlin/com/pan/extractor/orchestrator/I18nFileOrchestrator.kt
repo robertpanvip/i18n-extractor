@@ -4,9 +4,6 @@ import com.pan.extractor.EntryFileLocator
 import com.pan.extractor.I18nFrameworkRegistry
 import com.pan.extractor.ImportManager
 import com.pan.extractor.I18nProcessor
-import com.pan.extractor.ReactI18nextStrategy
-import com.pan.extractor.SolidI18nStrategy
-import com.pan.extractor.VueI18nStrategy
 import com.pan.extractor.model.ExtractionContext
 import com.intellij.psi.PsiFile
 
@@ -46,20 +43,12 @@ open class I18nFileOrchestrator {
         processor.analyzer.tFunctionName = processor.analyzer.framework.tFunctionName
 
         val f = containingFile ?: (context.psiFile as? PsiFile)
-        // React 文件统一短 t（与 framework.tFunctionName="t" 一致；P0 之后已默认就是 t，此处冗余但保留）
-        if (f != null && processor.analyzer.framework is ReactI18nextStrategy && processor.analyzer.tFunctionName == "\$t") {
-            processor.analyzer.tFunctionName = "t"
-        }
+        // React/普通框架统一短 t（与 framework.tFunctionName 一致；P0 之后已默认就是 t，此处冗余但保留）。
+        // 此处不再做 isReact 判定，统一按策略默认名处理：纯工具文件需要全局别名时由策略回调再按需调整。
         if (f != null && processor.analyzer.framework.detectGlobalDollarTNeeded(f)) {
-            // React/Vue/Solid 纯工具文件注入全局别名标记的预判（见 I18nProcessor 处详注）。
-            when (processor.analyzer.framework) {
-                is ReactI18nextStrategy -> processor.analyzer.needInjectReactGlobalDollarT = true
-                is SolidI18nStrategy -> {
-                    processor.analyzer.needInjectSolidGlobalDollarT = true
-                    processor.analyzer.tFunctionName = "\$t" // Solid 默认是 t，纯工具 TS 统一改 $t（与 Vue 一致）
-                }
-                is VueI18nStrategy -> processor.analyzer.needInjectGlobalDollarT = true
-            }
+            // React/Vue/Solid 纯工具文件注入全局别名标记：决策下沉到策略自内向，
+            // 由策略 onGlobalDollarTNeeded 回调写入 needInjectGlobalDollarT / tFunctionName（P1 收敛三岔）。
+            processor.analyzer.framework.onGlobalDollarTNeeded(processor.analyzer)
         }
 
         processor.analyzer.collectExistingTKeys(context.psiFile)
@@ -85,8 +74,6 @@ open class I18nFileOrchestrator {
             framework = analyzer.framework,
             decision = ImportManager.InjectionDecision(
                 needInjectGlobalDollarT = analyzer.needInjectGlobalDollarT,
-                needInjectReactGlobalDollarT = analyzer.needInjectReactGlobalDollarT,
-                needInjectSolidGlobalDollarT = analyzer.needInjectSolidGlobalDollarT,
                 reactI18nTFallbackToDollarT = analyzer.reactI18nTFallbackToDollarT,
                 tFunctionName = processor.analyzer.tFunctionName,
                 hasExtractedStrings = processor.analyzer.extractedStrings.isNotEmpty(),

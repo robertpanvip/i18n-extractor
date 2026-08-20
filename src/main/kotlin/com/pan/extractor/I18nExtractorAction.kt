@@ -1,5 +1,6 @@
 package com.pan.extractor
 
+import com.pan.extractor.orchestrator.ApplyOptions
 import com.pan.extractor.orchestrator.I18nExtractionOrchestrator as Orchestrator
 import com.pan.extractor.ui.*
 
@@ -120,7 +121,16 @@ class I18nExtractorAction : AnAction() {
                         // —— 写入 PSI 替换（含合并计划应用），单 command 原子提交 ——
                         indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
                         indicator.fraction = 0.1
-                        output = Orchestrator.apply(project, collection, dialog, indicator)
+                        output = Orchestrator.apply(
+                            project, collection,
+                            ApplyOptions(
+                                mergePlan = dialog.mergePlan,
+                                outputMode = dialog.outputMode,
+                                entryFile = dialog.selectedEntryFile,
+                                clipboardJson = dialog.json,
+                            ),
+                            indicator,
+                        )
                         indicator.fraction = 1.0
                     }
 
@@ -196,7 +206,16 @@ class I18nExtractorAction : AnAction() {
                         indicator.isIndeterminate = false
                         indicator.text = "批量写入中：处理 ${collection.processors.size} 个文件"
                         indicator.fraction = 0.0
-                        output = Orchestrator.apply(project, collection, dialog, indicator)
+                        output = Orchestrator.apply(
+                            project, collection,
+                            ApplyOptions(
+                                mergePlan = dialog.mergePlan,
+                                outputMode = dialog.outputMode,
+                                entryFile = dialog.selectedEntryFile,
+                                clipboardJson = dialog.json,
+                            ),
+                            indicator,
+                        )
                         indicator.fraction = 1.0
                     }
 

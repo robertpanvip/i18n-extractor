@@ -60,7 +60,7 @@ object ReactIntlStrategy : I18nFramework {
      */
     override fun buildCallExpression(fn: String, keyLiteral: String, paramsLiteral: String): String {
         val idObject = "{ id: $keyLiteral }"
-        return if (paramsLiteral.trim().replace("\\s+".toRegex(), "") == "{}") {
+        return if (paramsLiteral.trim().replace(Util.WS_COMPACT_RE, "") == "{}") {
             "$fn($idObject)"
         } else {
             "$fn($idObject, $paramsLiteral)"

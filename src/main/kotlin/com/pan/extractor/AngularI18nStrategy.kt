@@ -48,7 +48,7 @@ object AngularI18nStrategy : I18nFramework {
      * 而非函数调用，故忽略 [fn]，直接拼管道形态。
      */
     override fun buildCallExpression(fn: String, keyLiteral: String, paramsLiteral: String): String {
-        return if (paramsLiteral.trim().replace("\\s+".toRegex(), "") == "{}") {
+        return if (paramsLiteral.trim().replace(Util.WS_COMPACT_RE, "") == "{}") {
             "$keyLiteral | translate"
         } else {
             "$keyLiteral | translate: $paramsLiteral"

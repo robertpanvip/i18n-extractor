@@ -1,6 +1,7 @@
 package com.pan.extractor.resource
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -146,13 +147,28 @@ object TsResourceWriter {
      * 迁移自 [com.pan.extractor.TsFileEditor.writeVirtualFileText]（实现体 1:1）。
      * 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。
      * 返回是否写入成功；newText 若以 \uFEFF 开头则以 UTF-8 BOM 写盘（跨平台保留）。
+     *
+     * P0（可撤销性）：常规路径改走 Document 层 —— 在同一 WriteCommandAction 内调用
+     * [com.intellij.openapi.editor.Document.setText] 会产生 undoable edit，Ctrl+Z 可撤销；
+     * 仅 BOM 场景（Document 无法表达 \uFEFF，属极罕见）保留 VFS 二进制写盘回退。
      */
     fun writeVirtualFileText(entryVf: VirtualFile, newText: String): Boolean {
         return try {
+            if (!newText.startsWith('\uFEFF')) {
+                val document = FileDocumentManager.getInstance().getDocument(entryVf)
+                if (document != null) {
+                    // 必须在 WriteCommandAction 内调用：Document 修改进入撤销栈（P0 修复）。
+                    document.setText(newText)
+                    // Document 是内存缓冲：显式落盘，使 VFS 内容（contentsToByteArray / 其它读取）同步
+                    // 到这次写入；否则 undo 命令结束前磁盘仍是旧内容，读取方会读到过期数据。
+                    FileDocumentManager.getInstance().saveDocument(document)
+                    return true
+                }
+            }
+            // 无内存 Document 或 BOM 场景回退：setBinaryContent(content, startOffset, endOffset, requestor)
+            // 会把 content 插入替换原文件的 [startOffset, endOffset) 区间。endOffset 必须取「原文件长度」
+            // 而非新内容长度，否则当新内容比原文件短时，原文件尾部旧字节会被保留，造成文件损坏（P0）。
             val bytes = newText.toByteArray(StandardCharsets.UTF_8)
-            // setBinaryContent(content, startOffset, endOffset, requestor) 会把 content 插入替换
-            // 原文件的 [startOffset, endOffset) 区间。endOffset 必须取「原文件长度」而非新内容长度，
-            // 否则当新内容比原文件短时，原文件尾部旧字节会被保留，造成文件损坏（P0）。
             entryVf.setBinaryContent(bytes, 0L, entryVf.length, null)
             true
         } catch (_: Exception) {

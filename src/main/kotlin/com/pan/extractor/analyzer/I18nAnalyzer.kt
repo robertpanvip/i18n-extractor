@@ -77,15 +77,9 @@ class I18nAnalyzer(
         get() = plan.framework ?: GenericStrategy
         set(value) { plan.framework = value }
 
-    var needInjectGlobalDollarT: Boolean
+    override var needInjectGlobalDollarT: Boolean
         get() = plan.needInjectGlobalDollarT
         set(value) { plan.needInjectGlobalDollarT = value }
-    var needInjectReactGlobalDollarT: Boolean
-        get() = plan.needInjectReactGlobalDollarT
-        set(value) { plan.needInjectReactGlobalDollarT = value }
-    var needInjectSolidGlobalDollarT: Boolean
-        get() = plan.needInjectSolidGlobalDollarT
-        set(value) { plan.needInjectSolidGlobalDollarT = value }
     var reactI18nTFallbackToDollarT: Boolean
         get() = plan.reactI18nTFallbackToDollarT
         set(value) { plan.reactI18nTFallbackToDollarT = value }
@@ -200,8 +194,8 @@ class I18nAnalyzer(
     }
 
     private fun detectTFunctionName(call: JSCallExpression, root: PsiElement) {
-        if (needInjectGlobalDollarT || needInjectReactGlobalDollarT || needInjectSolidGlobalDollarT) {
-            tFunctionName = if (needInjectReactGlobalDollarT) "t" else "\$t"
+        if (needInjectGlobalDollarT) {
+            // 纯工具全局别名场景：tFunctionName 已由策略 onGlobalDollarTNeeded 回调设好，不再覆盖
             return
         }
         val detected = framework.detectExistingTFunctionName(call) ?: return
@@ -296,7 +290,7 @@ class I18nAnalyzer(
         if (children.size == 1) sb.append(quote)
         val raw = sb.toString().trim()
 
-        val compactRaw = raw.replace(Regex("\\s"), "")
+        val compactRaw = raw.replace(Util.WS_COMPACT_RE, "")
         if (compactRaw.startsWith("`\${\$t(")) {
             return
         }
