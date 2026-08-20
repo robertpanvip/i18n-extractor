@@ -23,6 +23,14 @@ package com.pan.extractor.staticparser
  */
 object StaticValueParser {
 
+    /**
+     * 递归深度上限。静态解析包含模板字面量、对象/数组、字符串拼接、一元运算等多处相互递归，
+     * 且 concat 片段等可彼此嵌套。设一个硬上限：一旦超过即按"非静态"返回 null，
+     * 保证无论输入如何病态（指数级嵌套/病态拼接）都不可能再触发 StackOverflowError。
+     * 512 层对正常产物（嵌套 ≤ 数十层）绰绰有余，开销仅是每次递归比一个 int。
+     */
+    private const val MAX_PARSE_DEPTH = 512
+
     /** 数字字面量正则（含进制/BigInt/科学计数/分隔符），高频复用避免重编译。 */
     private val HEX_RE = Regex("""-?0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?""")
     private val BIN_RE = Regex("""-?0[bB][01]+(_[01]+)*n?""")
@@ -160,7 +168,11 @@ object StaticValueParser {
     }
 
     /** 尝试把一个表达式片段解析为静态值；非静态返回 null。 */
-    fun tryParseStaticValue(expr: String): Any? {
+    fun tryParseStaticValue(expr: String): Any? = parseStaticValue(expr, 0)
+
+    /** 递归核心：所有相互递归统一经过 [depth] 硬上限，超限即返回 null（杜绝栈溢出）。 */
+    internal fun parseStaticValue(expr: String, depth: Int): Any? {
+        if (depth > MAX_PARSE_DEPTH) return null
         val s = stripValueSuffixes(expr)
         if (s.isEmpty()) return null
 
@@ -175,12 +187,12 @@ object StaticValueParser {
         // 一元运算：! / - / + （仅作用于静态字面量）
         when {
             s.startsWith("!") -> {
-                val inner = tryParseStaticValue(s.substring(1)) ?: return null
+                val inner = parseStaticValue(s.substring(1), depth + 1) ?: return null
                 val b = inner as? Boolean ?: return null
                 return !b
             }
             s.startsWith("-") || s.startsWith("+") -> {
-                val inner = tryParseStaticValue(s.substring(1)) ?: return null
+                val inner = parseStaticValue(s.substring(1), depth + 1) ?: return null
                 return applyUnaryPrefix(s[0], inner) ?: return null
             }
         }
@@ -192,7 +204,7 @@ object StaticValueParser {
         // 落回字面量分支则能正确解析出普通字符串 "a+b"。
         val concatParts = if (looksLikeConcat(s)) splitTopLevelPlus(s) else emptyList()
         if (concatParts.size >= 2) {
-            return tryEvaluateConcat(concatParts)
+            return tryEvaluateConcat(concatParts, depth + 1)
         }
 
         // 数字（进制）：十六进制 / 二进制 / 八进制 / BigInt
@@ -217,16 +229,16 @@ object StaticValueParser {
             return StaticObjectParser.unquoteString(s)
         }
         if (s.startsWith("`") && s.endsWith("`") && s.length >= 2) {
-            return evaluateTemplateLiteral(s) ?: return null
+            return evaluateTemplateLiteral(s, depth + 1) ?: return null
         }
 
         // 对象字面量
         if (s.startsWith("{") && s.endsWith("}")) {
-            return StaticObjectParser.parseObjectLiteralBody(s)
+            return StaticObjectParser.parseObjectLiteralBody(s, depth + 1)
         }
         // 数组字面量
         if (s.startsWith("[") && s.endsWith("]")) {
-            return parseArrayLiteralBody(s)
+            return parseArrayLiteralBody(s, depth + 1)
         }
 
         // 其他（引用、spread、函数调用、三元、运算等）→ 跳过
@@ -234,14 +246,14 @@ object StaticValueParser {
     }
 
     /** 解析数组字面量内部。 */
-    fun parseArrayLiteralBody(raw: String): List<Any?> {
+    private fun parseArrayLiteralBody(raw: String, depth: Int): List<Any?> {
         val inner = raw.trim().let { if (it.startsWith("[") && it.endsWith("]")) it.substring(1, it.length - 1) else it }
         val elements = StaticObjectParser.splitTopLevelArrayElements(inner)
         val result = mutableListOf<Any?>()
         for (e in elements) {
             if (e.isBlank()) continue
             if (e.trimStart().startsWith("...")) continue
-            val v = tryParseStaticValue(e)
+            val v = parseStaticValue(e, depth + 1)
             if (v != null) result.add(v)
         }
         return result
@@ -271,7 +283,7 @@ object StaticValueParser {
      * 模板字面量求值：`` `prefix${'静态'}suffix` `` → "prefix静态suffix"。
      * 仅当所有 `${...}` 内部都是静态字面量时才求值；含动态插值返回 null。
      */
-    private fun evaluateTemplateLiteral(s: String): String? {
+    private fun evaluateTemplateLiteral(s: String, depth: Int): String? {
         val inner = s.substring(1, s.length - 1)
         val sb = StringBuilder()
         var lastEnd = 0
@@ -280,9 +292,9 @@ object StaticValueParser {
             val expr = m.groupValues[1].trim()
             // 嵌套模板字面量在 ${} 内 → 递归求值
             val v = if (expr.startsWith("`") && expr.endsWith("`")) {
-                evaluateTemplateLiteral(expr)
+                evaluateTemplateLiteral(expr, depth + 1)
             } else {
-                tryParseStaticValue(expr)?.toString()
+                parseStaticValue(expr, depth + 1)?.toString()
             }
             if (v == null) return null
             sb.append(v)
@@ -305,10 +317,10 @@ object StaticValueParser {
      * 仅当所有操作数都是静态字符串（含模板字面量）时返回拼接结果；否则 null。
      * [parts] 必须已由 [splitTopLevelPlus] 切为 ≥2 段（调用方保证），避免对单段无限递归。
      */
-    private fun tryEvaluateConcat(parts: List<String>): String? {
+    private fun tryEvaluateConcat(parts: List<String>, depth: Int): String? {
         val sb = StringBuilder()
         for (part in parts) {
-            val v = tryParseStaticValue(part) ?: return null
+            val v = parseStaticValue(part, depth + 1) ?: return null
             if (v !is String) return null  // 仅字符串拼接可静态求值；数字+数字按算术不算静态文案
             sb.append(v)
         }

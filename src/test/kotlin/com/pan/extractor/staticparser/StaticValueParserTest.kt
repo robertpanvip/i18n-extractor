@@ -152,4 +152,28 @@ class StaticValueParserTest {
     @Test fun `function call rejects`() { assertNull(parse("makeText()")) }
     @Test fun `spread rejects`() { assertNull(parse("...arr")) }
     @Test fun `ternary with variable rejects`() { assertNull(parse("cond ? 'a' : 'b'")) }
+
+    // ── 栈溢出回归（递归深度上限）────────────────────────────
+    // 无论输入怎么病态，都不允许再抛 StackOverflowError（曾出现过 concat 自环 / 深嵌套死循环）。
+    @Test fun `pathologically deep unary nesting does not overflow`() {
+        // 2000 层一元 ! 嵌套。若没用深度上限，会直接 StackOverflowError。
+        val expr = "!".repeat(2000) + "true"
+        val r = parse(expr) // 深度超过上限 → 返回 null（或正常布尔），但绝不能抛异常
+        assertTrue("深嵌套一元不应抛栈溢出（结果: $r）", r == null || r == true)
+    }
+    @Test fun `pathologically deep object nesting does not overflow`() {
+        // 2000 层 `{a:...}` 嵌套。递归经 parseObjectLiteralBody <-> parseStaticValue。
+        val n = 2000
+        val expr = "{a:".repeat(n) + "1" + "}".repeat(n)
+        val r = parse(expr) // 超深度上限 → null；再深也不崩
+        assertTrue("深嵌套对象不应抛栈溢出（结果: $r）", r == null || r is Map<*, *>)
+    }
+    @Test fun `deep template literal nesting does not overflow`() {
+        // 深嵌套模板字面量。evaluateTemplateLiteral 相互递归，不允许抛栈溢出。
+        val n = 2000
+        val closed = "`".repeat(n) + "'x'" + "`".repeat(n)
+        val r = parse(closed)
+        // 无 ${} 插值时按普通模板返回其原始内容；关键是绝不抛 StackOverflowError
+        assertTrue("深嵌套模板不应抛栈溢出（结果: $r）", r == null || r is String)
+    }
 }

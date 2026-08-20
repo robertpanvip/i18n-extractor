@@ -310,4 +310,31 @@ class CommonPrefixSuffixFactorizerTest {
         // 2 万条「大表 + 大量小分组」负载在 O(k^2) 下应落在秒级；给足余量避免 CI 抖动。
         assertTrue("factorize 2 万条同桶消息耗时 ${elapsedMs}ms，疑似退化为 O(k^3)，实际 affix=${affix.size}", elapsedMs < 15_000)
     }
+
+    /**
+     * 真实页面量级：单页提取出几千条、按首字分量数十桶、每桶几十条。桶小 + 邻居索引，
+     * 应亚秒级完成 —— 这才是"单页转换"的真实负载（不再是 2 万条同首字符的合成极端）。
+     */
+    @Test
+    fun testRealisticPageScaleCompletesInMillis() {
+        val buckets = 60
+        val perBucket = 80
+        val sites = ArrayList<SiteRef>(buckets * perBucket)
+        val prefixes = CharArray(buckets)
+        for (b in 0 until buckets) prefixes[b] = (0x4E00 + b * 7).toChar()
+        var idx = 0
+        for (b in 0 until buckets) {
+            val p = prefixes[b]
+            for (j in 0 until perBucket) {
+                val msg = "${p}请确认${(idx % 9) + 1}号操作后继续" // 桶内共享长前缀 请确认 + 数字差异
+                sites.add(site(msg, idx++))
+            }
+        }
+
+        val start = System.nanoTime()
+        CommonPrefixSuffixFactorizer.factorize(sites)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        // 真实页面量级（近 5000 条）应在亚秒内完成；宽松阈值避免 CI 抖动。
+        assertTrue("真实页面量级近 5000 条耗时 ${elapsedMs}ms，疑似退化", elapsedMs < 3_000)
+    }
 }

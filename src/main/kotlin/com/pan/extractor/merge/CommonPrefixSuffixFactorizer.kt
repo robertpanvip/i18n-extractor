@@ -1,5 +1,6 @@
 package com.pan.extractor.merge
 
+import java.util.Collections
 import com.pan.extractor.ui.*
 
 import com.intellij.openapi.application.ApplicationManager
@@ -172,21 +173,52 @@ object CommonPrefixSuffixFactorizer {
             buckets.getOrPut(first) { mutableListOf() }.add(s)
         }
 
-        val consumed = mutableSetOf<SiteRef>()
+        // 用"引用相等"的集合做成员判断。SiteRef 是 data class，默认 hashCode/equals 要遍历 7 个字段
+        // （含 VirtualFile 等），在热点里会被调用上千万次，非常昂贵；而每个 SiteRef 引用唯一、我们只
+        // 做同一列表内的引用比较，用 identity 集合即可把 contains 降到纯引用对比。
+        @Suppress("UNCHECKED_CAST")
+        fun <T : Any> identitySet(): MutableSet<T> =
+            Collections.newSetFromMap(java.util.IdentityHashMap<T, Boolean>())
+
+        val consumed = identitySet<SiteRef>()
         val results = mutableListOf<AffixGroupCandidate>()
         var idSeq = 0
 
         for ((_, bucket) in buckets) {
             val list = bucket.sortedByDescending { it.originalMessage.length }.toMutableList()
+
+            // 【性能】邻居索引：可合并配对必须「前 minAffix 字相同」或「后 minAffix 字相同」，
+            // 否则在阈值 (pLen<minAffix && sLen<minAffix) 处必被丢弃。因此只与这两种邻居比较，
+            // 把桶内 pair 比较从全量 O(k^2) 降到 O(∑group²)，单桶上规模时不退化；合并结果不变
+            // （任何原先可合并的配对都必是邻居，非邻居配对原本也会在阈值处被拒）。
+            val byHead = HashMap<String, MutableList<SiteRef>>()
+            val byTail = HashMap<String, MutableList<SiteRef>>()
+            for (s in list) {
+                val m = s.originalMessage
+                byHead.getOrPut(m.take(minAffix)) { mutableListOf() }.add(s)
+                byTail.getOrPut(m.takeLast(minAffix)) { mutableListOf() }.add(s)
+            }
+
+            // 当前仍"未消费"的桶内站点集合，与 list 同步增删；用它做 O(1) 成员判断，
+            // 从而在收集候选时只遍历邻居集合而不再扫整个 list（否则又是 O(k^2)）。
+            val remaining = identitySet<SiteRef>(); remaining.addAll(list)
+
             while (list.isNotEmpty()) {
                 val anchor = list.removeFirst()
+                remaining.remove(anchor)
                 if (anchor in consumed) continue
+                // 候选范围 = 串集里与 anchor 同头/同尾的邻居（去重）
+                val am = anchor.originalMessage
+                val neighbors = identitySet<SiteRef>()
+                for (o in byHead[am.take(minAffix)] ?: emptyList()) if (o !== anchor) neighbors.add(o)
+                for (o in byTail[am.takeLast(minAffix)] ?: emptyList()) if (o !== anchor) neighbors.add(o)
+
                 val candidates = mutableListOf<Pair<SiteRef, Triple<String, String, String>>>() // siteRef -> (prefix,suffix,diff)
-                for (other in list) {
-                    if (other in consumed) continue
-                    // 【性能】先用纯 char 遍历快速量出前后缀长度，绝大多数（桶内共享<阈值）的配对
-                    // 在此即返回 null，完全避免 substring/正则分配；只有确会命中阈值的配对才物化字符串。
-                    val (p, s, d) = longestCommonAffix(anchor.originalMessage, other.originalMessage, minAffix) ?: continue
+                for (other in neighbors) {
+                    if (other !in remaining) continue   // 已被更早的组消费 / 已被用作 anchor 丢弃
+                    // 【性能】先用纯 char 遍历快速量出前后缀长度，绝大多数配对在此即返回 null，
+                    // 完全避免 substring/正则分配；只有确会命中阈值的配对才物化字符串。
+                    val (p, s, d) = longestCommonAffix(am, other.originalMessage, minAffix) ?: continue
                     candidates.add(other to Triple(p, s, d))
                 }
                 if (candidates.isEmpty()) continue
@@ -233,6 +265,7 @@ object CommonPrefixSuffixFactorizer {
                 // 线性扫描 —— 原来累加会把桶内算法从 O(k^2) 恶化成 O(k^3)，大桶（上千条同首字符）
                 // 时正是单页转换卡到 20s+ 的根因。
                 if (toRemove.isNotEmpty()) list.removeAll(toRemove)
+                if (toRemove.isNotEmpty()) remaining.removeAll(toRemove)
                 val skeleton = "$maxPrefix{N0}$maxSuffix"
                 results += AffixGroupCandidate(
                     id = "AG${++idSeq}",
@@ -270,7 +303,11 @@ object CommonPrefixSuffixFactorizer {
         // ③ 阈值早筛：不满足约定合并长度（≥2 字）直接返回，避免物化字符串
         if (pLen < minAffix && sLen < minAffix) return null
         if (pLen + sLen < minAffix) return null
-        // ④ 命中才物化
+        // ④ 覆盖率早筛：合并整体还有 ≥1/3 的校验（meaningful）。交集前后缀 ≤ 本配对前后缀，
+        //    故若本配对连较短那句的 1/3 都盖不住，则 anchor 与 other 必然双双在 meaningful 中被
+        //    拒、组不可能成立 —— 这种配对直接跳过，省掉海量 substring 分配（就是单桶慢的又一热点）。
+        if ((pLen + sLen) * 3 < minOf(a.length, b.length)) return null
+        // ⑤ 命中才物化
         val p = a.substring(0, pLen)
         val s = if (sLen > 0) a.substring(a.length - sLen) else ""
         val endA = if (sLen > 0) a.length - sLen else a.length

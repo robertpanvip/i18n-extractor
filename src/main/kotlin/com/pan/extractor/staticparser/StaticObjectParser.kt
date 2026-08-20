@@ -168,8 +168,8 @@ object StaticObjectParser {
         return null
     }
 
-    /** 解析对象字面量 { ... } 内部的静态 KV。 */
-    fun parseObjectLiteralBody(raw: String): Map<String, Any?> {
+    /** 解析对象字面量 { ... } 内部的静态 KV。[depth] 透传递归深度上限，避免深层嵌套栈溢出。 */
+    fun parseObjectLiteralBody(raw: String, depth: Int = 0): Map<String, Any?> {
         if (raw.isBlank()) return emptyMap()
         val stripped = raw.trim()
         val body = if (stripped.startsWith("{") && stripped.endsWith("}")) {
@@ -179,7 +179,7 @@ object StaticObjectParser {
         val props = splitTopLevelProperties(body)
         for (prop in props) {
             val (k, vExpr) = parseOneProperty(prop) ?: continue
-            val value = StaticValueParser.tryParseStaticValue(vExpr) ?: continue
+            val value = StaticValueParser.parseStaticValue(vExpr, depth + 1) ?: continue
             result[k] = value
         }
         return result
