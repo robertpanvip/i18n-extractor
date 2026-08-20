@@ -98,16 +98,20 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         messages: Map<String, String>,
     ) {
         val t0 = System.nanoTime()
-        val callCount = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java)
-        val descriptors = mutableListOf<FoldingDescriptor>()
-        for (call in callCount) {
-            addFoldingDescriptor(call, messages, descriptors)
-        }
-        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        if (elapsedMs >= SLOW_FOLD_MS) {
-            logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
-        } else {
-            logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
+        val descriptors = ApplicationManager.getApplication().runReadAction<MutableList<FoldingDescriptor>> {
+            val callCount = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java)
+            val descs = mutableListOf<FoldingDescriptor>()
+            for (call in callCount) {
+                addFoldingDescriptor(call, messages, descs)
+            }
+            // 日志里的 textLength 也需要读锁
+            val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+            if (elapsedMs >= SLOW_FOLD_MS) {
+                logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descs.size} elapsed=${elapsedMs}ms")
+            } else {
+                logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descs.size} elapsed=${elapsedMs}ms")
+            }
+            descs
         }
 
         if (descriptors.isEmpty()) return

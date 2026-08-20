@@ -84,27 +84,30 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
     /**
      * 后台线程：遍历 PSI 收集翻译调用，完成后 EDT 写入 inlay。
      * 将耗时的 PSI 遍历 + Symbol 解析从 UI 线程剥离，避免打开大文件时卡顿。
+     * PSI 访问必须在 read action 内执行。
      */
     private fun addFoldToggleInlaysAsync(editor: Editor, file: PsiFile, messages: Map<String, String>) {
         val t0 = System.nanoTime()
+        val fileSize = ApplicationManager.getApplication().runReadAction<Int> { file.textLength }
         val fw = I18nFrameworkRegistry.detect(file)
 
-        // 数据类：记录每个翻译调用的 offset（轻量，不持 PSI 引用）
         data class InlayTarget(val offset: Int)
 
-        val targets = mutableListOf<InlayTarget>()
-        var translationCallCount = 0
-        PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
-            if (!fw.isTranslationCall(call)) return@forEach
-            translationCallCount++
-            val key = fw.extractKey(call) ?: return@forEach
-            if (key !in messages) return@forEach
-            targets.add(InlayTarget(call.textRange.endOffset))
+        val targets = ApplicationManager.getApplication().runReadAction<MutableList<InlayTarget>> {
+            val list = mutableListOf<InlayTarget>()
+            var translationCallCount = 0
+            PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
+                if (!fw.isTranslationCall(call)) return@forEach
+                translationCallCount++
+                val key = fw.extractKey(call) ?: return@forEach
+                if (key !in messages) return@forEach
+                list.add(InlayTarget(call.textRange.endOffset))
+            }
+            val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+            val msg = "I18nFoldToggleInlay[打开] file=${file.name} size=${fileSize}B translationCalls=$translationCallCount elapsed=${elapsedMs}ms"
+            if (elapsedMs >= 100) LOG.info(msg) else LOG.debug(msg)
+            list
         }
-
-        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        val msg = "I18nFoldToggleInlay[打开] file=${file.name} size=${file.textLength}B translationCalls=$translationCallCount elapsed=${elapsedMs}ms"
-        if (elapsedMs >= 100) LOG.info(msg) else LOG.debug(msg)
 
         if (targets.isEmpty()) return
 
