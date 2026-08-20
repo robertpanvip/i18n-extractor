@@ -367,43 +367,57 @@ class AllI18nExtractorAction : AnAction() {
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
-        if (dialog.showAndGet()) {
-            ProgressManager.getInstance().run(object : Task.Backgroundable(
-                project,
-                "i18n 全项目写入中…",
-                true
-            ) {
-                private var output: Orchestrator.OutputResult =
-                    Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
+        val confirmed = try {
+            dialog.showAndGet()
+        } catch (t: Throwable) {
+            Orchestrator.notifyInternalError(project, "i18n 提取确认对话框异常", t)
+            false
+        }
+        if (confirmed) {
+            try {
+                ProgressManager.getInstance().run(object : Task.Backgroundable(
+                    project,
+                    "i18n 全项目写入中…",
+                    true
+                ) {
+                    private var output: Orchestrator.OutputResult =
+                        Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
 
-                override fun run(indicator: ProgressIndicator) {
-                    indicator.isIndeterminate = false
-                    indicator.fraction = 0.0
-                    indicator.text = "准备写入：预计算合并分组..."
-                    indicator.text2 = ""
-                    output = Orchestrator.apply(
-                        project, collection,
-                        ApplyOptions(
-                            mergePlan = dialog.mergePlan,
-                            outputMode = dialog.outputMode,
-                            entryFile = dialog.selectedEntryFile,
-                            clipboardJson = dialog.json,
-                        ),
-                        indicator,
-                    )
-                    indicator.fraction = 1.0
-                }
+                    override fun run(indicator: ProgressIndicator) {
+                        indicator.isIndeterminate = false
+                        indicator.fraction = 0.0
+                        indicator.text = "准备写入：预计算合并分组..."
+                        indicator.text2 = ""
+                        output = Orchestrator.apply(
+                            project, collection,
+                            ApplyOptions(
+                                mergePlan = dialog.mergePlan,
+                                outputMode = dialog.outputMode,
+                                entryFile = dialog.selectedEntryFile,
+                                clipboardJson = dialog.json,
+                            ),
+                            indicator,
+                        )
+                        indicator.fraction = 1.0
+                    }
 
-                override fun onSuccess() {
-                    Orchestrator.notifyExtractSuccess(
-                        project,
-                        title = "全项目国际化提取完成",
-                        extractedCount = collection.extracted.size,
-                        processedFiles = collection.fileCount,
-                        output = output,
-                    )
-                }
-            })
+                    override fun onSuccess() {
+                        Orchestrator.notifyExtractSuccess(
+                            project,
+                            title = "全项目国际化提取完成",
+                            extractedCount = collection.extracted.size,
+                            processedFiles = collection.fileCount,
+                            output = output,
+                        )
+                    }
+
+                    override fun onThrowable(error: Throwable) {
+                        Orchestrator.notifyInternalError(project, "全项目 i18n 提取写入失败", error)
+                    }
+                })
+            } catch (t: Throwable) {
+                Orchestrator.notifyInternalError(project, "全项目 i18n 提取：启动后台任务失败", t)
+            }
         } else if (collection.extracted.isEmpty()) {
             Orchestrator.notifyNothingExtracted(project, "整个项目")
         }

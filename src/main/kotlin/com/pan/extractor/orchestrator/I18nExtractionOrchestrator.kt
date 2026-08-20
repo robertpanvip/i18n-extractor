@@ -17,7 +17,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -248,31 +250,41 @@ object I18nExtractionOrchestrator {
         // ══════════════════════════════════════════════════════════════════════════════
         val future = CompletableFuture<Pair<Map<String, String>, OutputResult>>()
         ApplicationManager.getApplication().invokeLater {
-            var mergedResult: Map<String, String>? = null
-            var result: OutputResult? = null
-            try {
-                WriteCommandAction.runWriteCommandAction(project) {
-                    val merged = MergeApplier.apply(
-                        processors = collection.processors,
-                        extracted = collection.extracted,
-                        mergePlan = mergePlan,
-                        indicator = indicator,
-                        // 当前 command 就是 command-level 原子边界，所以每个 site 的
-                        // onRewrite 无需额外 invokeAndWait（保持单 command，避免嵌套）。
-                        edtRunner = null,
-                        dropExistingKeysOut = dropExistingKeys,
-                    )
-                    collection.extracted.clear()
-                    collection.extracted.putAll(merged)
-                    result = applyFinalOutput(
-                        project, options, LinkedHashMap(merged), dropExistingKeys
-                    )
-                    mergedResult = merged
-                }
-                future.complete(mergedResult!! to result!!)
-            } catch (t: Throwable) {
-                future.completeExceptionally(t)
-            }
+            // 关键：WriteCommandAction 在 EDT 上执行，EDT 默认没有 Job/ProgressIndicator 线程上下文。
+            // 首会话 TS 依赖图未构建时，MergeApplier/ResourceApplier 内部一旦触发 resolve，
+            // JSGraphBuildExecutor.runBlockingCancellable 就会抛 IllegalStateException，
+            // 表现为「确定后完全没反应」。用 EmptyProgressIndicator + runProcess 给这段
+            // EDT 写入注入进度上下文，避免该崩溃，也保留 WCA 的可取消语义。
+            ProgressManager.getInstance().runProcess(
+                {
+                    var mergedResult: Map<String, String>? = null
+                    var result: OutputResult? = null
+                    try {
+                        WriteCommandAction.runWriteCommandAction(project) {
+                            val merged = MergeApplier.apply(
+                                processors = collection.processors,
+                                extracted = collection.extracted,
+                                mergePlan = mergePlan,
+                                indicator = indicator,
+                                // 当前 command 就是 command-level 原子边界，所以每个 site 的
+                                // onRewrite 无需额外 invokeAndWait（保持单 command，避免嵌套）。
+                                edtRunner = null,
+                                dropExistingKeysOut = dropExistingKeys,
+                            )
+                            collection.extracted.clear()
+                            collection.extracted.putAll(merged)
+                            result = applyFinalOutput(
+                                project, options, LinkedHashMap(merged), dropExistingKeys
+                            )
+                            mergedResult = merged
+                        }
+                        future.complete(mergedResult!! to result!!)
+                    } catch (t: Throwable) {
+                        future.completeExceptionally(t)
+                    }
+                },
+                EmptyProgressIndicator()
+            )
         }
 
         // 后台线程：等待 WCA 完成的同时，周期性更新 indicator，避免进度条显示"0% 不动"。
@@ -430,6 +442,26 @@ object I18nExtractionOrchestrator {
                 "$scope 中未发现硬编码中文或 t 调用，无需处理。",
                 NotificationType.WARNING
             ),
+            project
+        )
+    }
+
+    /**
+     * 内部异常兜底通知：任何「本应显示进度/完成气泡，但提前抛异常」的路径都用它提示用户，
+     * 避免出现「点了确定完全没反应」。同时把堆栈写入 LOG 便于后续定位。
+     */
+    fun notifyInternalError(project: Project, title: String, throwable: Throwable) {
+        LOG.warn("I18n Extractor 内部异常 —— $title", throwable)
+        val notificationGroup = NotificationGroupManager.getInstance()
+            .getNotificationGroup("Vue i18n 提取提示")
+        val msg = buildString {
+            append(throwable.javaClass.simpleName)
+            val m = throwable.message
+            if (!m.isNullOrBlank()) append(": ").append(m.take(140))
+            append("；详情见 idea.log，若可稳定复现请附日志反馈。")
+        }
+        Notifications.Bus.notify(
+            notificationGroup.createNotification(title, msg, NotificationType.ERROR),
             project
         )
     }

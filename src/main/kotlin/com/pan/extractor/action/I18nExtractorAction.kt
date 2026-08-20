@@ -97,44 +97,58 @@ class I18nExtractorAction : AnAction() {
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
-        if (dialog.showAndGet()) {
-            ProgressManager.getInstance().run(
-                object : Task.Backgroundable(
-                    project,
-                    "i18n 提取单文件写入中…",
-                    true
-                ) {
-                    private var output: Orchestrator.OutputResult =
-                        Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
+        val confirmed = try {
+            dialog.showAndGet()
+        } catch (t: Throwable) {
+            Orchestrator.notifyInternalError(project, "i18n 提取确认对话框异常", t)
+            false
+        }
+        if (confirmed) {
+            try {
+                ProgressManager.getInstance().run(
+                    object : Task.Backgroundable(
+                        project,
+                        "i18n 提取单文件写入中…",
+                        true
+                    ) {
+                        private var output: Orchestrator.OutputResult =
+                            Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
 
-                    override fun run(indicator: ProgressIndicator) {
-                        indicator.isIndeterminate = false
-                        indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
-                        indicator.fraction = 0.1
-                        output = Orchestrator.apply(
-                            project, collection,
-                            ApplyOptions(
-                                mergePlan = dialog.mergePlan,
-                                outputMode = dialog.outputMode,
-                                entryFile = dialog.selectedEntryFile,
-                                clipboardJson = dialog.json,
-                            ),
-                            indicator,
-                        )
-                        indicator.fraction = 1.0
-                    }
+                        override fun run(indicator: ProgressIndicator) {
+                            indicator.isIndeterminate = false
+                            indicator.text = "写入中：替换硬编码中文 + 注入 i18n 导入/别名"
+                            indicator.fraction = 0.1
+                            output = Orchestrator.apply(
+                                project, collection,
+                                ApplyOptions(
+                                    mergePlan = dialog.mergePlan,
+                                    outputMode = dialog.outputMode,
+                                    entryFile = dialog.selectedEntryFile,
+                                    clipboardJson = dialog.json,
+                                ),
+                                indicator,
+                            )
+                            indicator.fraction = 1.0
+                        }
 
-                    override fun onSuccess() {
-                        Orchestrator.notifyExtractSuccess(
-                            project,
-                            title = "单文件国际化提取完成",
-                            extractedCount = collection.extracted.size,
-                            processedFiles = 1,
-                            output = output,
-                        )
+                        override fun onSuccess() {
+                            Orchestrator.notifyExtractSuccess(
+                                project,
+                                title = "单文件国际化提取完成",
+                                extractedCount = collection.extracted.size,
+                                processedFiles = 1,
+                                output = output,
+                            )
+                        }
+
+                        override fun onThrowable(error: Throwable) {
+                            Orchestrator.notifyInternalError(project, "单文件 i18n 提取写入失败", error)
+                        }
                     }
-                }
-            )
+                )
+            } catch (t: Throwable) {
+                Orchestrator.notifyInternalError(project, "单文件 i18n 提取：启动后台任务失败", t)
+            }
         } else if (collection.extracted.isEmpty()) {
             Orchestrator.notifyNothingExtracted(project, "当前文件")
         }
@@ -272,44 +286,58 @@ class I18nExtractorAction : AnAction() {
             project, collection.extracted, collection.affixGroups, collection.digitGroups,
             contextPsiFile = collection.contextPsiFile
         )
-        if (dialog.showAndGet()) {
-            ProgressManager.getInstance().run(
-                object : Task.Backgroundable(
-                    project,
-                    "i18n 目录批量写入中…",
-                    true
-                ) {
-                    private var output: Orchestrator.OutputResult =
-                        Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
+        val confirmed = try {
+            dialog.showAndGet()
+        } catch (t: Throwable) {
+            Orchestrator.notifyInternalError(project, "i18n 提取确认对话框异常", t)
+            false
+        }
+        if (confirmed) {
+            try {
+                ProgressManager.getInstance().run(
+                    object : Task.Backgroundable(
+                        project,
+                        "i18n 目录批量写入中…",
+                        true
+                    ) {
+                        private var output: Orchestrator.OutputResult =
+                            Orchestrator.OutputResult(copiedToClipboard = false, overwroteEntryFile = false)
 
-                    override fun run(indicator: ProgressIndicator) {
-                        indicator.isIndeterminate = false
-                        indicator.text = "批量写入中：处理 ${collection.processors.size} 个文件"
-                        indicator.fraction = 0.0
-                        output = Orchestrator.apply(
-                            project, collection,
-                            ApplyOptions(
-                                mergePlan = dialog.mergePlan,
-                                outputMode = dialog.outputMode,
-                                entryFile = dialog.selectedEntryFile,
-                                clipboardJson = dialog.json,
-                            ),
-                            indicator,
-                        )
-                        indicator.fraction = 1.0
-                    }
+                        override fun run(indicator: ProgressIndicator) {
+                            indicator.isIndeterminate = false
+                            indicator.text = "批量写入中：处理 ${collection.processors.size} 个文件"
+                            indicator.fraction = 0.0
+                            output = Orchestrator.apply(
+                                project, collection,
+                                ApplyOptions(
+                                    mergePlan = dialog.mergePlan,
+                                    outputMode = dialog.outputMode,
+                                    entryFile = dialog.selectedEntryFile,
+                                    clipboardJson = dialog.json,
+                                ),
+                                indicator,
+                            )
+                            indicator.fraction = 1.0
+                        }
 
-                    override fun onSuccess() {
-                        Orchestrator.notifyExtractSuccess(
-                            project,
-                            title = "目录批量国际化提取完成",
-                            extractedCount = collection.extracted.size,
-                            processedFiles = collection.fileCount,
-                            output = output,
-                        )
+                        override fun onSuccess() {
+                            Orchestrator.notifyExtractSuccess(
+                                project,
+                                title = "目录批量国际化提取完成",
+                                extractedCount = collection.extracted.size,
+                                processedFiles = collection.fileCount,
+                                output = output,
+                            )
+                        }
+
+                        override fun onThrowable(error: Throwable) {
+                            Orchestrator.notifyInternalError(project, "目录 i18n 提取写入失败", error)
+                        }
                     }
-                }
-            )
+                )
+            } catch (t: Throwable) {
+                Orchestrator.notifyInternalError(project, "目录 i18n 提取：启动后台任务失败", t)
+            }
         } else if (collection.extracted.isEmpty()) {
             Orchestrator.notifyNothingExtracted(project, "目录 ${dir.presentableUrl}")
         }
