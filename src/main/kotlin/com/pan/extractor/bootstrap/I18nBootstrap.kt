@@ -1,5 +1,6 @@
 package com.pan.extractor.bootstrap
 
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.locate.I18nInstanceLocator
 import com.pan.extractor.editor.TsFileEditor
@@ -129,7 +130,7 @@ object I18nBootstrap {
                     null
                 }
                 if (text != null) {
-                    Regex("""(?:lng|locale)\s*:\s*['"]([^'"]+)['"]""")
+                    RegexCatalog.LANGUAGE_CODE
                         .find(text)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }?.let { return it }
                 }
             }

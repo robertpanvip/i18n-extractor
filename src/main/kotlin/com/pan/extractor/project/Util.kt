@@ -8,10 +8,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import java.io.File
 import java.nio.charset.StandardCharsets
 
 object Util {
@@ -78,36 +78,36 @@ object Util {
     ): List<VirtualFile> {
 
         val basePath = project.basePath ?: return emptyList()
-        val baseDir = File(basePath)
-
-        if (!baseDir.exists()) return emptyList()
+        // P2（文件发现走 VFS）：旧实现用 `java.io.File.walkTopDown()` 绕开 VFS 直接遍历
+        // 物理文件系统，再逐个重新映射回 VirtualFile —— 绕过 VFS 的索引/大小写/虚拟层。
+        // 改为直接在项目根 VirtualFile 上递归遍历（VFS 索引），无需二次映射。
+        val baseVf = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return emptyList()
+        if (!baseVf.isDirectory) return emptyList()
 
         // 预编译 glob -> regex
         val regexList = rawIncludePatterns.map { globToRegex(it) }
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
+        val result = mutableListOf<VirtualFile>()
 
-        val result = mutableSetOf<VirtualFile>()
+        VfsUtilCore.iterateChildrenRecursively(baseVf, null) { file ->
+            if (file.isDirectory) return@iterateChildrenRecursively true
 
-        baseDir.walkTopDown().forEach { file ->
-            if (!file.isFile) return@forEach
-
-            val relativePath = baseDir
-                .toPath()
-                .relativize(file.toPath())
-                .toString()
+            val relativePath = file.path
+                .removePrefix(baseVf.path)
+                .trimStart('/')
                 .replace("\\", "/")
 
             // 排除 node_modules 与构建产物目录，避免把依赖源码当成翻译源
-            if (relativePath.split("/").any { it in I18nSettings.getInstance().excludeDirs() }) return@forEach
+            if (relativePath.split("/").any { it in excludeDirs }) return@iterateChildrenRecursively true
 
             // include 为空时视为"全项目扫描"（回退），否则按 glob 模式匹配
             if (regexList.isEmpty() || regexList.any { it.matches(relativePath) }) {
-                LocalFileSystem.getInstance()
-                    .findFileByIoFile(file)
-                    ?.let { result.add(it) }
+                result.add(file)
             }
+            true
         }
 
-        return result.toList()
+        return result
     }
 
     private fun globToRegex(glob: String): Regex {

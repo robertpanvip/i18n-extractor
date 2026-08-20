@@ -4,6 +4,7 @@ import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.core.CollectionState
 import com.pan.extractor.core.ImportManager
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.locate.I18nInstanceLocator
 import com.pan.extractor.planner.HookInjectPlan
 import com.pan.extractor.planner.HookTarget
@@ -171,7 +172,7 @@ object SolidI18nStrategy : I18nFramework {
         }
         return when {
             initText.contains("createAppI18n") -> "import { createAppI18n } from '$importPath';\n"
-            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(initText) ->
+            RegexCatalog.EXPORT_DEFAULT_I18N_STAR.containsMatchIn(initText) ->
                 "import i18n from '$importPath';\n"
             else -> "import { useI18n } from '$importPath';\n"
         }

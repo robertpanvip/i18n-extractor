@@ -1,5 +1,6 @@
 package com.pan.extractor.editor
 
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.Util
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
@@ -211,7 +212,7 @@ object TsFileEditor {
         while (idx < lines.size) {
             if (consumed[idx]) { idx++; continue }
             val rawLine = lines[idx]
-            val indent = Regex("""^(\s*)""").find(rawLine)?.groupValues?.get(1).orEmpty()
+            val indent = RegexCatalog.LEADING_WHITESPACE.find(rawLine)?.groupValues?.get(1).orEmpty()
             val line = rawLine.trimStart()
             // 空行或纯注释行 → 跳过
             if (line.isBlank() || line.startsWith("//") || line.startsWith("/*")) { idx++; continue }
@@ -305,7 +306,7 @@ object TsFileEditor {
                 }
             }
             val additions = newKeys.map { k ->
-                val keyExpr = if (k.matches(Regex("""[A-Za-z_$][\w$]*"""))) k else quoteForTs(k)
+                val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k)
                 val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1)
                 "$innerIndentUnit$keyExpr: $valueStr,"
             }
@@ -504,7 +505,7 @@ object TsFileEditor {
                 val m = value as Map<String, Any?>
                 if (m.isEmpty()) return "{}"
                 val inner = m.entries.joinToString(",\n") { (k, v) ->
-                    val keyExpr = if (k.matches(Regex("""[A-Za-z_$][\w$]*"""))) k else quoteForTs(k)
+                    val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k)
                     val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1)
                     "$indent$keyExpr: $vStr"
                 }
@@ -620,7 +621,7 @@ object TsFileEditor {
             val t = prop.trim()
             if (t.startsWith("...")) {
                 val name = t.removePrefix("...").trim()
-                if (name.matches(Regex("""[A-Za-z_$][\w$]*"""))) result.add(SpreadRef(name, path))
+                if (name.matches(RegexCatalog.IDENTIFIER)) result.add(SpreadRef(name, path))
                 continue
             }
             // 值本身是对象字面量 → 递归进入（识别嵌套 spread）

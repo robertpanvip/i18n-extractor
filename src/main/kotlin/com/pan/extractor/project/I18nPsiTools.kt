@@ -1,5 +1,6 @@
 package com.pan.extractor.project
 
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.strategy.I18nFramework
 import com.pan.extractor.strategy.ReactIntlStrategy
 import com.pan.extractor.lang.SiteKind
@@ -80,7 +81,7 @@ object I18nPsiTools {
         val text = decl.text.replace(Util.WS_COMPACT_RE, " ")
         // 1. from 路径检查（单双引号 / 分号 / 末尾空白 / index 尾缀 都容忍）
         val want = moduleName.lowercase()
-        val fromMatch = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
+        val fromMatch = RegexCatalog.FROM.find(text)
         val from = fromMatch?.groupValues?.get(1)?.trim()?.lowercase()?.removeSuffix("/index")
         if (from != want) return false
 

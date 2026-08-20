@@ -21,6 +21,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.BaseProjectDirectories.Companion.getBaseDirectories
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.search.FilenameIndex
@@ -101,6 +102,126 @@ class AllI18nExtractorAction : AnAction() {
         return emptyList()
     }
 
+    /**
+     * 解析 tsconfig 的 `include` / `extends` / `references` 链，展开为**项目根相对**的 include 模式列表
+     * （去重、保持遍历顺序），按 BFS 沿 extends / references 图遍历，避免循环引用与重复解析。
+     *
+     * - `extends`：相对路径（缺 `.json` 自动补）或 `node_modules` 裸包 specifier（如 `@tsconfig/node18`）；
+     * - `references`：`{ "path": "./apps/web" }` 目录（取其下 tsconfig.json）或直接指向 tsconfig.json 文件；
+     * - 每个配置的 include 都相对于「该配置所在目录」，这里统一拼回项目根相对模式，供
+     *   [com.pan.extractor.project.Util.findFilesByIncludePatterns] 消费。
+     *
+     * 任一配置解析或读取失败只跳过该节点，不影响其余链。
+     */
+    fun resolveIncludePatternsExpanded(tsConfigVf: VirtualFile, project: Project): List<String> {
+        val rootVf = project.getBaseDirectories().firstOrNull()
+            ?: return parseTsConfigInclude(tsConfigVf)
+        val rootPath = rootVf.path
+        val out = LinkedHashSet<String>()
+        val visited = HashSet<String>()
+        val queue = ArrayDeque<Pair<VirtualFile, String>>() // (config, 其所在目录相对项目根)
+        queue.add(tsConfigVf to relativeDirOf(tsConfigVf, rootPath))
+
+        while (queue.isNotEmpty()) {
+            val (cfg, relDir) = queue.removeFirst()
+            if (!visited.add(cfg.path)) continue
+
+            val json = readTsConfigJson(cfg) ?: continue
+
+            json.get("include")
+                ?.takeIf { it.isJsonArray }
+                ?.asJsonArray
+                ?.forEach { el -> if (el.isJsonPrimitive) out.add(joinRootRel(relDir, el.asString)) }
+
+            json.get("extends")?.let { ext ->
+                val paths = when {
+                    ext.isJsonPrimitive -> listOf(ext.asString)
+                    ext.isJsonArray -> ext.asJsonArray.mapNotNull { if (it.isJsonPrimitive) it.asString else null }
+                    else -> emptyList()
+                }
+                for (p in paths) {
+                    resolveTsConfigRef(cfg, project, p)?.let { queue.add(it to relativeDirOf(it, rootPath)) }
+                }
+            }
+
+            json.get("references")?.let { refs ->
+                if (refs.isJsonArray) refs.asJsonArray.forEach { el ->
+                    val path = el.asJsonObject?.get("path")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?: return@forEach
+                    resolveTsConfigRef(cfg, project, path)?.let { queue.add(it to relativeDirOf(it, rootPath)) }
+                }
+            }
+        }
+        return out.toList()
+    }
+
+    /** 读取并解析 tsconfig JSON；失败返回 null（不阻断 extends 链）。 */
+    private fun readTsConfigJson(cfg: VirtualFile): JsonObject? {
+        val text = try {
+            String(cfg.contentsToByteArray(), StandardCharsets.UTF_8)
+        } catch (e: Exception) {
+            LOG.warn("AllI18nExtractorAction: 读取 tsconfig ${cfg.path} 失败，跳过", e)
+            return null
+        }
+        return try {
+            Gson().fromJson(text, JsonObject::class.java)
+        } catch (e: JsonParseException) {
+            LOG.warn("AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
+            null
+        } catch (e: Exception) {
+            LOG.warn("AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
+            null
+        }
+    }
+
+    /** tsconfig 文件「所在目录」相对于项目根的路径（空串 = 就在根目录）。 */
+    private fun relativeDirOf(cfg: VirtualFile, rootPath: String): String =
+        cfg.parent.path.removePrefix(rootPath).trimStart('/').replace("\\", "/")
+
+    /** 把某配置目录下的相对 include 模式拼成项目根相对模式。 */
+    private fun joinRootRel(relDir: String, p: String): String {
+        val norm = p.trim().replace("\\", "/").removePrefix("./").removePrefix("/")
+        if (norm.isEmpty()) return relDir
+        return if (relDir.isEmpty()) norm else "$relDir/$norm"
+    }
+
+    /**
+     * 解析 `extends` / `references` 指向的 tsconfig：
+     * 绝对路径 / 相对路径（缺 `.json` 自动补）/ node_modules 裸包 specifier；解析到目录取其下
+     * tsconfig.json，解析到文件则直接用。
+     */
+    private fun resolveTsConfigRef(cfg: VirtualFile, project: Project, raw: String): VirtualFile? {
+        val norm = raw.trim().replace("\\", "/")
+        if (norm.isEmpty()) return null
+        if (norm.startsWith("/")) return normalizeTsConfigRef(LocalFileSystem.getInstance().findFileByPath(norm))
+
+        val isBareSpecifier = !norm.startsWith("./") && !norm.startsWith("../")
+        val parent = if (isBareSpecifier) {
+            project.getBaseDirectories().firstOrNull()
+                ?.let { LocalFileSystem.getInstance().findFileByPath(it.path) }
+        } else cfg.parent
+        if (parent == null) return null
+
+        val looksLikeDir = isBareSpecifier && !norm.substringAfterLast('/').contains('.')
+        val rel = if (isBareSpecifier) {
+            if (looksLikeDir) "node_modules/$norm/tsconfig.json" else "node_modules/$norm"
+        } else norm
+        return normalizeTsConfigRef(findByRelativeNoExt(parent, rel))
+    }
+
+    /** 目录 → 取其下 tsconfig.json；否则直接作为 tsconfig 文件返回。 */
+    private fun normalizeTsConfigRef(vf: VirtualFile?): VirtualFile? {
+        if (vf == null) return null
+        return if (vf.isDirectory) vf.findChild("tsconfig.json") else vf
+    }
+
+    /** 相对路径查找；缺 `.json` 扩展名时自动补一次。 */
+    private fun findByRelativeNoExt(parent: VirtualFile, path: String): VirtualFile? {
+        parent.findFileByRelativePath(path)?.let { return it }
+        if (!path.endsWith(".json")) return parent.findFileByRelativePath("$path.json")
+        return null
+    }
+
     private fun getAllRelevantFiles(project: Project): List<VirtualFile> {
         val scope = GlobalSearchScope.projectScope(project)
 
@@ -117,8 +238,8 @@ class AllI18nExtractorAction : AnAction() {
             return getAllRelevantFiles(project)
         }
 
-        // 2. 解析 ts.config 中的 include
-        val includePatterns = parseTsConfigInclude(tsConfigFile)
+        // 2. 解析 ts.config 中的 include（含 extends / references 链展开）
+        val includePatterns = resolveIncludePatternsExpanded(tsConfigFile, project)
 
         // 3. 根据 include 模式查找匹配的文件
         return Util.findFilesByIncludePatterns(project, includePatterns)

@@ -10,6 +10,7 @@ import com.pan.extractor.strategy.VueI18nStrategy
 import com.pan.extractor.strategy.ReactI18nextStrategy
 import com.pan.extractor.core.I18nProcessorContract
 import com.pan.extractor.core.CollectionState
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.core.JsStringCollector
 import com.pan.extractor.core.ImportManager
 import com.pan.extractor.locate.I18nInstanceLocator
@@ -356,7 +357,7 @@ class I18nAnalyzer(
             if (foundStrings) return
             if (raw.contains("\$t(") || raw.contains("i18n.global.t(") || raw.contains("i18n.t(")) return
             val contentOnly = raw.substring(1, raw.length - 1).trim()
-            val strippedContent = contentOnly.replace(Regex("\\$\\{[^}]*\\}"), "").trim()
+            val strippedContent = contentOnly.replace(RegexCatalog.TEMPLATE_INTERPOLATION, "").trim()
             if (strippedContent.startsWith("//") || (strippedContent.startsWith("/*") && strippedContent.endsWith("*/"))) return
         }
 

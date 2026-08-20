@@ -57,6 +57,63 @@ class AllI18nExtractorActionTest : BasePlatformTestCase() {
     }
 
     // ─────────────────────────────────────────
+    // 1b. resolveIncludePatternsExpanded（extends / references 展开）
+    // ─────────────────────────────────────────
+    fun testResolveIncludeExpandedExtends() {
+        val vf = myFixture.addFileToProject(
+            "tsconfig.json",
+            """{ "extends": "./configs/base.json", "include": ["src/app.ts"] }"""
+        ).virtualFile
+        // 被 extends 的配置：include 相对于其所在目录 configs/，展开时拼为 configs/src/lib/...
+        myFixture.addFileToProject("configs/base.json", """{ "include": ["src/lib/**/*.ts"] }""")
+        val result = action.resolveIncludePatternsExpanded(vf, project)
+        assertEquals(
+            "extends 应合并自身与被继承配置的 include，实际：$result",
+            setOf("src/app.ts", "configs/src/lib/**/*.ts"),
+            result.toSet()
+        )
+    }
+
+    fun testResolveIncludeExpandedExtendsMissingDotJson() {
+        // extends 缺 .json 扩展名时自动补（相对路径）
+        val vf = myFixture.addFileToProject(
+            "tsconfig.json",
+            """{ "extends": "./configs/base" }"""
+        ).virtualFile
+        myFixture.addFileToProject("configs/base.json", """{ "include": ["src/**/*.ts"] }""")
+        val result = action.resolveIncludePatternsExpanded(vf, project)
+        assertEquals("缺 .json 应自动补齐，实际：$result", setOf("configs/src/**/*.ts"), result.toSet())
+    }
+
+    fun testResolveIncludeExpandedReferences() {
+        val vf = myFixture.addFileToProject(
+            "tsconfig.json",
+            """{ "include": ["src/app.ts"], "references": [{ "path": "./packages/lib" }] }"""
+        ).virtualFile
+        // references 指向目录：取其下 tsconfig.json，include 相对该目录展开
+        myFixture.addFileToProject("packages/lib/tsconfig.json", """{ "include": ["src/index.ts"] }""")
+        val result = action.resolveIncludePatternsExpanded(vf, project)
+        assertEquals(
+            "references 应并入被引用项目的 include，实际：$result",
+            setOf("src/app.ts", "packages/lib/src/index.ts"),
+            result.toSet()
+        )
+    }
+
+    fun testResolveIncludeExpandedExtendsCyclicDoesNotHang() {
+        // extends 成环：BFS + visited 去重，不能死循环
+        myFixture.addFileToProject("a.json", """{ "extends": "./tsconfig.json", "include": ["src/**/*.ts"] }""")
+        val vf = myFixture.addFileToProject("tsconfig.json", """{ "extends": "./a.json" }""").virtualFile
+        val result = action.resolveIncludePatternsExpanded(vf, project)
+        // 成环被 visited 断开：只得 a.json 的 include（相对根），tsconfig 自身无 include
+        assertEquals(
+            "成环 extends 应正常返回被引用配置的 include，实际：$result",
+            listOf("src/**/*.ts"),
+            result
+        )
+    }
+
+    // ─────────────────────────────────────────
     // 2. resolveScanFiles
     // ─────────────────────────────────────────
     /**

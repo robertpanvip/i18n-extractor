@@ -1,5 +1,6 @@
 package com.pan.extractor.locate
 
+import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.lang.LanguageExtractor
@@ -332,14 +333,14 @@ object EntryFileLocator {
     /** 从 Vue createI18n 配置文本中解析中文入口。 */
     private fun findVueEntryFromConfigText(initFile: VirtualFile, text: String): VirtualFile? {
         // 1) 定位 createI18n( 的配置对象
-        val createIdx = Regex("""createI18n\s*\(""").find(text)?.range?.first ?: return null
+        val createIdx = RegexCatalog.CREATE_I18N.find(text)?.range?.first ?: return null
         val brace = text.indexOf('{', createIdx)
         if (brace < 0) return null
         val optionsEnd = findBalancedCloseBrace(text, brace) ?: return null
         val options = text.substring(brace, optionsEnd)
 
         // 2) 读取 locale 配置值（如 'zh-CN'）
-        val localeCode = Regex("""locale\s*:\s*['"]([^'"]+)['"]""").find(options)?.groupValues?.get(1)
+        val localeCode = RegexCatalog.LANGUAGE_CODE.find(options)?.groupValues?.get(1)
 
         // 3) 解析 messages: { ... } 里的语言->引用 映射
         val messagesMatch = Regex("""messages\s*:\s*\{""").find(options) ?: return null
@@ -421,7 +422,7 @@ object EntryFileLocator {
                 val v = stripValueSuffixes(kv.second).trim()
                 if (v.startsWith("{") || v.startsWith("[")) continue // 内联对象/数组，非文件引用
                 result.add(kv.first to v)
-            } else if (t.matches(Regex("""[A-Za-z_$][\w$]*"""))) {
+            } else if (t.matches(RegexCatalog.IDENTIFIER)) {
                 result.add(t to t) // shorthand：`zh,` → key 与引用同名
             }
         }

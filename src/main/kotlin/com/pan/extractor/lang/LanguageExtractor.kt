@@ -1,5 +1,7 @@
 package com.pan.extractor.lang
 
+import com.pan.extractor.core.RegexCatalog
+
 /**
  * 提取站点的“上下文类型”（Approach A：更看节点在语法树里的角色，而非只看字符）。
  *
@@ -32,7 +34,7 @@ enum class SiteKind {
 // ───────────────────────────────────────────────
 
 private val LATIN_LETTER_RE = Regex("[a-zA-Z]")
-private val CJK_RE = Regex("""[\u4e00-\u9fff]""")
+private val CJK_RE = RegexCatalog.HAN
 private val KANA_RE = Regex("""[\u3040-\u30ff]""")
 private val HANGUL_RE = Regex("""[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]""")
 private val URL_LIKE_RE =
