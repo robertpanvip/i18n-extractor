@@ -102,6 +102,47 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
             result.issues.any { it.code == "REWRITE_TARGET_INVALID" })
     }
 
+    // ── A1b：替换后语法有效性 ────────────────────────────────────
+
+    fun testRewriteResultUnbalancedFails() {
+        val psi = myFixture.configureByText("r.ts", "const x = 'hi';\n")
+        val el = psi.findElementAt("const x = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s1", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "\$t('k'", // 缺失右括号 → 替换后括号不平衡
+            target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s1", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("替换后括号不平衡应报 REWRITE_RESULT_UNBALANCED，实际=${result.issues.map { it.code }}",
+            result.issues.any { it.code == "REWRITE_RESULT_UNBALANCED" })
+    }
+
+    fun testRewriteResultBalancedPasses() {
+        val psi = myFixture.configureByText("ok.ts", "const x = 'hi';\n")
+        val el = psi.findElementAt("const x = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s1", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "\$t('k')", // 完整调用 → 替换后结构平衡
+            target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s1", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("完整替换应通过，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
     // ── A2：Import ────────────────────────────────────────────────
 
     fun testImportUnresolvedFails() {

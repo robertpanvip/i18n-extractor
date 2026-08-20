@@ -3,11 +3,13 @@ package com.pan.extractor.validator
 import com.pan.extractor.model.ExtractionSite
 import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ResourcePlan
+import com.pan.extractor.planner.RewriteKind
 import com.pan.extractor.planner.RewritePlan
 import com.pan.extractor.resource.JsonWriter
 import com.pan.extractor.staticparser.StaticObjectParser
 import com.google.gson.JsonParser
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.PsiElement
 import java.nio.charset.StandardCharsets
 
 /** 单条 preflight 校验结果：错误码 + 人类可读描述。 */
@@ -43,7 +45,7 @@ data class PreflightResult(val issues: List<PreflightIssue>) {
  * ```
  *
  * 校验深度（事务级 Change Validation）：
- *  - Rewrite：processor 索引 / site 存在性 / 目标 pointer 有效性；
+ *  - Rewrite：processor 索引 / site 存在性 / 目标 pointer 有效性 / 替换后语法有效性（结构平衡）；
  *  - Import：目标可解析可写 + 语义级冲突（同名绑定 / alias / source 冲突 / specifier 重复）；
  *  - Resource：目标可解析可写 + 语义级（可解析 / 目标对象存在 / entries×dropKeys 矛盾 /
  *    扁平点式 key 与既有标量或数组祖先冲突）。
@@ -100,6 +102,9 @@ object ProjectPreflightValidator {
                         "REWRITE_TARGET_INVALID",
                         "RewritePlan[siteId=${rp.siteId}] 的目标 PSI 已失效（文件可能已被外部修改）"
                     )
+                } else {
+                    // A1b：替换后语法有效性 —— 用 newExpression 模拟文本替换，校验结果文件仍结构平衡。
+                    checkRewritePostSyntax(rp, ptr.element!!, issues)
                 }
             }
         }
@@ -354,6 +359,66 @@ object ProjectPreflightValidator {
                 break
             }
         }
+    }
+
+    // ==========================================================================
+    // A1b：替换后语法有效性校验
+    // 目标：在写入前模拟 [RewritePlan] 的文本替换，确认替换后目标文件仍「结构平衡」
+    // （括号 / 引号成对、不断弦），避免把半成品（未闭合的 $t(、残缺的模板插值）写进源码。
+    // 采用与 StaticValueParser 一致的轻量扫描，不依赖具体语言的完整解析器。
+    // ==========================================================================
+
+    /** 对 [plan] 模拟替换：[target] 文本区间 → [plan.newExpression]，再校验结果结构平衡。 */
+    private fun checkRewritePostSyntax(plan: RewritePlan, target: PsiElement, issues: MutableList<PreflightIssue>) {
+        val vf = target.containingFile?.virtualFile ?: return
+        val text = readText(vf) ?: return
+        val (start, end) = replacementRange(plan, target) ?: return
+        if (start < 0 || end < start || end > text.length) return
+        val after = text.substring(0, start) + plan.newExpression + text.substring(end)
+        if (!isStructurallyBalanced(after)) {
+            issues += PreflightIssue(
+                "REWRITE_RESULT_UNBALANCED",
+                "RewritePlan[siteId=${plan.siteId}] 替换后文件括号/引号不平衡（newExpression=${plan.newExpression}），可能产生非法代码"
+            )
+        }
+    }
+
+    /** 计算替换区间：XML_TEXT 用多个 XmlText 节点的并集，其余用目标 [target] 的 textRange。 */
+    private fun replacementRange(plan: RewritePlan, target: PsiElement): Pair<Int, Int>? {
+        if (plan.kind == RewriteKind.SKELETON) return null // 骨架重写由 MergeApplier 合成，无法用 newExpression 文本模拟
+        if (plan.kind == RewriteKind.XML_TEXT) {
+            val els = plan.xmlTextPointers.mapNotNull { it.element }
+            if (els.isEmpty()) return null
+            return els.minOf { it.textRange.startOffset } to els.maxOf { it.textRange.endOffset }
+        }
+        val tr = target.textRange ?: return null
+        return tr.startOffset to tr.endOffset
+    }
+
+    /** 轻量结构平衡校验：扫描 `()[]{}` 与引号，忽略字符串内部，判定括号成对 + 引号闭合。 */
+    private fun isStructurallyBalanced(text: String): Boolean {
+        val stack = ArrayDeque<Char>()
+        var i = 0
+        var quote: Char? = null
+        while (i < text.length) {
+            val c = text[i]
+            if (quote != null) {
+                if (c == '\\') i++
+                else if (c == quote) quote = null
+                i++
+                continue
+            }
+            when (c) {
+                '"', '\'', '`' -> quote = c
+                '(', '[', '{' -> stack.addLast(c)
+                ')', ']', '}' -> {
+                    val open = when (c) { ')' -> '('; ']' -> '['; else -> '{' }
+                    if (stack.isEmpty() || stack.removeLast() != open) return false
+                }
+            }
+            i++
+        }
+        return stack.isEmpty() && quote == null
     }
 
     /** 读取一个 [VirtualFile] 的 UTF-8 文本；失败返回 null（由调用方决定是否报读失败）。 */
