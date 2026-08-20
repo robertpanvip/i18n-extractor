@@ -76,11 +76,14 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
     }
 
     private fun addFoldToggleInlays(editor: Editor, file: PsiFile, messages: Map<String, String>) {
+        val t0 = System.nanoTime()
         val inlayModel = editor.inlayModel
         val fw = I18nFrameworkRegistry.detect(file)
 
+        var translationCallCount = 0
         PsiTreeUtil.collectElementsOfType(file, JSCallExpression::class.java).forEach { call ->
             if (!fw.isTranslationCall(call)) return@forEach
+            translationCallCount++
 
             val key = fw.extractKey(call) ?: return@forEach
             if (key !in messages) return@forEach
@@ -88,6 +91,15 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
             // 在 t() 调用末尾添加可点击的 ↩ inlay
             val offset = call.textRange.endOffset
             inlayModel.addInlineElement(offset, true, I18nFoldToggleRenderer(editor))
+        }
+
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+        // 耗时基准：慢打开记 info，普通仅记 debug，避免每个编辑器都刷屏。
+        val msg = "I18nFoldToggleInlay[打开] file=${file.name} size=${file.textLength}B translationCalls=$translationCallCount elapsed=${elapsedMs}ms"
+        if (elapsedMs >= 100) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java).info(msg)
+        } else {
+            com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java).debug(msg)
         }
     }
 

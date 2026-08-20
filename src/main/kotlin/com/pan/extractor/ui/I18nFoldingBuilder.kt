@@ -31,6 +31,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     companion object {
         /** 折叠占位文本末尾的折叠切换提示符，提醒用户此处可展开。 */
         const val TOGGLE_HINT = " \u21A9"
+
+        /** 单次折叠建立超过该阈值(ms)记 info，作为「打开/折叠慢」的基准告警；以下仅记 debug。 */
+        private const val SLOW_FOLD_MS = 100L
     }
 
     private val logger = Logger.getInstance(I18nFoldingBuilder::class.java)
@@ -45,6 +48,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         // quick=true 表示 IntelliJ 在快速输入/滚动时请求，期望尽快返回；
         // 此时跳过全量 PSI 遍历与翻译加载，避免输入卡顿（非 quick 时再完整计算）。
         if (quick) return FoldingDescriptor.EMPTY_ARRAY
+        val t0 = System.nanoTime()
         val containingFile = root.containingFile ?: return FoldingDescriptor.EMPTY_ARRAY
         // 对注入代码（如 Vue 模板插值 {{ $t('x') }}）折叠时，root 是注入片段；
         // 翻译入口需基于其所属的顶层源文件定位，故映射回宿主文件。
@@ -55,9 +59,18 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             return FoldingDescriptor.EMPTY_ARRAY
         }
 
+        val callCount = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java)
         val descriptors = mutableListOf<FoldingDescriptor>()
-        PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).forEach { call ->
+        // 全部调用逐个判定并建立折叠描述符；这是「打开/折叠」阶段的主要耗时点（含 Symbol 解析缓存）。
+        for (call in callCount) {
             addFoldingDescriptor(call, messages, descriptors)
+        }
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+        // 耗时基准：慢打开记 info（可被日志直接看到），普通仅记 debug，避免每个文件都刷屏。
+        if (elapsedMs >= SLOW_FOLD_MS) {
+            logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
+        } else {
+            logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
         }
         return descriptors.toTypedArray()
     }
