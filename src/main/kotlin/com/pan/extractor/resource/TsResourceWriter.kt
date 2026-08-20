@@ -48,9 +48,9 @@ object TsResourceWriter {
         val merged = TsFileEditor.mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
         // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
         // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
-        val oldObjBody = text.substring(info.objectRange.first, info.objectRange.endExclusive)
+        val oldObjBody = text.substring(info.objectRange.first, info.objectRange.last + 1)
         val newObjBody = TsFileEditor.regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
-        val newText = text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.endExclusive)
+        val newText = text.substring(0, info.objectRange.first) + newObjBody + text.substring(info.objectRange.last + 1)
         return if (isCrlf) newText.replace("\n", "\r\n") else newText
     }
 
@@ -68,7 +68,7 @@ object TsResourceWriter {
     ): List<Pair<VirtualFile, String>>? {
         val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
         val entryInfo = TsFileEditor.parseTsExportedObject(entryText) ?: return null
-        val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.endExclusive)
+        val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.last + 1)
         val spreadRefs = TsFileEditor.findSpreadRefs(entryObjBody, emptyList())
         if (spreadRefs.isEmpty()) return null
         val entryKeys = entryInfo.staticKV.keys.toSet()

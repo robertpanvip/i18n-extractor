@@ -5,6 +5,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.xml.XmlAttributeValue
 import com.pan.extractor.I18nProcessor
 import com.pan.extractor.MergeApplier
+import com.pan.extractor.model.ExtractionSite
+import com.pan.extractor.planner.CollectedResult
 import com.pan.extractor.planner.ExtractionPlan
 import com.pan.extractor.planner.RewriteKind
 import com.pan.extractor.planner.RewritePlan
@@ -51,14 +53,17 @@ object RewriteInterpreter {
 
     /**
      * 执行单个 processor 自己的改写配方（单文件 apply / MergeApplier ② 的逐文件常规写入）。
-     * 不处理骨架（骨架由 MergeApplier 统一向 [applyPlan] 提供）；命中本 analyzer 的
-     * [com.pan.extractor.analyzer.I18nAnalyzer.blockedSiteIds] 时跳过。
+     * 不处理骨架（骨架由 MergeApplier 统一向 [applyPlan] 提供）；命中被合并阻塞的 siteId 时跳过。
+     *
+     * 收紧 collect/run 边界：本方法只消费收集期冻结的不可变快照 [result]（[CollectedResult]），
+     * **不再触碰 processor 内部的可变 [com.pan.extractor.planner.CollectedPlan]** —— 使 run 段
+     * 不可能反向修改收集期状态。
      */
-    fun executeProcessor(proc: I18nProcessor) {
-        val blocked = proc.analyzer.blockedSiteIds
-        for (rw in proc.analyzer.rewrites) {
+    fun executeProcessor(proc: I18nProcessor, result: CollectedResult) {
+        val blocked = result.blockedSiteIds
+        for (rw in result.rewrites) {
             if (rw.siteId in blocked) continue
-            dispatch(rw, listOf(proc), blocked, java.util.HashMap())
+            dispatch(rw, listOf(proc), blocked, java.util.HashMap(), result.collectedSites)
         }
     }
 
@@ -68,6 +73,7 @@ object RewriteInterpreter {
         processors: List<I18nProcessor>,
         blockedSiteIds: Set<String>,
         finalExtracted: MutableMap<String, String>,
+        collectedSites: List<ExtractionSite>? = null,
     ) {
         when (rw.kind) {
             RewriteKind.XML_TEXT -> {
@@ -92,7 +98,8 @@ object RewriteInterpreter {
 
             RewriteKind.SKELETON -> {
                 val proc = processors.getOrNull(rw.processorIndex) ?: return
-                val site = proc.analyzer.collectedSites.firstOrNull { it.id == rw.siteId } ?: return
+                val site = (collectedSites ?: proc.analyzer.collectedSites)
+                    .firstOrNull { it.id == rw.siteId } ?: return
                 val root = site.replaceRootPointer?.element ?: return
                 if (!root.isValid) return
                 MergeApplier.rewriteSiteToSkeleton(

@@ -34,6 +34,7 @@ internal object ResourceMerge {
         return result
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun deepCloneMap(m: Map<String, Any?>): MutableMap<String, Any?> {
         val result = LinkedHashMap<String, Any?>()
         for ((k, v) in m) {
@@ -52,6 +53,7 @@ internal object ResourceMerge {
         return result
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun tryWriteNested(root: MutableMap<String, Any?>, dottedKey: String, value: String): Boolean {
         val segments = dottedKey.split('.')
         var cur: MutableMap<String, Any?> = root

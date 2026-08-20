@@ -129,6 +129,7 @@ object LocaleMessages {
         return out
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun flattenNested(map: Map<String, Any?>, prefix: String, out: MutableMap<String, String>) {
         for ((k, v) in map) {
             val key = if (prefix.isEmpty()) k else "$prefix.$k"

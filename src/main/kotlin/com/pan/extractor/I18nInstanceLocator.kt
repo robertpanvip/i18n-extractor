@@ -90,6 +90,18 @@ object I18nInstanceLocator {
     private val BLOCK_COMMENT_RE = Regex("""/\*[\s\S]*?\*/""")
     private val LINE_COMMENT_RE = Regex("""//[^\n]*""")
 
+    // ── 固定模式正则（一次编译复用；多处复用，避免每次 new Regex / Pattern.compile）──
+    private val I18N_INIT_RE = Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""")
+    private val EXPORT_CONST_I18N_RE = Regex("""export\s+(const|let|var)\s+i18n\b""")
+    private val EXPORT_NAMED_I18N_RE = Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""")
+    private val EXPORT_DEFAULT_I18N_RE = Regex("""export\s+default\s+i18n\b""")
+    private val EXPORT_DEFAULT_CREATE_I18N_RE = Regex("""export\s+default\s+createI18n\s*\(""")
+    private val EXPORT_CONST_FUNCTION_I18N_STAR_RE = Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""")
+    private val EXPORT_CONST_I18N_STAR_RE = Regex("""export\s+(const|let|var)\s+\w*[Ii]18n\w*""")
+    private val EXPORT_FUNCTION_I18N_STAR_RE = Regex("""export\s+function\s+\w*[Ii]18n\w*""")
+    private val EXPORT_NAMED_I18N_STAR_RE = Regex("""export\s*\{[^}]*\b\w*[Ii]18n\w*[^}]*\}""")
+    private val EXPORT_DEFAULT_I18N_STAR_RE = Regex("""export\s+default\s+\w*[Ii]18n\w*""")
+
     // ── PSI 级初始化调用检测（BUG_ANALYSIS 3.3 第二步） ──────────────
 
     /**
@@ -173,9 +185,9 @@ object I18nInstanceLocator {
         if (!hasReactInit) return false
         // 检查导出语句（文本级，因为 export 解析不需要 PSI 精确度）
         val code = stripJsComments(psiFile.text)
-        return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(code) ||
-            Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(code) ||
-            Regex("""export\s+default\s+i18n\b""").containsMatchIn(code)
+        return EXPORT_CONST_I18N_RE.containsMatchIn(code) ||
+            EXPORT_NAMED_I18N_RE.containsMatchIn(code) ||
+            EXPORT_DEFAULT_I18N_RE.containsMatchIn(code)
     }
 
     /**
@@ -216,13 +228,13 @@ object I18nInstanceLocator {
         val code = stripJsComments(text)
         if (code.contains("createI18n(") || code.contains("createI18n (")) return true             // Vue
         if (code.contains("initReactI18next")) return true                                          // React (react-i18next)
-        if (Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(code)) return true    // React / CJS
+        if (I18N_INIT_RE.containsMatchIn(code)) return true    // React / CJS
         // Solid: 顶层 useI18n( 调用 + 导出 createAppI18n / useI18n 的工厂函数（@solid-primitives/i18n）
         // P0：必须先存在 `@solid-primitives/i18n` 导入，才判定为 Solid——否则 Vue 项目中
         //     import { useI18n } from 'vue-i18n' + `useI18n()` 的组件文件会被误判为 Solid 初始化。
         val hasSolidImport = code.contains("@solid-primitives/i18n")
         if (hasSolidImport && code.contains("useI18n(") &&
-            (code.contains("createAppI18n") || Regex("""export\s+(const|function)\s+\w*[Ii]18n\w*""").containsMatchIn(code))
+            (code.contains("createAppI18n") || EXPORT_CONST_FUNCTION_I18N_STAR_RE.containsMatchIn(code))
         ) return true
         return false
     }
@@ -290,11 +302,11 @@ object I18nInstanceLocator {
     private fun isReactI18nInitWithExport(text: String): Boolean {
         val code = stripJsComments(text)
         val isReactInit = code.contains("initReactI18next") ||
-            Regex("""\b(?:i18n|i18next)\s*\.\s*init\s*\(""").containsMatchIn(code)
+            I18N_INIT_RE.containsMatchIn(code)
         if (!isReactInit) return false
-        return Regex("""export\s+(const|let|var)\s+i18n\b""").containsMatchIn(text) ||
-            Regex("""export\s*\{[^}]*\bi18n\b[^}]*\}""").containsMatchIn(text) ||
-            Regex("""export\s+default\s+i18n\b""").containsMatchIn(text)
+        return EXPORT_CONST_I18N_RE.containsMatchIn(text) ||
+            EXPORT_NAMED_I18N_RE.containsMatchIn(text) ||
+            EXPORT_DEFAULT_I18N_RE.containsMatchIn(text)
     }
 
     /**
@@ -337,10 +349,10 @@ object I18nInstanceLocator {
         if (!code.contains("useI18n(")) return false
         // 必须导出 i18n 工厂：createAppI18n / 含 I18n 的命名导出 / 默认导出
         return code.contains("createAppI18n") ||
-            Regex("""export\s+(const|let|var)\s+\w*[Ii]18n\w*""").containsMatchIn(code) ||
-            Regex("""export\s+function\s+\w*[Ii]18n\w*""").containsMatchIn(code) ||
-            Regex("""export\s*\{[^}]*\b\w*[Ii]18n\w*[^}]*\}""").containsMatchIn(code) ||
-            Regex("""export\s+default\s+\w*[Ii]18n\w*""").containsMatchIn(code)
+            EXPORT_CONST_I18N_STAR_RE.containsMatchIn(code) ||
+            EXPORT_FUNCTION_I18N_STAR_RE.containsMatchIn(code) ||
+            EXPORT_NAMED_I18N_STAR_RE.containsMatchIn(code) ||
+            EXPORT_DEFAULT_I18N_STAR_RE.containsMatchIn(code)
     }
 
     /**
@@ -395,11 +407,11 @@ object I18nInstanceLocator {
         }
         val code = stripJsComments(content)
         val hasNamedExport =
-            code.contains(Regex("export\\s+(const|let|var)\\s+i18n\\b")) ||
-                code.contains(Regex("export\\s*\\{[^}]*\\bi18n\\b[^}]*\\}"))
+            code.contains(EXPORT_CONST_I18N_RE) ||
+                code.contains(EXPORT_NAMED_I18N_RE)
         val hasDefaultExport =
-            code.contains(Regex("export\\s+default\\s+i18n\\b")) ||
-                code.contains(Regex("export\\s+default\\s+createI18n\\s*\\("))
+            code.contains(EXPORT_DEFAULT_I18N_RE) ||
+                code.contains(EXPORT_DEFAULT_CREATE_I18N_RE)
         return hasDefaultExport && !hasNamedExport
     }
 

@@ -29,10 +29,11 @@ import com.pan.extractor.planner.RewriteKind
  * 中文并生成 $t(...) 替换表达式。持有 I18nProcessor 引用以访问其状态（changes/pendingChanges、
  * extractedStrings、tFunctionName、isVueFile、templateVarRegex、project 等），保证行为不变。
  */
-class JsStringCollector(private val processor: I18nProcessorContract) {
-
-    /** 能力面（[processor]，[I18nProcessorContract]）之外，结果/状态经 [state] 读写（由分析器注入，见 I18nProcessor）。 */
-    internal lateinit var state: CollectionState
+class JsStringCollector(
+    private val processor: I18nProcessorContract,
+    /** 能力面（[processor]）之外，结果/状态经本共享 [CollectionState] 读写（与分析器同一 plan 实例）。 */
+    internal val state: CollectionState,
+) {
 
     private val templateVarRegex = processor.templateVarRegex
 

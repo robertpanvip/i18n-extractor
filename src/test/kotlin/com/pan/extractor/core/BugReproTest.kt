@@ -31,7 +31,7 @@ export default {
             info.staticKV, newFlat,
             dropExistingKeys = setOf("请输入搜索关键词")
         )
-        val oldObjBody = old.substring(info.objectRange.first, info.objectRange.endExclusive)
+        val oldObjBody = old.substring(info.objectRange.first, info.objectRange.last + 1)
         val newObjBody = TsFileEditor.regenerateObjectLiteralBody(
             oldObjBody, merged,
             dropKeys = setOf("请输入搜索关键词")

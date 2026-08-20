@@ -22,10 +22,25 @@ import com.intellij.psi.util.PsiTreeUtil
  * 与 [com.pan.extractor.planner.ImportPlanner]（生成 ImportPlan / InjectionDecision）；本类
  * 承担 import 注入的决策构建、i18n 实例导入路径解析、去重判定与命令式兼容入口（行为 1:1）。
  */
-class ImportManager(private val processor: I18nProcessorContract) {
+class ImportManager(
+    private val processor: I18nProcessorContract,
+    /** 结果/状态面（[CollectionState]），与分析器同一共享 plan 实例（打破构造循环，消除 lateinit 回填）。 */
+    private val state: CollectionState,
+) {
 
-    /** 能力面之外，结果/状态（[tFunctionName]）经 [state] 读取（由分析器注入，见 I18nProcessor）。 */
-    internal lateinit var state: CollectionState
+    // ── 固定模式正则（一次编译复用，避免每文件/每次调用 new Regex / Pattern.compile）──
+    private companion object {
+        val VUE_I18N_FROM_RE = Regex("""from\s*['"]vue-i18n['"]""")
+        val VUE_GLOBAL_DESTRUCTURE_T_RE = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
+        val VUE_GLOBAL_SIMPLE_DOLLAR_T_RE = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
+        val REACT_GETI18N_T_RE = Regex("""const\s+t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+        val REACT_GETI18N_DOLLAR_T_RE = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
+        val REACT_I18N_T_RE = Regex("""const\s+t\s*=\s*i18n\s*\.\s*t""")
+        val REACT_GETI18N_ALIAS_RE = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
+        val IMPORT_NAMED_I18N_RE = Regex("""import\s*\{[^}]*\bi18n\b[^}]*\}""")
+        val IMPORT_DEFAULT_I18N_RE = Regex("""import\s+i18n\s+(?:,|from)""")
+        val IMPORT_NAMESPACE_I18N_RE = Regex("""import\s+\*\s+as\s+i18n\s+from""")
+    }
 
     // ───────────────────────────────────────────────
     // Vue import 去重 / 解构去重 工具函数（问题 4 修复）
@@ -196,7 +211,7 @@ class ImportManager(private val processor: I18nProcessorContract) {
 
         // 1. 确保 vue-i18n 导入存在
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { Regex("""from\s*['"]vue-i18n['"]""").containsMatchIn(it.text) }) {
+        if (imports.none { VUE_I18N_FROM_RE.containsMatchIn(it.text) }) {
             val importText = "import { useI18n } from 'vue-i18n';\n"
             val importStmt = processor.createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
@@ -307,7 +322,7 @@ class ImportManager(private val processor: I18nProcessorContract) {
 
         // —— 阶段 2：保证 vue-i18n import 存在（复用 ensureVueHookI18nImported 的同一段逻辑）
         val imports = PsiTreeUtil.findChildrenOfType(containingFile, ES6ImportDeclaration::class.java)
-        if (imports.none { Regex("""from\s*['"]vue-i18n['"]""").containsMatchIn(it.text) }) {
+        if (imports.none { VUE_I18N_FROM_RE.containsMatchIn(it.text) }) {
             val importText = "import { useI18n } from 'vue-i18n';\n"
             val importStmt = processor.createJSStatementFromText(importText, containingFile)
             if (imports.isNotEmpty()) {
@@ -375,8 +390,8 @@ class ImportManager(private val processor: I18nProcessorContract) {
         // Vue 版：检查是否已经存在 `const $t = i18n.global.t`（宽松空格/分号容忍）
         fun hasVueGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val re = Regex("""const\s*\{\s*[\s\S]*\}\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
-            val reSimple = Regex("""const\s+\${'$'}t\s*=\s*i18n\s*\.\s*global\s*\.\s*t""")
+            val re = VUE_GLOBAL_DESTRUCTURE_T_RE
+            val reSimple = VUE_GLOBAL_SIMPLE_DOLLAR_T_RE
             return vars.any {
                 re.containsMatchIn(it.text.replace(Util.WS_COMPACT_RE, "")) ||
                     reSimple.containsMatchIn(it.text) ||
@@ -388,9 +403,9 @@ class ImportManager(private val processor: I18nProcessorContract) {
         // React 版：检查是否已经存在 `const t = getI18n().t`（或兼容老写法 `const $t = getI18n().t`）
         fun hasReactGlobalDollarTAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val reT = Regex("""const\s+t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
-            val reDollarT = Regex("""const\s+\${'$'}t\s*=\s*getI18n\s*\(\s*\)\s*\.\s*t""")
-            val reTLocale = Regex("""const\s+t\s*=\s*i18n\s*\.\s*t""")
+            val reT = REACT_GETI18N_T_RE
+            val reDollarT = REACT_GETI18N_DOLLAR_T_RE
+            val reTLocale = REACT_I18N_T_RE
             return vars.any {
                 reT.containsMatchIn(it.text) ||
                     reDollarT.containsMatchIn(it.text) ||
@@ -406,7 +421,7 @@ class ImportManager(private val processor: I18nProcessorContract) {
         // （i18n.t 语义 + locale 不可用时，用该别名保持 i18n 标识符可用）
         fun hasReactI18nGlobalAliased(root: PsiElement): Boolean {
             val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-            val re = Regex("""const\s+i18n\s*=\s*getI18n\s*\(\s*\)""")
+            val re = REACT_GETI18N_ALIAS_RE
             return vars.any {
                 re.containsMatchIn(it.text) ||
                     it.text.replace(Util.WS_COMPACT_RE, "").let { t -> t.contains(Util.SIGNATURE_REACT_GET_I18N_ALIAS) }
@@ -662,9 +677,9 @@ class ImportManager(private val processor: I18nProcessorContract) {
     fun hasI18nInstanceImported(root: PsiElement): Boolean {
         if (hasReactGetI18nImported(root)) return true
         val imports = PsiTreeUtil.findChildrenOfType(root, ES6ImportDeclaration::class.java)
-        val namedImport = Regex("""import\s*\{[^}]*\bi18n\b[^}]*\}""")
-        val defaultImport = Regex("""import\s+i18n\s+(?:,|from)""")
-        val namespaceImport = Regex("""import\s+\*\s+as\s+i18n\s+from""")
+        val namedImport = IMPORT_NAMED_I18N_RE
+        val defaultImport = IMPORT_DEFAULT_I18N_RE
+        val namespaceImport = IMPORT_NAMESPACE_I18N_RE
         return imports.any { imp ->
             namedImport.containsMatchIn(imp.text) ||
                 defaultImport.containsMatchIn(imp.text) ||

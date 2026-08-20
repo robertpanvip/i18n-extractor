@@ -2,6 +2,9 @@ package com.pan.extractor.planner
 
 import com.pan.extractor.AffixGroupCandidate
 import com.pan.extractor.DigitGroupCandidate
+import com.pan.extractor.GenericStrategy
+import com.pan.extractor.I18nFramework
+import com.pan.extractor.model.ExtractionSite
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPsiElementPointer
 import com.intellij.psi.xml.XmlText
@@ -89,6 +92,39 @@ data class RewritePlan(
     val params: List<Pair<String, String>> = emptyList(),
 )
 
+/**
+ * 收集期产物的**不可变快照** —— collect 结束（[CollectedPlan.freeze]）时生成一次，作为
+ * **run/apply 阶段的唯一输入**。
+ *
+ * 收紧 collect/run 边界（a-mutable）：
+ *  - collect 期：写入的是可变 [CollectedPlan]（经 [com.pan.extractor.analyzer.I18nAnalyzer] /
+ *    [com.pan.extractor.analyzer.CollectionState]）；此时 run 期还没开始，无并发写。
+ *  - run 期：只消费本快照（所有集合字段均为不可变 [List]/[Set]/[Map]），**不再触碰可变
+ *    [CollectedPlan]** —— 边界由类型强制（run 拿到的是副本快照，无法反向写回收集容器）而非注释。
+ */
+data class CollectedResult(
+    /** 命中站点列表（快照副本）。
+     *  注：站点的 [ExtractionSite.replaceRootPointer] 仍是指向 PSI 的 SmartPointer，
+     *  仅实例本身共享，集合快照保证 run 期无法增删站点。 */
+    val collectedSites: List<ExtractionSite>,
+    /** 被骨架合并承载、应跳过普通替换的 siteId 集合（快照副本）。 */
+    val blockedSiteIds: Set<String>,
+    /** 新提取 key → 原文本（快照副本）。 */
+    val extractedStrings: Map<String, String>,
+    /** 已存在 \$t() 调用 key → 原文本（快照副本，仅展示）。 */
+    val existingStrings: Map<String, String>,
+    /** 全部待执行站点改写配方，按收集/规划顺序（快照副本）。 */
+    val rewrites: List<RewritePlan>,
+    /** 本次提取锁定的框架策略（null 时回退 [GenericStrategy]）。 */
+    val framework: I18nFramework,
+    /** collect 期锁定的翻译函数名。 */
+    val tFunctionName: String,
+    /** 全局 \$t 别名注入标记。 */
+    val needInjectGlobalDollarT: Boolean,
+    /** React i18n.t 回退 getI18n 的 t 别名标记。 */
+    val reactI18nTFallbackToDollarT: Boolean,
+)
+
 /** 函数体注入目标类型（对应各框架的组件 / hook 定位方式）。 */
 enum class HookTarget {
     /** Vue `.vue` 的 <script> 顶层注入一次（SFC 级 useI18n）。 */
@@ -155,7 +191,7 @@ data class ResourcePlan(
  *  2. 收集期决策（改写动作 / 框架 / 翻译函数名 / 注入意图）：
  *     [pendingChanges] / [framework] / [tFunctionName] / [needInject*] / react fallback 缓存。
  */
-class CollectedPlan {
+class CollectedPlan : com.pan.extractor.CollectionState {
     // ── 收集期产物 ────────────────────────────────────────────────
     /** 一次提取命中站点列表（领域模型 site，见 [com.pan.extractor.model.ExtractionSite]）。 */
     val collectedSites = mutableListOf<com.pan.extractor.model.ExtractionSite>()
@@ -167,7 +203,7 @@ class CollectedPlan {
     var siteCounter = 0
 
     /** 新提取的 key → 原文本。 */
-    val extractedStrings = mutableMapOf<String, String>()
+    override val extractedStrings = mutableMapOf<String, String>()
 
     /** 已存在的 \$t() 调用 key → 原文本（仅展示，不替换）。 */
     val existingStrings = mutableMapOf<String, String>()
@@ -182,10 +218,10 @@ class CollectedPlan {
     var framework: com.pan.extractor.I18nFramework? = null
 
     /** 检测到的翻译函数名（\$t / t / i18n.t / i18n.global.t），默认 \$t。 */
-    var tFunctionName: String = "\$t"
+    override var tFunctionName: String = "\$t"
 
     /** 全局 \$t 别名注入标记（Vue/React/Solid 纯工具文件，由策略回调写入）。 */
-    var needInjectGlobalDollarT: Boolean = false
+    override var needInjectGlobalDollarT: Boolean = false
 
     /** React i18n.t 回退 getI18n 的 t 别名标记。 */
     var reactI18nTFallbackToDollarT: Boolean = false
@@ -193,4 +229,40 @@ class CollectedPlan {
     /** React 是否回退 getI18n 的结果缓存（同一 collect 只算一次）。 */
     var reactFallbackChecked: Boolean = false
     var reactFallbackResult: Boolean = false
+
+    /**
+     * 生成 collect 期产物的**不可变快照**（[CollectedResult]）。collect 结束后调用一次，
+     * 之后 run/apply 阶段只消费该快照 —— 把「collect 期可变 / run 期只读」的边界由类型强制。
+     * 各集合字段均复制为不可变 [List]/[Set]/[Map]，run 期无法反向写回本收集容器。
+     */
+    fun freeze(): CollectedResult = CollectedResult(
+        collectedSites = collectedSites.toList(),
+        blockedSiteIds = blockedSiteIds.toSet(),
+        extractedStrings = extractedStrings.toMap(),
+        existingStrings = existingStrings.toMap(),
+        rewrites = rewrites.toList(),
+        framework = framework ?: GenericStrategy,
+        tFunctionName = tFunctionName,
+        needInjectGlobalDollarT = needInjectGlobalDollarT,
+        reactI18nTFallbackToDollarT = reactI18nTFallbackToDollarT,
+    )
+
+    /**
+     * 原位清空所有收集期状态（供每次 collect / reset 复用同一实例，避免共享引用被替换后
+     * 收集器/分析器持有的旧引用失效 —— 这正是「共享 plan 打破构造循环」的前提）。
+     */
+    fun clear() {
+        collectedSites.clear()
+        blockedSiteIds.clear()
+        siteCounter = 0
+        extractedStrings.clear()
+        existingStrings.clear()
+        rewrites.clear()
+        framework = null
+        tFunctionName = "\$t"
+        needInjectGlobalDollarT = false
+        reactI18nTFallbackToDollarT = false
+        reactFallbackChecked = false
+        reactFallbackResult = false
+    }
 }

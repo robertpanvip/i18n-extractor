@@ -72,8 +72,8 @@ class ExtractedStringsDialog(
     // Swing 默认列：Boolean / String / String / String / String / Int / String
     private class AffixModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
         override fun getColumnClass(columnIndex: Int): Class<*> = when (columnIndex) {
-            0 -> java.lang.Boolean::class.java
-            5 -> java.lang.Integer::class.java
+            0 -> Boolean::class.java
+            5 -> Int::class.java
             else -> String::class.java
         }
 
@@ -82,8 +82,8 @@ class ExtractedStringsDialog(
 
     private class DigitModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
         override fun getColumnClass(columnIndex: Int): Class<*> = when (columnIndex) {
-            0 -> java.lang.Boolean::class.java
-            4 -> java.lang.Integer::class.java
+            0 -> Boolean::class.java
+            4 -> Int::class.java
             else -> String::class.java
         }
 

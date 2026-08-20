@@ -49,24 +49,26 @@ class I18nProcessor @JvmOverloads constructor(
     // ─────────────────────────────────────────────────────────────
     internal val factory: XmlElementFactory = XmlElementFactory.getInstance(project)
 
+    /** 收集期容器：分析器 / 收集器 / 注入器共享的**同一个实例**（消除 lateinit 回填，打破构造循环）。 */
+    internal val plan = com.pan.extractor.planner.CollectedPlan()
+
     /** 「翻译调用 import / i18n 实例注入」辅助类。 */
-    internal val injector: ImportManager by lazy { ImportManager(this) }
+    internal val injector: ImportManager by lazy { ImportManager(this, plan) }
 
     /** 「JS 字符串收集 与 $t 表达式生成」辅助类。 */
-    internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this) }
+    internal val jsCollector: JsStringCollector by lazy { JsStringCollector(this, plan) }
 
     /** 单文件收集与分析宿主：拥有收集期状态，是 collectedSites / extractedStrings / tFunctionName 等的唯一事实来源。
-     *  懒初始化时为两个收集/注入器回填 [CollectionState]（能力面经构造函数注入，状态面经此关联）。 */
+     *  能力面经构造函数注入，状态面（[plan]）与分析器/收集器/注入器共享同一实例 —— 收集期在**构造时**即已连通，
+     *  无需事后回填（消除 lateinit 的脆弱初始化顺序）。 */
     internal val analyzer: com.pan.extractor.analyzer.I18nAnalyzer by lazy {
         com.pan.extractor.analyzer.I18nAnalyzer(
             project = project,
             contract = this,
             jsCollector = jsCollector,
             injector = injector,
-        ).also {
-            jsCollector.state = it
-            injector.state = it
-        }
+            plan = plan,
+        )
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -65,20 +65,24 @@ open class I18nFileOrchestrator {
         if (containingFile != null && EntryFileLocator.isTranslationResourceFile(containingFile)) return
 
         val analyzer = processor.analyzer
-        // Rewriter 阶段唯一入口：由解释器统一执行本处理器收集的数据配方（取代旧的 pendingChanges 闭包流）。
-        com.pan.extractor.rewriter.RewriteInterpreter.executeProcessor(processor)
+        // 收紧 collect/run 边界：run 段只消费 collect 结束时的**不可变快照**（[CollectedResult]），
+        // 不再触碰可变 [com.pan.extractor.planner.CollectedPlan]（framework/rewrites/inject 决策全部取自快照）。
+        val result = analyzer.snapshot()
+
+        // Rewriter 阶段唯一入口：由解释器统一执行本次收集冻结的数据配方（取代旧的 pendingChanges 闭包流）。
+        com.pan.extractor.rewriter.RewriteInterpreter.executeProcessor(processor, result)
 
         // 注入分支按框架拆到 ImportManager，本层只做派发。
         processor.injector.injectForFramework(
             processor = processor,
             psiFile = context.psiFile,
-            framework = analyzer.framework,
+            framework = result.framework,
             decision = ImportManager.InjectionDecision(
-                needInjectGlobalDollarT = analyzer.needInjectGlobalDollarT,
-                reactI18nTFallbackToDollarT = analyzer.reactI18nTFallbackToDollarT,
-                tFunctionName = processor.analyzer.tFunctionName,
-                hasExtractedStrings = processor.analyzer.extractedStrings.isNotEmpty(),
-                hasExistingStrings = processor.analyzer.existingStrings.isNotEmpty(),
+                needInjectGlobalDollarT = result.needInjectGlobalDollarT,
+                reactI18nTFallbackToDollarT = result.reactI18nTFallbackToDollarT,
+                tFunctionName = result.tFunctionName,
+                hasExtractedStrings = result.extractedStrings.isNotEmpty(),
+                hasExistingStrings = result.existingStrings.isNotEmpty(),
             ),
         )
     }

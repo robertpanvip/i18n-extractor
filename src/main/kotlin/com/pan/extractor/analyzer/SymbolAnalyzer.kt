@@ -106,6 +106,12 @@ object SymbolAnalyzer {
     /** 裸引用名若为此集合，才值得做来源证明；其它名字走「非翻译名 → 依赖证明」通道。 */
     private val TRANSLATION_LIKE_NAMES = setOf("t", "tc", "\$t", "\$tc")
 
+    /** `from '<src>'` 模块源提取（固定模式，多处复用，避免每次 new Regex / Pattern.compile）。 */
+    private val FROM_SOURCE_RE = Regex("""from\s*['"]([^'"]+)['"]""")
+
+    /** `export * from '<src>'` 星号全量 re-export 提取（固定模式）。 */
+    private val EXPORT_STAR_FROM_RE = Regex("""export\s*\*\s*from\s*['"]([^'"]+)['"]""")
+
     /**
      * 分析一个翻译候选调用。
      *
@@ -380,7 +386,7 @@ object SymbolAnalyzer {
     private fun importsFromI18nFramework(decl: ES6ImportDeclaration, localName: String?): Boolean {
         if (localName == null) return false
         val text = decl.text
-        val src = Regex("""from\s*['"]([^'"]+)['"]""").find(text)
+        val src = FROM_SOURCE_RE.find(text)
             ?.groupValues?.get(1)?.trim()?.lowercase() ?: return false
         if (src in I18N_FRAMEWORK_MODULES) {
             return importLocalNameMatches(text, localName)
@@ -418,7 +424,7 @@ object SymbolAnalyzer {
 
     /** 从非框架 import 出发，跟随 barrel / re-export 链，判定其是否最终来自 i18n 框架。 */
     private fun importIsBarrelReExportFromFramework(decl: ES6ImportDeclaration, localName: String): Boolean {
-        val srcMatch = Regex("""from\s*['"]([^'"]+)['"]""").find(decl.text)
+        val srcMatch = FROM_SOURCE_RE.find(decl.text)
             ?.groupValues?.get(1)?.trim() ?: return false
         val target = resolveSourceFile(decl.containingFile, srcMatch) ?: return false
         return fileReExportsNameFromFramework(target, localName, mutableSetOf())
@@ -497,7 +503,7 @@ object SymbolAnalyzer {
         val name = Regex.escape(localName)
 
         val namedFrom = Regex("""export\s*\{[^}]*\b$name\b[^}]*\}\s*from\s*['"]([^'"]+)['"]""")
-        val starFrom = Regex("""export\s*\*\s*from\s*['"]([^'"]+)['"]""")
+        val starFrom = EXPORT_STAR_FROM_RE
 
         // 形态 1 / 2：直接 re-export
         for (m in namedFrom.findAll(text) + starFrom.findAll(text)) {
@@ -511,7 +517,7 @@ object SymbolAnalyzer {
         if (Regex("""export\s*\{[^}]*\b$name\b[^}]*\}""").containsMatchIn(text)) {
             for (imp in PsiTreeUtil.findChildrenOfType(barrel, ES6ImportDeclaration::class.java)) {
                 if (!importLocalNameMatches(imp.text, localName)) continue
-                val impSrc = Regex("""from\s*['"]([^'"]+)['"]""").find(imp.text)
+                val impSrc = FROM_SOURCE_RE.find(imp.text)
                     ?.groupValues?.get(1)?.trim() ?: continue
                 if (impSrc.lowercase() in I18N_FRAMEWORK_MODULES) return true
                 val nested = resolveSourceFile(barrel, impSrc) ?: continue

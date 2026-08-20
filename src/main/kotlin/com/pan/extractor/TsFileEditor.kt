@@ -104,6 +104,7 @@ object TsFileEditor {
         return result
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun deepCloneMap(m: Map<String, Any?>): MutableMap<String, Any?> {
         val result = LinkedHashMap<String, Any?>()
         for ((k, v) in m) {
@@ -122,6 +123,7 @@ object TsFileEditor {
         return result
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun tryWriteNested(root: MutableMap<String, Any?>, dottedKey: String, value: String): Boolean {
         val segments = dottedKey.split('.')
         var cur: MutableMap<String, Any?> = root
@@ -483,6 +485,7 @@ object TsFileEditor {
     }
 
     /** 把静态值渲染为 TS 字面量字符串（value 段）。nestingDepth = 当前对象嵌套层数（1 = 对象首层级）。 */
+    @Suppress("UNCHECKED_CAST")
     private fun renderStaticValue(value: Any?, indentUnit: String, nestingDepth: Int): String {
         val indent = indentUnit.repeat(nestingDepth)
         val outerIndent = indentUnit.repeat((nestingDepth - 1).coerceAtLeast(0))
@@ -773,7 +776,7 @@ object TsFileEditor {
     /** 计算某个对象区间在给定文本中的新文本（基于合并后的扁平 key）。 */
     internal fun newRegionText(text: String, objRange: IntRange, newFlat: Map<String, String>, existing: Map<String, Any?>, dropExistingKeys: Set<String> = emptySet()): String {
         val merged = mergeFlatIntoNested(existing, newFlat, dropExistingKeys)
-        val oldObjBody = text.substring(objRange.first, objRange.endExclusive)
+        val oldObjBody = text.substring(objRange.first, objRange.last + 1)
         return regenerateObjectLiteralBody(oldObjBody, merged, dropExistingKeys)
     }
 
@@ -781,7 +784,7 @@ object TsFileEditor {
     internal fun applyRangeReplacements(text: String, replacements: List<Pair<IntRange, String>>): String {
         var result = text
         for ((range, newText) in replacements.sortedByDescending { it.first.last }) {
-            result = result.substring(0, range.first) + newText + result.substring(range.endExclusive)
+            result = result.substring(0, range.first) + newText + result.substring(range.last + 1)
         }
         return result
     }

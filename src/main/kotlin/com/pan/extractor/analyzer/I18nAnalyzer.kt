@@ -35,9 +35,9 @@ class I18nAnalyzer(
     private val contract: I18nProcessorContract,
     private val jsCollector: JsStringCollector,
     private val injector: ImportManager,
+    /** 与 [jsCollector]/[injector] 共享的收集期容器（同一个实例，打破构造循环；reset 时原位 [clear]）。 */
+    private val plan: com.pan.extractor.planner.CollectedPlan,
 ) : com.pan.extractor.CollectionState {
-    /** 收集期产物容器（本 analyzer 拥有的唯一可变状态，reset 时整体替换清零）。 */
-    private var plan = com.pan.extractor.planner.CollectedPlan()
 
     /** 从原始文本提取 $t/$tc/i18n.global.t 等调用（模板里 backtick 场景），对象级复用避免重复编译。
      *  BUG_ANALYSIS 3.4：去掉 [^
@@ -50,19 +50,19 @@ class I18nAnalyzer(
     // 状态访问（供 I18nProcessor 薄转发 + 编排器/下游消费，禁止外部直接改 plan 之外的散落字段）
     // ─────────────────────────────────────────────────────────────
 
-    /** 一次提取命中站点列表（领域模型 site）。 */
-    val collectedSites: MutableList<com.pan.extractor.model.ExtractionSite> get() = plan.collectedSites
+    /** 一次提取命中的站点列表（领域模型 site）。只读视图。 */
+    val collectedSites: List<com.pan.extractor.model.ExtractionSite> get() = plan.collectedSites
 
-    /** 被骨架合并承载、应跳过普通替换的 siteId 集合。 */
+    /** 被骨架合并承载、应跳过普通替换的 siteId 集合。只读视图。 */
     val blockedSiteIds: MutableSet<String> get() = plan.blockedSiteIds
 
-    /** 收集期产出的全部站点改写配方（数据化，取代旧的 pendingChanges 闭包流）。 */
-    val rewrites: MutableList<RewritePlan> get() = plan.rewrites
+    /** 收集期产出的全部站点改写配方（数据化，取代旧的 pendingChanges 闭包流）。只读视图。 */
+    val rewrites: List<RewritePlan> get() = plan.rewrites
 
-    /** 新提取的 key -> 原文本。 */
+    /** 新提取的 key -> 原文本。只读视图。 */
     override val extractedStrings: MutableMap<String, String> get() = plan.extractedStrings
 
-    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换）。 */
+    /** 已存在的 $t() 调用 key -> 原文本（仅展示，不替换）。只读视图。 */
     val existingStrings: MutableMap<String, String> get() = plan.existingStrings
 
     /** 检测到的翻译函数名（$t / t / i18n.t / i18n.global.t），默认 $t。 */
@@ -93,13 +93,19 @@ class I18nAnalyzer(
         set(value) { plan.siteCounter = value }
     private fun nextSiteId(): String = "S${++siteCounter}"
 
-    /** 重置所有收集期状态（[CollectedPlan] 整体替换），保证 collect() 幂等可重复执行（BUG_ANALYSIS 4.1）。 */
+    /** 重置所有收集期状态（共享 [plan] 原位 [clear]，保证 collect() 幂等可重复执行（BUG_ANALYSIS 4.1））。 */
     fun resetState() {
-        plan = com.pan.extractor.planner.CollectedPlan()
+        plan.clear()
         // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
         // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
         jsCollector.clearProcessedEnums()
     }
+
+    /**
+     * 把 collect 期产物冻结为不可变 [CollectedResult] 快照 —— **run/apply 阶段的唯一输入**。
+     * 调用后 run 阶段只消费本快照，不再触碰可变 [plan]，从类型上强制「collect 期写 / run 期读」边界。
+     */
+    fun snapshot(): com.pan.extractor.planner.CollectedResult = plan.freeze()
 
     // ─────────────────────────────────────────────────────────────
     // 统一登记 site + 数据配方（取代旧的 recordChange 闭包流）
@@ -127,7 +133,7 @@ class I18nAnalyzer(
         val isVue = form == SiteForm.VUE_BINDING || form == SiteForm.VUE_MUSTACHE
         val isReact = !isVue && (form == SiteForm.JSX_ATTRIBUTE || form == SiteForm.TEMPLATE_LITERAL)
         val vf = f?.virtualFile
-        collectedSites += com.pan.extractor.model.ExtractionSite(
+        plan.collectedSites += com.pan.extractor.model.ExtractionSite(
             id = id,
             originalMessage = message.trim(),
             replaceRoot = ptr,
