@@ -112,6 +112,74 @@ object SymbolAnalyzer {
     /** `export * from '<src>'` 星号全量 re-export 提取（固定模式）。 */
     private val EXPORT_STAR_FROM_RE = Regex("""export\s*\*\s*from\s*['"]([^'"]+)['"]""")
 
+    /** 本地同名变量"不存在"的哨兵：ConcurrentHashMap.computeIfAbsent 存不了 null，用它占位。 */
+    private object NO_LOCAL_VAR
+
+    private class FileScanMemo(val stamp: Long) {
+        val localVar = java.util.concurrent.ConcurrentHashMap<String, Any>()   // JSVariable | NO_LOCAL_VAR
+        val localFunction = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        val shadowText = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        val i18nImport = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        val anyModuleImport = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        val hookDestructure = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    }
+
+    private val fileScanMemo = java.util.concurrent.ConcurrentHashMap<String, FileScanMemo>()
+
+    /** 取 [file] 对应缓存代。公式变时（WriteAction bump modificationStamp）整代重建，杜绝读陈旧 PSI。 */
+    private fun fileScanGen(file: PsiFile): FileScanMemo? {
+        val vf = file.virtualFile ?: return null   // 无虚拟文件（极个别内存/测试文件）→ 禁用缓存直接算
+        val key = vf.path
+        val stamp = vf.modificationStamp
+        var memo = fileScanMemo[key]
+        if (memo == null || memo.stamp != stamp) {
+            memo = FileScanMemo(stamp)
+            fileScanMemo[key] = memo
+            if (fileScanMemo.size > 2048) fileScanMemo.clear()   // 长期会话防无限增长
+        }
+        return memo
+    }
+
+    /** 找文件中名为 [name] 的本地变量声明（排除 import 绑定），带全文件级缓存。 */
+    private fun findLocalVariableNamedCached(file: PsiFile, name: String): JSVariable? {
+        val memo = fileScanGen(file)
+        if (memo == null) return findLocalVariableNamed(file, name)
+        return when (val v = memo.localVar.computeIfAbsent(name) { findLocalVariableNamed(file, it) ?: NO_LOCAL_VAR }) {
+            NO_LOCAL_VAR -> null
+            else -> v as JSVariable
+        }
+    }
+
+    private fun findLocalFunctionNamedCached(file: PsiFile, name: String): Boolean {
+        val memo = fileScanGen(file)
+        if (memo == null) return findLocalFunctionNamed(file, name)
+        return memo.localFunction.computeIfAbsent(name) { findLocalFunctionNamed(file, it) }
+    }
+
+    private fun hasLocalShadowDeclarationTextCached(file: PsiFile, name: String): Boolean {
+        val memo = fileScanGen(file)
+        if (memo == null) return hasLocalShadowDeclarationText(file, name)
+        return memo.shadowText.computeIfAbsent(name) { hasLocalShadowDeclarationText(file, it) }
+    }
+
+    private fun importedFromI18nFrameworkInCached(file: PsiFile, name: String): Boolean {
+        val memo = fileScanGen(file)
+        if (memo == null) return importedFromI18nFrameworkIn(file, name)
+        return memo.i18nImport.computeIfAbsent(name) { importedFromI18nFrameworkIn(file, it) }
+    }
+
+    private fun importedFromAnyModuleInCached(file: PsiFile, name: String): Boolean {
+        val memo = fileScanGen(file)
+        if (memo == null) return importedFromAnyModuleIn(file, name)
+        return memo.anyModuleImport.computeIfAbsent(name) { importedFromAnyModuleIn(file, it) }
+    }
+
+    private fun destructuredFromKnownHookInCached(file: PsiFile, name: String): Boolean {
+        val memo = fileScanGen(file)
+        if (memo == null) return destructuredFromKnownHookIn(file, name)
+        return memo.hookDestructure.computeIfAbsent(name) { destructuredFromKnownHookIn(file, it) }
+    }
+
     /**
      * 分析一个翻译候选调用。
      *
@@ -200,18 +268,18 @@ object SymbolAnalyzer {
         val file = ref.containingFile ?: return SymbolOrigin.UNKNOWN
 
         // 1) 本地同名变量声明（const/let/var 名为 name，排除 import 绑定）→ 按 initializer 形状分类
-        val localVar = findLocalVariableNamed(file, name)
+        val localVar = findLocalVariableNamedCached(file, name)
         if (localVar != null) return classifyLocalDeclaration(localVar)
 
         // 2) 本地同名函数声明（function t() {}）→ 本地 shadow
-        if (findLocalFunctionNamed(file, name)) return SymbolOrigin.LOCAL_SHADOW
+        if (findLocalFunctionNamedCached(file, name)) return SymbolOrigin.LOCAL_SHADOW
 
         // 3) 本地声明文本证明（namespace/class/module/interface/type/const 开头声明）→ 本地 shadow。
         //    覆盖 TS namespace（`namespace ns { export function t }`）等 PSI 类型不易枚举的场景。
-        if (hasLocalShadowDeclarationText(file, name)) return SymbolOrigin.LOCAL_SHADOW
+        if (hasLocalShadowDeclarationTextCached(file, name)) return SymbolOrigin.LOCAL_SHADOW
 
         // 4) 文件级 import 扫描：name 出现在 i18n 框架模块 import（含别名）→ 框架
-        if (importedFromI18nFrameworkIn(file, name)) return SymbolOrigin.I18N_FRAMEWORK_IMPORT
+        if (importedFromI18nFrameworkInCached(file, name)) return SymbolOrigin.I18N_FRAMEWORK_IMPORT
 
         // 5) 链式接收者的约定实例名（仅 instanceTrust）：i18n / i18next。
         //    放在「非框架 import」之前：`import i18n from '@/locales/i18n'`（自定义 locale 文件，
@@ -221,10 +289,10 @@ object SymbolAnalyzer {
         }
 
         // 6) 文件级 import 扫描：name 从任何非框架模块 import → 结构上非 i18n
-        if (importedFromAnyModuleIn(file, name)) return SymbolOrigin.NON_I18N
+        if (importedFromAnyModuleInCached(file, name)) return SymbolOrigin.NON_I18N
 
         // 7) 文件级解构扫描：`const { name } = <knownHook>()` → hook 产物
-        if (destructuredFromKnownHookIn(file, name)) return SymbolOrigin.I18N_HOOK_OR_FACTORY
+        if (destructuredFromKnownHookInCached(file, name)) return SymbolOrigin.I18N_HOOK_OR_FACTORY
 
         // 无任何证据 → 三态 UNKNOWN（既不提取也不改写）
         return SymbolOrigin.UNKNOWN
