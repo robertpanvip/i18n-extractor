@@ -14,7 +14,6 @@ import com.intellij.psi.*
 import com.intellij.psi.impl.PsiElementBase
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.ProcessingContext
-import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.messages.LocaleMessages
 import com.pan.extractor.strategy.I18nFrameworkRegistry
 
@@ -100,13 +99,14 @@ class I18nTranslationReference(
         // 复用 LocaleMessages 的缓存快速判断 key 是否存在，避免对不存在的 key 做文件定位和解析
         if (key !in LocaleMessages.loadCached(project, file)) return null
 
-        val entryFile = EntryFileLocator.findChineseLocaleEntryFile(project, file) ?: return null
+        // 使用与 loadCached 相同的入口文件定位逻辑（语言一致，带缓存）
+        val entryFile = LocaleMessages.entryFileForCached(project, file) ?: return null
         val psiFile = PsiManager.getInstance(project).findFile(entryFile) ?: return null
         val doc = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
 
         val offset = if (entryFile.extension?.lowercase() == "json") {
-            // JSON 文件：先尝试按嵌套 key 逐级下钻定位 value，若失败则回退到文本搜索
-            findJsonKeyOffset(doc.text, key) ?: findTextKeyOffset(doc, key) ?: return null
+            // JSON 文件：loadCached 已确认 key 存在，findJsonKeyOffset 应始终成功
+            findJsonKeyOffset(doc.text, key) ?: return null
         } else {
             // TS/JS 文件：文本搜索
             findTextKeyOffset(doc, key) ?: return null

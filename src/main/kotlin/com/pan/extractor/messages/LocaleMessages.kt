@@ -78,6 +78,15 @@ object LocaleMessages {
     }
 
     /**
+     * 获取当前折叠展示语言对应的翻译入口文件（带缓存，与 [loadCached] 使用相同的定位逻辑）。
+     * 用于导航场景：需要入口文件路径来计算偏移量，而非仅获取翻译映射。
+     */
+    fun entryFileForCached(project: Project, contextPsiFile: PsiFile?): VirtualFile? {
+        val displayLang = I18nSettings.getInstance().foldDisplayLanguage()
+        return entryVirtualFile(project, contextPsiFile, displayLang)
+    }
+
+    /**
      * 定位指定语言的翻译入口文件（带缓存，避免每次折叠都做项目目录扫描）。
      * 入口文件失效（被删除/改名）时自动回退重新定位。
      */
