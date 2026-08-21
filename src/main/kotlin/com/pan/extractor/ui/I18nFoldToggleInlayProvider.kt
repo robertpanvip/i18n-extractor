@@ -7,9 +7,8 @@ import com.pan.extractor.analyzer.*
 
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.progress.EmptyProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
@@ -161,35 +160,36 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             if (pendingInlays.isNotEmpty()) drainInlayQueue(project)
             return
         }
+        if (project.isDisposed) {
+            inlayBusy.set(false)
+            return
+        }
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                if (!task.editor.isDisposed && !project.isDisposed && !DumbService.isDumb(project)) {
-                    addFoldToggleInlaysAsync(task.editor, task.file, task.messages)
-                }
-            } catch (t: Throwable) {
-                LOG.warn("Inlay 处理异常: ${task.file.name}", t)
-            } finally {
-                inlayBusy.set(false)
-                if (pendingInlays.isNotEmpty()) {
-                    drainInlayQueue(project)
-                }
+        // ReadAction.nonBlocking 在后台池线程上以「可取消 read action + coroutine Job」语义执行，
+        // 提供 TS resolve 引擎（JSGraphBuildExecutor.runBlockingCancellable）所需的 Job/进度上下文。
+        // 此前的 executeOnPooledThread + runProcess(EmptyProgressIndicator) 只注入进度指示器、
+        // 不安装 coroutine Job；无该 Job 时 runBlockingCancellable 抛
+        // "There is no ProgressIndicator or Job in this thread"，导致折叠与 inlay 全部失效。
+        ReadAction.nonBlocking<Unit> {
+            if (!task.editor.isDisposed && !project.isDisposed && !DumbService.isDumb(project)) {
+                addFoldToggleInlaysUnderProgress(task.editor, task.file, task.messages)
             }
         }
+            .inSmartMode(project)
+            .submit(ApplicationManager.getApplication())
+            .onSuccess { finishInlayTask(project) }
+            .onError(java.util.function.Consumer<Throwable> { t ->
+                LOG.warn("Inlay 处理异常: ${task.file.name}", t)
+                finishInlayTask(project)
+            })
     }
 
-    /**
-     * 后台线程：遍历 PSI 收集翻译调用，完成后 EDT 写入 inlay。
-     * 将耗时的 PSI 遍历 + Symbol 解析从 UI 线程剥离，避免打开大文件时卡顿。
-     * PSI 访问必须在 read action 内执行。
-     */
-    private fun addFoldToggleInlaysAsync(editor: Editor, file: PsiFile, messages: Map<String, String>) {
-        // 后台池线程默认没有 Job / ProgressIndicator 线程上下文；TS resolve 引擎里的
-        // runBlockingCancellable 会因缺少进度上下文抛 IllegalStateException。这里用
-        // EmptyProgressIndicator 注入进度上下文，保证整个 PSI 遍历 + resolve 过程可取消。
-        ProgressManager.getInstance().runProcess({
-            addFoldToggleInlaysUnderProgress(editor, file, messages)
-        }, EmptyProgressIndicator())
+    /** 释放"正在处理"占用位并继续排空队列。 */
+    private fun finishInlayTask(project: Project) {
+        inlayBusy.set(false)
+        if (pendingInlays.isNotEmpty()) {
+            drainInlayQueue(project)
+        }
     }
 
     private fun addFoldToggleInlaysUnderProgress(editor: Editor, file: PsiFile, messages: Map<String, String>) {

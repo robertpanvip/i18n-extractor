@@ -11,12 +11,11 @@ import com.intellij.lang.folding.FoldingDescriptor
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.TextEditor
-import com.intellij.openapi.progress.EmptyProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
@@ -70,19 +69,28 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             return computeFoldsSync(root, contextFile, messages)
         }
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            // 后台池线程默认没有 ProgressIndicator 上下文；TS resolve 引擎里的
-            // runBlockingCancellable 会因缺少进度上下文抛 IllegalStateException。
-            // 注入 EmptyProgressIndicator 保证整个 PSI 遍历 + resolve 过程可取消。
-            ProgressManager.getInstance().runProcess({
-                computeAndApplyFolds(project, root, document, contextFile, messages)
-            }, EmptyProgressIndicator())
+        // ReadAction.nonBlocking 在后台池线程上以「可取消 read action + coroutine Job」语义执行，
+        // 提供 TS resolve 引擎（JSGraphBuildExecutor.runBlockingCancellable）所需的 Job/进度上下文。
+        // 此前用 executeOnPooledThread + runProcess(EmptyProgressIndicator) 只注入进度指示器、
+        // 不安装 coroutine Job；无该 Job 时 runBlockingCancellable 抛
+        // "There is no ProgressIndicator or Job in this thread"，导致折叠与 inlay 全部失效。
+        ReadAction.nonBlocking<Array<FoldingDescriptor>> {
+            computeFolds(root, contextFile, messages)
         }
+            .inSmartMode(project)
+            .coalesceBy(this, root)
+            .submit(ApplicationManager.getApplication())
+            .onSuccess { descriptors ->
+                if (descriptors.isEmpty()) return@onSuccess
+                ApplicationManager.getApplication().invokeLater {
+                    applyFoldsToEditors(project, document, descriptors.toList())
+                }
+            }
 
         return FoldingDescriptor.EMPTY_ARRAY
     }
 
-    /** 同步计算折叠描述符（仅测试模式使用，生产环境走 [computeAndApplyFolds] 异步路径）。 */
+    /** 同步计算折叠描述符（仅测试模式使用，生产环境走 [computeFolds] 异步路径）。 */
     private fun computeFoldsSync(root: PsiElement, contextFile: PsiFile, messages: Map<String, String>): Array<FoldingDescriptor> {
         val t0 = System.nanoTime()
         // 宿主树（== 折叠目标文档）上的 $t/t() 调用：坐标即宿主坐标，可直接折叠。
@@ -101,39 +109,30 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return descriptors.toTypedArray()
     }
 
-    /** 后台线程：全量 PSI 遍历 + Symbol 解析，完成后 EDT 注入折叠。 */
-    private fun computeAndApplyFolds(
-        project: Project,
+    /** 后台(read-action)线程：全量 PSI 遍历 + Symbol 解析，产出折叠描述符。
+     *  由 [ReadAction.nonBlocking] 调用（其已持有可取消 read action + coroutine Job）；
+     *  计算完成后由调用方在 EDT 上 [applyFoldsToEditors] 注入。 */
+    private fun computeFolds(
         root: PsiElement,
-        document: Document,
         contextFile: PsiFile,
         messages: Map<String, String>,
-    ) {
+    ): Array<FoldingDescriptor> {
         val t0 = System.nanoTime()
-        val descriptors = ApplicationManager.getApplication().runReadAction<MutableList<FoldingDescriptor>> {
-            val descs = mutableListOf<FoldingDescriptor>()
-            if (root is PsiFile && root.containingFile == contextFile) {
-                for (call in collectJSCallExpressions(root)) {
-                    addFoldingDescriptor(call, messages, descs)
-                }
+        val descs = mutableListOf<FoldingDescriptor>()
+        if (root is PsiFile && root.containingFile == contextFile) {
+            for (call in collectJSCallExpressions(root)) {
+                addFoldingDescriptor(call, messages, descs)
             }
-            // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
-            addRawFolds(contextFile, messages, descs)
-            // 日志里的 textLength 也需要读锁
-            val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-            if (elapsedMs >= SLOW_FOLD_MS) {
-                logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
-            } else {
-                logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
-            }
-            descs
         }
-
-        if (descriptors.isEmpty()) return
-
-        ApplicationManager.getApplication().invokeLater({
-            applyFoldsToEditors(project, document, descriptors)
-        })
+        // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
+        addRawFolds(contextFile, messages, descs)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+        if (elapsedMs >= SLOW_FOLD_MS) {
+            logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
+        } else {
+            logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
+        }
+        return descs.toTypedArray()
     }
 
     /** EDT：将计算好的折叠描述符注入到所有打开该文件的编辑器。 */
