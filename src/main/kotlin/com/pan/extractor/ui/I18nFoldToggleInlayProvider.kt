@@ -100,23 +100,19 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             val messages = LocaleMessages.loadCached(project, file)
             if (messages.isEmpty()) return@invokeLater
 
-            // 点击 inlay 时切换折叠状态（鼠标监听器轻量，保留在 EDT）
-            // Ctrl+click → 跳转到翻译文件；普通点击 → 切换折叠/展开
+            // 点击 inlay 时切换折叠状态；点击折叠文本时跳转到翻译文件
             editor.addEditorMouseListener(object : EditorMouseListener {
                 override fun mouseClicked(e: EditorMouseEvent) {
                     if (e.mouseEvent.button != MouseEvent.BUTTON1) return
+                    val clickOffset = editor.logicalPositionToOffset(
+                        editor.xyToLogicalPosition(e.mouseEvent.point)
+                    )
                     val clickedInlay = editor.inlayModel.getInlineElementsInRange(
-                        editor.logicalPositionToOffset(editor.xyToLogicalPosition(e.mouseEvent.point)),
-                        editor.logicalPositionToOffset(editor.xyToLogicalPosition(e.mouseEvent.point))
+                        clickOffset, clickOffset
                     ).firstOrNull { it.renderer is I18nFoldToggleRenderer }
+
                     if (clickedInlay != null) {
-                        val renderer = clickedInlay.renderer as I18nFoldToggleRenderer
-                        // Ctrl+click：跳转到翻译文件
-                        if (e.mouseEvent.isControlDown && renderer.key != null && !project.isDisposed) {
-                            navigateToKey(project, file, renderer.key!!)
-                            return
-                        }
-                        // 普通点击：切换折叠/展开
+                        // 点击 inlay（↩ 图标）→ 切换折叠/展开
                         val offset = clickedInlay.offset
                         val fm = editor.foldingModel
                         fm.runBatchFoldingOperation {
@@ -125,6 +121,20 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                                 .minByOrNull { it.endOffset - it.startOffset }
                             if (fold != null) {
                                 fold.isExpanded = !fold.isExpanded
+                            }
+                        }
+                    } else {
+                        // 点击折叠文本（翻译译文）→ 跳转到翻译文件
+                        val fm = editor.foldingModel
+                        val collapsedRegion = fm.allFoldRegions.firstOrNull { fold ->
+                            !fold.isExpanded && fold.startOffset <= clickOffset && clickOffset <= fold.endOffset
+                        }
+                        if (collapsedRegion != null && !project.isDisposed) {
+                            // 查找该折叠区域对应的翻译 key
+                            val key = findKeyForFoldRegion(project, editor, collapsedRegion)
+                            if (key != null) {
+                                e.mouseEvent.consume()
+                                navigateToKey(project, file, key)
                             }
                         }
                     }
@@ -388,6 +398,31 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         } catch (e: Exception) {
             LOG.warn("导航到翻译文件失败: key=$key", e)
         }
+    }
+
+    /**
+     * 从折叠区域查找关联的翻译 key。
+     * 优先通过 [PsiTreeUtil.findElementOfClassAtOffset] 在编辑偏移处查找
+     * [JSCallExpression] 并提取 key（宿主树调用）；未命中时回退到
+     * [collectRawTCalls] 按起始偏移匹配（Vue 模板注入调用）。
+     */
+    private fun findKeyForFoldRegion(project: Project, editor: Editor, foldRegion: FoldRegion): String? {
+        if (project.isDisposed) return null
+        val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return null
+        val fw = I18nFrameworkRegistry.detect(file)
+
+        // 尝试从宿主树 JSCallExpression 提取 key
+        val call = ReadAction.compute<JSCallExpression?, Exception> {
+            if (project.isDisposed) return@compute null
+            PsiTreeUtil.findElementOfClassAtOffset(file, foldRegion.startOffset, JSCallExpression::class.java, false)
+        }
+        if (call != null && fw.isTranslationCall(call)) {
+            return fw.extractKey(call)
+        }
+
+        // 回退：从原始文本调用匹配（Vue 模板）
+        val rawCalls = collectRawTCalls(file)
+        return rawCalls.firstOrNull { it.range.startOffset == foldRegion.startOffset }?.key
     }
 
 }
