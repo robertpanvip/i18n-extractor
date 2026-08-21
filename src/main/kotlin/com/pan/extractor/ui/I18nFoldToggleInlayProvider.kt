@@ -33,6 +33,7 @@ import java.awt.event.MouseEvent
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 在 t()/`$t()` 调用前添加可点击的 ↩ inlay 提示，用于快速折叠/展开切换。
@@ -53,6 +54,10 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java)
         /** 全局串行化：同一时间只处理一个文件的 inlay */
         private val inlayBusy = AtomicBoolean(false)
+        /** 记录 inlayBusy 被占用的时刻，用于看门狗检测"忙标志被异常遗留导致的永久死锁" */
+        private val busySinceMillis = AtomicLong(0L)
+        /** 忙标志允许的最大持有时间；超过则视为异常遗留，强制复位避免 inlay 从此不再显示 */
+        private const val BUSY_WATCHDOG_MS = 64_000L
         /** 待处理队列（当前 active 的编辑器） */
         private val pendingInlays = ConcurrentLinkedQueue<InlayTask>()
         /** 尚未被选中的编辑器任务：project -> editor(身份) -> task，切 tab 时取用 */
@@ -147,7 +152,16 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
      * 通过 [inlayBusy] CAS 保证无并发，处理完一个后自动取下一个。
      */
     private fun drainInlayQueue(project: Project) {
+        // 看门狗：若忙标志被异常遗留（旧版本崩溃曾导致此状态），超过阈值后强制复位，
+        // 避免队列从此永久被跳过、inlay 不再显示。
+        val since = busySinceMillis.get()
+        if (since != 0L && System.currentTimeMillis() - since > BUSY_WATCHDOG_MS) {
+            LOG.warn("I18nFoldToggleInlay: inlayBusy 超过 ${BUSY_WATCHDOG_MS}ms 未释放，强制复位")
+            inlayBusy.set(false)
+            busySinceMillis.set(0L)
+        }
         if (!inlayBusy.compareAndSet(false, true)) return
+        busySinceMillis.set(System.currentTimeMillis())
 
         val task = pendingInlays.poll()
         if (task == null) {
@@ -188,6 +202,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
     /** 释放"正在处理"占用位并继续排空队列。 */
     private fun finishInlayTask(project: Project) {
         inlayBusy.set(false)
+        busySinceMillis.set(0L)
         if (pendingInlays.isNotEmpty()) {
             drainInlayQueue(project)
         }
@@ -197,6 +212,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         val t0 = System.nanoTime()
         val fileSize = ApplicationManager.getApplication().runReadAction<Int> { file.textLength }
         val fw = I18nFrameworkRegistry.detect(file)
+        LOG.info("I18nFoldToggleInlay[运行] file=${file.name}")
 
         data class InlayTarget(val offset: Int)
 
@@ -226,22 +242,26 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 list.add(InlayTarget(raw.range.endOffset))
             }
             val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-            val msg = "I18nFoldToggleInlay[打开] file=${file.name} size=${fileSize}B translationCalls=$translationCallCount elapsed=${elapsedMs}ms"
-            if (elapsedMs >= 100) LOG.info(msg) else LOG.debug(msg)
+            LOG.info("I18nFoldToggleInlay[目标] file=${file.name} targets=${list.size} translationCalls=$translationCallCount size=${fileSize}B elapsed=${elapsedMs}ms")
             list
         }
 
-        if (targets.isEmpty()) return
+        if (targets.isEmpty()) {
+            LOG.info("I18nFoldToggleInlay[无目标] file=${file.name} —— 未生成任何切换 inlay")
+            return
+        }
 
         // EDT：写入 inlay（仅在 UI 线程安全）
         ApplicationManager.getApplication().invokeLater({
             if (editor.isDisposed) return@invokeLater
             val inlayModel = editor.inlayModel
+            var added = 0
             for (t in targets) {
                 // relatesToPrecedingText=false：让 ↩ inlay 挂在折叠结束边界之后的文本上，
                 // 否则折进 [call.start, call.end] 折叠区后随折叠一起隐藏，导致折叠后无法再通过该 inlay 展开。
-                inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor))
+                if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor)) != null) added++
             }
+            LOG.info("I18nFoldToggleInlay[已加] file=${file.name} added=$added")
         })
     }
 
