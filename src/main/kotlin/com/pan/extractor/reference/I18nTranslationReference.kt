@@ -11,7 +11,9 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.*
+import com.intellij.psi.impl.PsiElementBase
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.util.ProcessingContext
 import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.strategy.I18nFrameworkRegistry
 
@@ -136,8 +138,15 @@ class I18nTranslationTargetElement(
     override fun getTextRange(): TextRange = TextRange.from(offset, 0)
     override fun getTextOffset(): Int = offset
     override fun getText(): String = ""
+    override fun getTextLength(): Int = 0
     override fun isValid(): Boolean = psiFile.isValid && !project.isDisposed
     override fun getIcon(flags: Int): javax.swing.Icon? = psiFile.getIcon(flags)
+    override fun getLanguage(): com.intellij.lang.Language = psiFile.language
+    override fun getChildren(): Array<PsiElement> = PsiElement.EMPTY_ARRAY
+    override fun getStartOffsetInParent(): Int = offset
+    override fun findElementAt(offset: Int): PsiElement? = null
+    override fun textToCharArray(): CharArray = charArrayOf()
+    override fun getNode(): com.intellij.lang.ASTNode? = null
 
     override fun navigate(requestFocus: Boolean) {
         val vf = psiFile.virtualFile ?: return
