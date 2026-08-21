@@ -238,7 +238,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             if (editor.isDisposed) return@invokeLater
             val inlayModel = editor.inlayModel
             for (t in targets) {
-                inlayModel.addInlineElement(t.offset, true, I18nFoldToggleRenderer(editor))
+                // relatesToPrecedingText=false：让 ↩ inlay 挂在折叠结束边界之后的文本上，
+                // 否则折进 [call.start, call.end] 折叠区后随折叠一起隐藏，导致折叠后无法再通过该 inlay 展开。
+                inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor))
             }
         })
     }
