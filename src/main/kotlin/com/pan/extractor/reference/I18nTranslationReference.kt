@@ -102,10 +102,10 @@ class I18nTranslationReference(
 
         val offset = if (entryFile.extension?.lowercase() == "json") {
             // JSON 文件：先尝试按嵌套 key 逐级下钻定位 value，若失败则回退到文本搜索
-            findJsonKeyOffset(doc.text, key) ?: findTextKeyOffset(doc, key)
+            findJsonKeyOffset(doc.text, key) ?: findTextKeyOffset(doc, key) ?: return null
         } else {
             // TS/JS 文件：文本搜索
-            findTextKeyOffset(doc, key)
+            findTextKeyOffset(doc, key) ?: return null
         }
 
         return I18nTranslationTargetElement(psiFile, offset)
@@ -227,13 +227,13 @@ private fun navigateJsonValue(
 /**
  * 文本搜索兜底：在翻译文件文档中查找 key 值所在行。
  * 支持 `'key'` / `"key"` / `` `key` `` 三种引号风格。
- * 返回该行的起始偏移，未找到时返回 0。
+ * 返回该行的起始偏移，未找到时返回 null。
  */
-private fun findTextKeyOffset(doc: com.intellij.openapi.editor.Document, key: String): Int {
+private fun findTextKeyOffset(doc: com.intellij.openapi.editor.Document, key: String): Int? {
     val escapedKey = key.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"")
     val patterns = listOf("'$escapedKey'", "\"$escapedKey\"", "`$escapedKey`")
     val text = doc.text
     val lines = text.lines()
     val lineIdx = lines.indexOfFirst { line -> patterns.any { it in line } }
-    return if (lineIdx >= 0) doc.getLineStartOffset(lineIdx) else 0
+    return if (lineIdx >= 0) doc.getLineStartOffset(lineIdx) else null
 }
