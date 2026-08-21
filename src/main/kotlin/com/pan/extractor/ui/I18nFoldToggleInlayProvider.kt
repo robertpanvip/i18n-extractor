@@ -20,6 +20,7 @@ import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -176,7 +177,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             }
         }
             .inSmartMode(project)
-            .submit(ApplicationManager.getApplication())
+            .submit(AppExecutorUtil.getAppExecutorService())
             .onSuccess { finishInlayTask(project) }
             .onError(java.util.function.Consumer<Throwable> { t ->
                 LOG.warn("Inlay 处理异常: ${task.file.name}", t)

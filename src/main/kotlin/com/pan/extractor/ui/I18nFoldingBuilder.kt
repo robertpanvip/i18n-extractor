@@ -18,6 +18,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -79,7 +80,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         }
             .inSmartMode(project)
             .coalesceBy(this, root)
-            .submit(ApplicationManager.getApplication())
+            .submit(AppExecutorUtil.getAppExecutorService())
             .onSuccess { descriptors ->
                 if (descriptors.isEmpty()) return@onSuccess
                 ApplicationManager.getApplication().invokeLater {
