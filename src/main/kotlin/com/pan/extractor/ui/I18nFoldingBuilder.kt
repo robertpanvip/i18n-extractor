@@ -15,6 +15,8 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.TextEditor
+import com.intellij.openapi.progress.EmptyProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
@@ -69,7 +71,12 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         }
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            computeAndApplyFolds(project, root, document, contextFile, messages)
+            // 后台池线程默认没有 ProgressIndicator 上下文；TS resolve 引擎里的
+            // runBlockingCancellable 会因缺少进度上下文抛 IllegalStateException。
+            // 注入 EmptyProgressIndicator 保证整个 PSI 遍历 + resolve 过程可取消。
+            ProgressManager.getInstance().runProcess({
+                computeAndApplyFolds(project, root, document, contextFile, messages)
+            }, EmptyProgressIndicator())
         }
 
         return FoldingDescriptor.EMPTY_ARRAY
