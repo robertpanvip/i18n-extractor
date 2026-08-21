@@ -60,9 +60,8 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         private const val BUSY_WATCHDOG_MS = 64_000L
         /** 待处理队列（当前 active 的编辑器） */
         private val pendingInlays = ConcurrentLinkedQueue<InlayTask>()
-        /** 尚未被选中的编辑器任务：project -> editor(身份) -> task，切 tab 时取用 */
-        private val waitingInlays =
-            ConcurrentHashMap<Project, ConcurrentHashMap<Editor, InlayTask>>()
+        /** 已入队过的文件 vfs url：保证每个文件只排队处理一次，避免切 tab 反复扫描 */
+        private val enqueuedFiles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
     }
@@ -106,24 +105,23 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 }
             })
 
-            // 只在当前 active 编辑器上立即处理；非 active 的等切到它时再处理。
-            val isSelected = FileEditorManager.getInstance(project).selectedTextEditor?.let { it === editor } == true
-            if (isSelected) {
-                enqueueInlay(editor, project, file, messages)
-            } else {
-                waitingInlays.computeIfAbsent(project) { ConcurrentHashMap() }[editor] =
-                    InlayTask(editor, file, messages)
-            }
+            // 立即入队处理（每个文件只处理一次）。此前"先入 waiting 表、等切 tab 再入队"的
+            // 延迟交接在后台恢复 tab 时可能因 selectionChanged 未触发而静默丢失，导致 inlay 永不出现。
+            enqueueInlay(editor, project, file, messages)
         }
     }
 
     override fun selectionChanged(event: FileEditorManagerEvent) {
-        val project = event.manager.project
-        val w = waitingInlays[project] ?: return
+        val project = event.manager.project ?: return
         val editor = event.manager.selectedTextEditor ?: return
-        val task = w.remove(editor) ?: return
         if (editor.isDisposed || project.isDisposed) return
-        enqueueInlay(editor, project, task.file, task.messages)
+        val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return
+        val fw = I18nFrameworkRegistry.detect(file)
+        val lower = file.name.lowercase()
+        if (fw.supportedFileSuffixes.none { lower.endsWith(it) }) return
+        val messages = LocaleMessages.loadCached(project, file)
+        if (messages.isEmpty()) return
+        enqueueInlay(editor, project, file, messages)
     }
 
     /**
@@ -133,7 +131,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
     private fun enqueueInlay(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>) {
         if (editor.isDisposed || project.isDisposed) return
 
-        // 索引未完成时延迟，避免冷启动阻塞项目打开；顺带清理本项目已释放的 waiting 项。
+        // 索引未完成时延迟到 smart mode，避免冷启动阻塞项目打开。
         if (DumbService.isDumb(project)) {
             DumbService.getInstance(project).runWhenSmart {
                 if (!editor.isDisposed && !project.isDisposed) {
@@ -142,6 +140,11 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             }
             return
         }
+
+        // 每个文件只处理一次：editorCreated 与 selectionChanged 都可能被触发，
+        // 用 vfs url 去重，避免同一文件反复排队扫描。
+        val url = file.virtualFile?.url
+        if (url != null && !enqueuedFiles.add(url)) return
 
         pendingInlays.add(InlayTask(editor, file, messages))
         drainInlayQueue(project)
