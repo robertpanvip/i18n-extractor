@@ -143,6 +143,10 @@ object LocaleMessages {
             val key = if (prefix.isEmpty()) k else "$prefix.$k"
             when (v) {
                 is Map<*, *> -> flattenNested(v as Map<String, Any?>, key, out)
+                is com.google.gson.JsonObject -> {
+                    // Gson 的 JsonObject 不是 Map，需要转换后再递归展平
+                    flattenNested(v.entrySet().associate { it.key to it.value as Any? }, key, out)
+                }
                 else -> if (v != null) out[key] = v.toString()
             }
         }

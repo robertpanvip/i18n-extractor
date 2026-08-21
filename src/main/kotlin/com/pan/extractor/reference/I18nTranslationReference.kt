@@ -15,6 +15,7 @@ import com.intellij.psi.impl.PsiElementBase
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.ProcessingContext
 import com.pan.extractor.locate.EntryFileLocator
+import com.pan.extractor.messages.LocaleMessages
 import com.pan.extractor.strategy.I18nFrameworkRegistry
 
 /**
@@ -95,6 +96,9 @@ class I18nTranslationReference(
         val project = element.project
         val file = element.containingFile
         if (project.isDisposed || file == null) return null
+
+        // 复用 LocaleMessages 的缓存快速判断 key 是否存在，避免对不存在的 key 做文件定位和解析
+        if (key !in LocaleMessages.loadCached(project, file)) return null
 
         val entryFile = EntryFileLocator.findChineseLocaleEntryFile(project, file) ?: return null
         val psiFile = PsiManager.getInstance(project).findFile(entryFile) ?: return null
