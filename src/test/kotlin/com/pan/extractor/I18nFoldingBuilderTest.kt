@@ -548,4 +548,71 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             I18nSettings.getInstance().setFoldDisplayLanguage("zh")
         }
     }
+
+    // ---- 下面是"框架 × 引号风格"维度矩阵测试。
+    // 目的：避免再出现"仅单点覆盖某一种引号风格、漏掉交叉组合"的盲区
+    // （本次 bug 就是只测了 Vue 反引号 + React 单/双引号，漏掉 React 反引号）。
+    // 三种引号风格都应折叠，缺任何一个都视为回归。
+
+    /** React 宿主树：`t('x')` / `t("x")` / `` t(`x`) `` 三条都要折叠（宿主树坐标可靠）。 */
+    fun testMatrixReactHostTreeAllQuoteStyles() {
+        val file = configureFile(
+            "src/Matrix.tsx",
+            """
+            import {useTranslation} from 'react-i18next';
+            export default function App() {
+                const {t} = useTranslation();
+                let a = t('你好世界');
+                let b = t("你好世界");
+                let c = t(`你好世界`);
+                return null;
+            }
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("React 宿主树三种引号风格 t() 都应折叠", 3, descriptors.size)
+        assertEquals(setOf(hint("你好世界")), descriptors.map { it.placeholderText }.toSet())
+    }
+
+    /** Vue mustache `{{ $t('x') }}` / `{{ $t("x") }}` / `` {{ $t(`x`) }} `` 三条都要经原始文本兜底折叠。 */
+    fun testMatrixVueMustacheAllQuoteStyles() {
+        val file = configureFile(
+            "src/Matrix.vue",
+            """
+            <template>
+              <div>
+                <span>{{ ${'$'}t('你好世界') }}</span>
+                <span>{{ ${'$'}t("你好世界") }}</span>
+                <span>{{ ${'$'}t(`你好世界`) }}</span>
+              </div>
+            </template>
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("Vue mustache 三种引号风格 ${'$'}t() 都应经兜底折叠", 3, descriptors.size)
+    }
+
+    /** Vue 属性绑定三种引号风格 key 都应有覆盖 $t 调用的折叠区域（引号风格与属性定界符需合法搭配）。 */
+    fun testMatrixVueAttributeAllQuoteStyles() {
+        val file = configureFile(
+            "src/MatrixAttr.vue",
+            """
+            <template>
+              <a-input
+                :a="${'$'}t('你好世界')"
+                :b='${'$'}t("你好世界")'
+                :c="${'$'}t(`你好世界`)"
+              />
+            </template>
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        val callDescriptors = descriptors.filter {
+            doc.getText(it.range).trim().startsWith("\$t(")
+        }
+        assertEquals("Vue 属性绑定三种引号风格都应有覆盖 \$t 调用的折叠区域", 3, callDescriptors.size)
+    }
 }
