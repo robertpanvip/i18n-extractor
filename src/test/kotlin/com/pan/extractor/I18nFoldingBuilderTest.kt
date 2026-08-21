@@ -133,6 +133,31 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         assertTrue("应含「你好」", placeholders.contains(hint("你好")))
     }
 
+    /**
+     * 回归用例：React .tsx 中**反引号**模板 key `t(\`插件管理\`)`（非 Vue 注入）。
+     * 此前 addFoldingDescriptor 用 isBacktickKeyCall 把宿主树反引号调用也跳过，
+     * 而 raw 兜底正则只认 $t/i18n 前缀、对纯 `t(` 不命中 → 反引号 React 调用完全不折叠。
+     */
+    fun testFoldTsxBacktickKeyCall() {
+        val file = configureFile(
+            "src/App.tsx",
+            """
+            import {useTranslation} from 'react-i18next';
+            export default function App() {
+                const {t} = useTranslation();
+                let a = t(`你好世界`);
+                return <div>{ t(`hello`) }</div>;
+            }
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("TSX 反引号 t() 应折叠 2 处", 2, descriptors.size)
+        val placeholders = descriptors.map { it.placeholderText }.toSet()
+        assertTrue("应含「你好世界」", placeholders.contains(hint("你好世界")))
+        assertTrue("应含「你好」", placeholders.contains(hint("你好")))
+    }
+
     /** 用户报告的问题复现：React 项目 key 含 {0} 占位符时应将 {0} 替换为实际参数值。 */
     fun testFoldTsxWithPlaceholderInKey() {
         // 额外添加含 {0} 占位符的翻译条目（React 格式，不带 N 前缀）
