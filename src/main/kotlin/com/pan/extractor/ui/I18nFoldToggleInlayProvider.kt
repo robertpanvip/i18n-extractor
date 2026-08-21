@@ -60,8 +60,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         private const val BUSY_WATCHDOG_MS = 64_000L
         /** 待处理队列（当前 active 的编辑器） */
         private val pendingInlays = ConcurrentLinkedQueue<InlayTask>()
-        /** 已入队过的文件 vfs url：保证每个文件只排队处理一次，避免切 tab 反复扫描 */
-        private val enqueuedFiles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        /** 已完成（成功挂上切换 inlay）的文件 vfs url：这类文件跳过重复入队；
+         *  未成功的（0 target / 0 added）不标记，之后切 tab / 修改 / 重开仍会重试 */
+        private val completedFiles = ConcurrentHashMap.newKeySet<String>()
 
         private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
     }
@@ -141,10 +142,10 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             return
         }
 
-        // 每个文件只处理一次：editorCreated 与 selectionChanged 都可能被触发，
-        // 用 vfs url 去重，避免同一文件反复排队扫描。
+        // 仅"已成功挂上切换 inlay"的文件跳过，避免 editorCreated / selectionChanged
+        // 反复排队扫描；前一次因 0 target / 0 added 未成功的不会标记，之后仍会重试。
         val url = file.virtualFile?.url
-        if (url != null && !enqueuedFiles.add(url)) return
+        if (url != null && url in completedFiles) return
 
         pendingInlays.add(InlayTask(editor, file, messages))
         drainInlayQueue(project)
@@ -265,6 +266,11 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor)) != null) added++
             }
             LOG.info("I18nFoldToggleInlay[已加] file=${file.name} added=$added")
+            if (added > 0) {
+                // 仅在真正挂上时才标记为完成；否则可重试（见 enqueueInlay 注释）。
+                val url = file.virtualFile?.url
+                if (url != null) completedFiles.add(url)
+            }
         })
     }
 
