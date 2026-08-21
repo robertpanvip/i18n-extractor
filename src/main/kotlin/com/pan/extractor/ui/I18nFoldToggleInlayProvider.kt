@@ -60,9 +60,10 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         private const val BUSY_WATCHDOG_MS = 64_000L
         /** 待处理队列（当前 active 的编辑器） */
         private val pendingInlays = ConcurrentLinkedQueue<InlayTask>()
-        /** 已完成（成功挂上切换 inlay）的文件 vfs url：这类文件跳过重复入队；
-         *  未成功的（0 target / 0 added）不标记，之后切 tab / 修改 / 重开仍会重试 */
-        private val completedFiles = ConcurrentHashMap.newKeySet<String>()
+        /** 已处理过 inlay 的编辑器实例：同一编辑器只处理一次，避免 editorCreated /
+         *  selectionChanged 重复扫描。按编辑器（而非文件 url）去重，且 editorReleased 时移除：
+         *  关闭再重开是全新编辑器 → 会重新处理；编辑器关闭时条目即时回收避免泄漏 */
+        private val processedEditors = ConcurrentHashMap.newKeySet<Editor>()
 
         private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
     }
@@ -142,13 +143,17 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             return
         }
 
-        // 仅"已成功挂上切换 inlay"的文件跳过，避免 editorCreated / selectionChanged
-        // 反复排队扫描；前一次因 0 target / 0 added 未成功的不会标记，之后仍会重试。
-        val url = file.virtualFile?.url
-        if (url != null && url in completedFiles) return
+        // 同一编辑器只处理一次（本例 editorCreated/selectionChanged 都会进入这里）。
+        // 关闭再重开 = 新编辑器实例 → 未在集合中 → 会重新处理并重挂 inlay。
+        if (!processedEditors.add(editor)) return
 
         pendingInlays.add(InlayTask(editor, file, messages))
         drainInlayQueue(project)
+    }
+
+    /** 编辑器关闭：回收其处理标记，确保该文件重开后能重新挂上 inlay。 */
+    override fun editorReleased(event: EditorFactoryEvent) {
+        processedEditors.remove(event.editor)
     }
 
     /**
@@ -266,11 +271,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor)) != null) added++
             }
             LOG.info("I18nFoldToggleInlay[已加] file=${file.name} added=$added")
-            if (added > 0) {
-                // 仅在真正挂上时才标记为完成；否则可重试（见 enqueueInlay 注释）。
-                val url = file.virtualFile?.url
-                if (url != null) completedFiles.add(url)
-            }
         })
     }
 
