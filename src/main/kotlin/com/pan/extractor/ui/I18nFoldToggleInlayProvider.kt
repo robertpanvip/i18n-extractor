@@ -15,6 +15,7 @@ import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseListener
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
@@ -23,15 +24,28 @@ import com.intellij.ui.JBColor
 import java.awt.Graphics
 import java.awt.Rectangle
 import java.awt.event.MouseEvent
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 在 t()/`$t()` 调用前添加可点击的 ↩ inlay 提示，用于快速折叠/展开切换。
  * 注册为 [EditorFactoryListener]，在编辑器打开时自动添加。
+ *
+ * 性能策略：
+ * 1. 索引未完成（dumb mode）时延迟处理，避免冷启动阻塞项目打开；
+ * 2. 全局串行队列，同一时间只处理一个文件，避免多文件并发 PSI resolve 争抢线程池；
+ * 3. 处理前再次检查 editor 是否已释放 / 是否进入 dumb mode，跳过无效任务。
  */
 class I18nFoldToggleInlayProvider : EditorFactoryListener {
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(I18nFoldToggleInlayProvider::class.java)
+        /** 全局串行化：同一时间只处理一个文件的 inlay */
+        private val inlayBusy = AtomicBoolean(false)
+        /** 待处理队列 */
+        private val pendingInlays = ConcurrentLinkedQueue<InlayTask>()
+
+        private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
     }
 
     override fun editorCreated(event: EditorFactoryEvent) {
@@ -69,10 +83,8 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
                 }
             })
 
-            // 翻译调用收集 + inlay 添加：后台线程计算 → EDT 写 UI
-            ApplicationManager.getApplication().executeOnPooledThread {
-                addFoldToggleInlaysAsync(editor, file, messages)
-            }
+            // 翻译调用收集 + inlay 添加：入队后串行处理
+            enqueueInlay(editor, project, file, messages)
         }
     }
 
@@ -81,6 +93,63 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener {
         return lower.endsWith(".ts") || lower.endsWith(".tsx") ||
             lower.endsWith(".js") || lower.endsWith(".jsx") ||
             lower.endsWith(".vue")
+    }
+
+    /**
+     * 将编辑器加入 inlay 处理队列。
+     * 若项目仍在索引（dumb mode），延迟到 smart mode 后再入队。
+     */
+    private fun enqueueInlay(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>) {
+        if (editor.isDisposed || project.isDisposed) return
+
+        // 索引未完成时延迟，避免冷启动阻塞项目打开
+        if (DumbService.isDumb(project)) {
+            DumbService.getInstance(project).runWhenSmart {
+                if (!editor.isDisposed && !project.isDisposed) {
+                    enqueueInlay(editor, project, file, messages)
+                }
+            }
+            return
+        }
+
+        pendingInlays.add(InlayTask(editor, file, messages))
+        drainInlayQueue(project)
+    }
+
+    /**
+     * 串行排空队列：同一时间只有一个文件在处理。
+     * 通过 [inlayBusy] CAS 保证无并发，处理完一个后自动取下一个。
+     */
+    private fun drainInlayQueue(project: Project) {
+        if (!inlayBusy.compareAndSet(false, true)) return
+
+        val task = pendingInlays.poll()
+        if (task == null) {
+            inlayBusy.set(false)
+            return
+        }
+
+        // 跳过已释放的 editor，继续处理下一个
+        if (task.editor.isDisposed) {
+            inlayBusy.set(false)
+            if (pendingInlays.isNotEmpty()) drainInlayQueue(project)
+            return
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                if (!task.editor.isDisposed && !project.isDisposed && !DumbService.isDumb(project)) {
+                    addFoldToggleInlaysAsync(task.editor, task.file, task.messages)
+                }
+            } catch (t: Throwable) {
+                LOG.warn("Inlay 处理异常: ${task.file.name}", t)
+            } finally {
+                inlayBusy.set(false)
+                if (pendingInlays.isNotEmpty()) {
+                    drainInlayQueue(project)
+                }
+            }
+        }
     }
 
     /**
