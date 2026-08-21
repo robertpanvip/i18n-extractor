@@ -19,16 +19,13 @@ import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLanguageInjectionHost
-import com.intellij.psi.PsiManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.ui.JBColor
 import com.intellij.util.concurrency.AppExecutorUtil
@@ -100,7 +97,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             val messages = LocaleMessages.loadCached(project, file)
             if (messages.isEmpty()) return@invokeLater
 
-            // 点击 inlay 切换折叠；Ctrl+点击 t("key") 文字跳转到翻译文件
+            // 点击 inlay（↩ 图标）切换折叠/展开；Ctrl+点击文字跳转由 PsiReference 处理
             editor.addEditorMouseListener(object : EditorMouseListener {
                 override fun mouseClicked(e: EditorMouseEvent) {
                     if (e.mouseEvent.button != MouseEvent.BUTTON1) return
@@ -121,24 +118,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                                 .minByOrNull { it.endOffset - it.startOffset }
                             if (fold != null) {
                                 fold.isExpanded = !fold.isExpanded
-                            }
-                        }
-                    } else if (e.mouseEvent.isControlDown && !project.isDisposed) {
-                        // Ctrl+click → 查找点击处的翻译调用并跳转到翻译文件
-                        val call = ReadAction.compute<JSCallExpression?, Exception> {
-                            if (project.isDisposed) return@compute null
-                            PsiTreeUtil.findElementOfClassAtOffset(
-                                file, clickOffset, JSCallExpression::class.java, false
-                            )
-                        }
-                        if (call != null) {
-                            val fw = I18nFrameworkRegistry.detect(call)
-                            if (fw.isTranslationCall(call)) {
-                                val key = fw.extractKey(call)
-                                if (key != null) {
-                                    e.mouseEvent.consume()
-                                    navigateToKey(project, file, key)
-                                }
                             }
                         }
                     }
@@ -382,27 +361,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         })
     }
 
-    /** Ctrl+点击 inlay 时跳转到翻译文件中该 key 所在的行。 */
-    private fun navigateToKey(project: Project, contextPsiFile: PsiFile, key: String) {
-        try {
-            val entryFile = com.pan.extractor.locate.EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
-                ?: return
-            val psiFile = PsiManager.getInstance(project).findFile(entryFile) ?: return
-            val doc = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return
-
-            // 在翻译文件中定位 key 所在行（支持 'key' / "key" / `key` 三种引号风格）
-            val escapedKey = key.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"")
-            val patterns = listOf("'$escapedKey'", "\"$escapedKey\"", "`$escapedKey`")
-            val lineIdx = doc.text.lines().indexOfFirst { line ->
-                patterns.any { it in line }
-            }
-            val offset = if (lineIdx >= 0) doc.getLineStartOffset(lineIdx) else 0
-            OpenFileDescriptor(project, entryFile, offset).navigate(true)
-        } catch (e: Exception) {
-            LOG.warn("导航到翻译文件失败: key=$key", e)
-        }
-    }
-
     }
 
 /**
@@ -572,7 +530,7 @@ internal fun extractParamsFromText(rawText: String, messages: Map<String, String
     return result
 }
 
-/** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。Ctrl+click 跳转到翻译文件。 */
+/** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。Ctrl+click 文字跳转由 PsiReference 处理。 */
 class I18nFoldToggleRenderer(
     private val editor: Editor,
 ) : com.intellij.openapi.editor.EditorCustomElementRenderer {

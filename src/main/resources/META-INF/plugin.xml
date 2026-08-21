@@ -71,6 +71,9 @@ This plugin helps developers quickly internationalize hard-coded strings in Java
         <!-- 切 tab 时才处理该编辑器的 inlay（避免项目恢复时一次性处理所有历史 tab） -->
         <fileEditorManagerListener
                 implementation="com.pan.extractor.ui.I18nFoldToggleInlayProvider"/>
+        <!-- Ctrl+点击 t("key") 文字跳转到翻译文件 -->
+        <psiReferenceContributor
+                implementation="com.pan.extractor.reference.I18nTranslationReferenceContributor"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->
