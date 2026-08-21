@@ -19,16 +19,20 @@ import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
-import com.intellij.util.concurrency.AppExecutorUtil
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLanguageInjectionHost
+import com.intellij.psi.PsiManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.ui.JBColor
+import com.intellij.util.concurrency.AppExecutorUtil
+import java.awt.Font
 import java.awt.Graphics
 import java.awt.Rectangle
 import java.awt.event.MouseEvent
@@ -97,6 +101,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             if (messages.isEmpty()) return@invokeLater
 
             // 点击 inlay 时切换折叠状态（鼠标监听器轻量，保留在 EDT）
+            // Ctrl+click → 跳转到翻译文件；普通点击 → 切换折叠/展开
             editor.addEditorMouseListener(object : EditorMouseListener {
                 override fun mouseClicked(e: EditorMouseEvent) {
                     if (e.mouseEvent.button != MouseEvent.BUTTON1) return
@@ -105,6 +110,13 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                         editor.logicalPositionToOffset(editor.xyToLogicalPosition(e.mouseEvent.point))
                     ).firstOrNull { it.renderer is I18nFoldToggleRenderer }
                     if (clickedInlay != null) {
+                        val renderer = clickedInlay.renderer as I18nFoldToggleRenderer
+                        // Ctrl+click：跳转到翻译文件
+                        if (e.mouseEvent.isControlDown && renderer.key != null && !project.isDisposed) {
+                            navigateToKey(project, file, renderer.key!!)
+                            return
+                        }
+                        // 普通点击：切换折叠/展开
                         val offset = clickedInlay.offset
                         val fm = editor.foldingModel
                         fm.runBatchFoldingOperation {
@@ -219,7 +231,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                     if (editor.isDisposed) return@invokeLater
                     removeToggleInlaysAtOffset(editor, callEnd)
                     if (key != null && key in messages) {
-                        editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor))
+                        editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor, key, project))
                     }
                 }
             }
@@ -305,7 +317,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         val fw = I18nFrameworkRegistry.detect(file)
         LOG.info("I18nFoldToggleInlay[运行] file=${file.name}")
 
-        data class InlayTarget(val offset: Int)
+        data class InlayTarget(val offset: Int, val key: String)
 
         val targets = ApplicationManager.getApplication().runReadAction<MutableList<InlayTarget>> {
             val list = mutableListOf<InlayTarget>()
@@ -323,14 +335,14 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 translationCallCount++
                 val key = fw.extractKey(call) ?: return@forEach
                 if (key !in messages) return@forEach
-                list.add(InlayTarget(call.textRange.endOffset))
+                list.add(InlayTarget(call.textRange.endOffset, key))
             }
             // 模板表达式（mustache / 属性）里的 $t('x') 调用按宿主原始文本兜底加 inlay，
             // 使折叠切换标识落到这些调用上。与 JSCall 按起始偏移去重，避免重复叠加。
             collectRawTCalls(file).forEach { raw ->
                 if (raw.range.startOffset in callStarts) return@forEach
                 if (raw.key !in messages) return@forEach
-                list.add(InlayTarget(raw.range.endOffset))
+                list.add(InlayTarget(raw.range.endOffset, raw.key))
             }
             val elapsedMs = (System.nanoTime() - t0) / 1_000_000
             LOG.info("I18nFoldToggleInlay[目标] file=${file.name} targets=${list.size} translationCalls=$translationCallCount size=${fileSize}B elapsed=${elapsedMs}ms")
@@ -350,10 +362,32 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             for (t in targets) {
                 // relatesToPrecedingText=false：让 ↩ inlay 挂在折叠结束边界之后的文本上，
                 // 否则折进 [call.start, call.end] 折叠区后随折叠一起隐藏，导致折叠后无法再通过该 inlay 展开。
-                if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor)) != null) added++
+                val project = editor.project ?: continue
+                if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor, t.key, project)) != null) added++
             }
             LOG.info("I18nFoldToggleInlay[已加] file=${file.name} added=$added")
         })
+    }
+
+    /** Ctrl+点击 inlay 时跳转到翻译文件中该 key 所在的行。 */
+    private fun navigateToKey(project: Project, contextPsiFile: PsiFile, key: String) {
+        try {
+            val entryFile = com.pan.extractor.locate.EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
+                ?: return
+            val psiFile = PsiManager.getInstance(project).findFile(entryFile) ?: return
+            val doc = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return
+
+            // 在翻译文件中定位 key 所在行（支持 'key' / "key" / `key` 三种引号风格）
+            val escapedKey = key.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"")
+            val patterns = listOf("'$escapedKey'", "\"$escapedKey\"", "`$escapedKey`")
+            val lineIdx = doc.text.lines().indexOfFirst { line ->
+                patterns.any { it in line }
+            }
+            val offset = if (lineIdx >= 0) doc.getLineStartOffset(lineIdx) else 0
+            OpenFileDescriptor(project, entryFile, offset).navigate(true)
+        } catch (e: Exception) {
+            LOG.warn("导航到翻译文件失败: key=$key", e)
+        }
     }
 
 }
@@ -525,8 +559,13 @@ internal fun extractParamsFromText(rawText: String, messages: Map<String, String
     return result
 }
 
-/** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。 */
-class I18nFoldToggleRenderer(private val editor: Editor) : com.intellij.openapi.editor.EditorCustomElementRenderer {
+/** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。Ctrl+click 跳转到翻译文件。 */
+class I18nFoldToggleRenderer(
+    private val editor: Editor,
+    /** 关联的翻译 key，用于 Ctrl+click 导航到翻译文件。null 表示不支持导航。 */
+    val key: String? = null,
+    private val project: Project? = null,
+) : com.intellij.openapi.editor.EditorCustomElementRenderer {
 
     override fun calcWidthInPixels(inlay: Inlay<*>): Int = 20
 
