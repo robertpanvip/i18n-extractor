@@ -100,7 +100,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             val messages = LocaleMessages.loadCached(project, file)
             if (messages.isEmpty()) return@invokeLater
 
-            // 点击 inlay 时切换折叠状态；点击折叠文本时跳转到翻译文件
+            // 点击 inlay 切换折叠；Ctrl+点击 t("key") 文字跳转到翻译文件
             editor.addEditorMouseListener(object : EditorMouseListener {
                 override fun mouseClicked(e: EditorMouseEvent) {
                     if (e.mouseEvent.button != MouseEvent.BUTTON1) return
@@ -123,18 +123,22 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                                 fold.isExpanded = !fold.isExpanded
                             }
                         }
-                    } else {
-                        // 点击折叠文本（翻译译文）→ 跳转到翻译文件
-                        val fm = editor.foldingModel
-                        val collapsedRegion = fm.allFoldRegions.firstOrNull { fold ->
-                            !fold.isExpanded && fold.startOffset <= clickOffset && clickOffset <= fold.endOffset
+                    } else if (e.mouseEvent.isControlDown && !project.isDisposed) {
+                        // Ctrl+click → 查找点击处的翻译调用并跳转到翻译文件
+                        val call = ReadAction.compute<JSCallExpression?, Exception> {
+                            if (project.isDisposed) return@compute null
+                            PsiTreeUtil.findElementOfClassAtOffset(
+                                file, clickOffset, JSCallExpression::class.java, false
+                            )
                         }
-                        if (collapsedRegion != null && !project.isDisposed) {
-                            // 查找该折叠区域对应的翻译 key
-                            val key = findKeyForFoldRegion(project, editor, collapsedRegion)
-                            if (key != null) {
-                                e.mouseEvent.consume()
-                                navigateToKey(project, file, key)
+                        if (call != null) {
+                            val fw = I18nFrameworkRegistry.detect(call)
+                            if (fw.isTranslationCall(call)) {
+                                val key = fw.extractKey(call)
+                                if (key != null) {
+                                    e.mouseEvent.consume()
+                                    navigateToKey(project, file, key)
+                                }
                             }
                         }
                     }
@@ -241,7 +245,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                     if (editor.isDisposed) return@invokeLater
                     removeToggleInlaysAtOffset(editor, callEnd)
                     if (key != null && key in messages) {
-                        editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor, key, project))
+                        editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor))
                     }
                 }
             }
@@ -327,7 +331,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         val fw = I18nFrameworkRegistry.detect(file)
         LOG.info("I18nFoldToggleInlay[运行] file=${file.name}")
 
-        data class InlayTarget(val offset: Int, val key: String)
+        data class InlayTarget(val offset: Int)
 
         val targets = ApplicationManager.getApplication().runReadAction<MutableList<InlayTarget>> {
             val list = mutableListOf<InlayTarget>()
@@ -345,14 +349,14 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 translationCallCount++
                 val key = fw.extractKey(call) ?: return@forEach
                 if (key !in messages) return@forEach
-                list.add(InlayTarget(call.textRange.endOffset, key))
+                list.add(InlayTarget(call.textRange.endOffset))
             }
             // 模板表达式（mustache / 属性）里的 $t('x') 调用按宿主原始文本兜底加 inlay，
             // 使折叠切换标识落到这些调用上。与 JSCall 按起始偏移去重，避免重复叠加。
             collectRawTCalls(file).forEach { raw ->
                 if (raw.range.startOffset in callStarts) return@forEach
                 if (raw.key !in messages) return@forEach
-                list.add(InlayTarget(raw.range.endOffset, raw.key))
+                list.add(InlayTarget(raw.range.endOffset))
             }
             val elapsedMs = (System.nanoTime() - t0) / 1_000_000
             LOG.info("I18nFoldToggleInlay[目标] file=${file.name} targets=${list.size} translationCalls=$translationCallCount size=${fileSize}B elapsed=${elapsedMs}ms")
@@ -372,8 +376,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             for (t in targets) {
                 // relatesToPrecedingText=false：让 ↩ inlay 挂在折叠结束边界之后的文本上，
                 // 否则折进 [call.start, call.end] 折叠区后随折叠一起隐藏，导致折叠后无法再通过该 inlay 展开。
-                val project = editor.project ?: continue
-                if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor, t.key, project)) != null) added++
+                if (inlayModel.addInlineElement(t.offset, false, I18nFoldToggleRenderer(editor)) != null) added++
             }
             LOG.info("I18nFoldToggleInlay[已加] file=${file.name} added=$added")
         })
@@ -400,32 +403,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         }
     }
 
-    /**
-     * 从折叠区域查找关联的翻译 key。
-     * 优先通过 [PsiTreeUtil.findElementOfClassAtOffset] 在编辑偏移处查找
-     * [JSCallExpression] 并提取 key（宿主树调用）；未命中时回退到
-     * [collectRawTCalls] 按起始偏移匹配（Vue 模板注入调用）。
-     */
-    private fun findKeyForFoldRegion(project: Project, editor: Editor, foldRegion: FoldRegion): String? {
-        if (project.isDisposed) return null
-        val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return null
-        val fw = I18nFrameworkRegistry.detect(file)
-
-        // 尝试从宿主树 JSCallExpression 提取 key
-        val call = ReadAction.compute<JSCallExpression?, Exception> {
-            if (project.isDisposed) return@compute null
-            PsiTreeUtil.findElementOfClassAtOffset(file, foldRegion.startOffset, JSCallExpression::class.java, false)
-        }
-        if (call != null && fw.isTranslationCall(call)) {
-            return fw.extractKey(call)
-        }
-
-        // 回退：从原始文本调用匹配（Vue 模板）
-        val rawCalls = collectRawTCalls(file)
-        return rawCalls.firstOrNull { it.range.startOffset == foldRegion.startOffset }?.key
     }
-
-}
 
 /**
  * 文件级集合缓存结果：缓存 [collectJSCallExpressions] 和 [collectRawTCalls] 的输出，
@@ -597,9 +575,6 @@ internal fun extractParamsFromText(rawText: String, messages: Map<String, String
 /** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。Ctrl+click 跳转到翻译文件。 */
 class I18nFoldToggleRenderer(
     private val editor: Editor,
-    /** 关联的翻译 key，用于 Ctrl+click 导航到翻译文件。null 表示不支持导航。 */
-    val key: String? = null,
-    private val project: Project? = null,
 ) : com.intellij.openapi.editor.EditorCustomElementRenderer {
 
     override fun calcWidthInPixels(inlay: Inlay<*>): Int = 20
