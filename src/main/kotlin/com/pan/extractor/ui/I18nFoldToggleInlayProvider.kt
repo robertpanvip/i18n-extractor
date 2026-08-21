@@ -10,6 +10,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
@@ -34,6 +36,8 @@ import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -66,6 +70,12 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
          *  selectionChanged 重复扫描。按编辑器（而非文件 url）去重，且 editorReleased 时移除：
          *  关闭再重开是全新编辑器 → 会重新处理；编辑器关闭时条目即时回收避免泄漏 */
         private val processedEditors = ConcurrentHashMap.newKeySet<Editor>()
+
+        /** 编辑器文档变化后防抖重新调度 inlay 的定时任务。键为编辑器实例，
+         *  编辑器关闭时自动取消。防抖间隔 [DEBOUNCE_MS] 内连续修改只触发一次。 */
+        private val debounceFutures = ConcurrentHashMap<Editor, ScheduledFuture<*>>()
+        /** 防抖间隔（毫秒）：用户停止输入后等待此时间再重新计算 inlay。 */
+        private const val DEBOUNCE_MS = 500L
 
         private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
     }
@@ -109,6 +119,16 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 }
             })
 
+            // 文档变化监听（防抖）：用户修改文本后重新计算 inlay，确保折叠切换标识
+            // 实时反映最新翻译 key 的命中状态。防抖间隔 [DEBOUNCE_MS] 内连续输入只触发一次，
+            // 避免每次击键都重新扫描 PSI 树和正则，兼顾实时性与性能。
+            @Suppress("DEPRECATION")
+            editor.document.addDocumentListener(object : DocumentListener {
+                override fun documentChanged(event: DocumentEvent) {
+                    scheduleDebouncedRecompute(editor, project, file, messages)
+                }
+            })
+
             // 立即入队处理（每个文件只处理一次）。此前"先入 waiting 表、等切 tab 再入队"的
             // 延迟交接在后台恢复 tab 时可能因 selectionChanged 未触发而静默丢失，导致 inlay 永不出现。
             enqueueInlay(editor, project, file, messages)
@@ -116,7 +136,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
     }
 
     override fun selectionChanged(event: FileEditorManagerEvent) {
-        val project = event.manager.project ?: return
+        val project = event.manager.project
         val editor = event.manager.selectedTextEditor ?: return
         if (editor.isDisposed || project.isDisposed) return
         val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return
@@ -153,9 +173,42 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         drainInlayQueue(project)
     }
 
-    /** 编辑器关闭：回收其处理标记，确保该文件重开后能重新挂上 inlay。 */
+    /** 编辑器关闭：回收其处理标记与防抖任务，确保该文件重开后能重新挂上 inlay。 */
     override fun editorReleased(event: EditorFactoryEvent) {
-        processedEditors.remove(event.editor)
+        val editor = event.editor
+        processedEditors.remove(editor)
+        debounceFutures.remove(editor)?.cancel(false)
+    }
+
+    /**
+     * 文档变化后防抖调度 inlay 重新计算。
+     * 连续修改只在用户停止输入 [DEBOUNCE_MS] 后触发一次，避免每次击键都扫描 PSI 树。
+     */
+    private fun scheduleDebouncedRecompute(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>) {
+        // 取消之前未触发的防抖任务
+        debounceFutures.remove(editor)?.cancel(false)
+        val future = AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (editor.isDisposed || project.isDisposed) return@schedule
+            ApplicationManager.getApplication().invokeLater {
+                if (editor.isDisposed || project.isDisposed) return@invokeLater
+                // 1) 移除旧 inlay
+                removeToggleInlays(editor)
+                // 2) 允许重新处理
+                processedEditors.remove(editor)
+                // 3) 重新入队（该函数会检查文件类型 / messages 是否为空）
+                enqueueInlay(editor, project, file, messages)
+            }
+        }, DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        debounceFutures[editor] = future
+    }
+
+    /** 移除编辑器中所有 [I18nFoldToggleRenderer] 类型的 inlay。 */
+    private fun removeToggleInlays(editor: Editor) {
+        for (inlay in editor.inlayModel.getInlineElementsInRange(0, editor.document.textLength)) {
+            if (inlay.renderer is I18nFoldToggleRenderer) {
+                inlay.dispose()
+            }
+        }
     }
 
     /**
