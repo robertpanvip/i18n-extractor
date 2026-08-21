@@ -10,6 +10,9 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.pan.extractor.planner.ImportPlan
 
+/** 各框架通用的 JS/TS 源文件后缀（小写、含点）。不使用 SFC/模板扩展名的策略直接复用。 */
+internal val BASE_JS_EXTENSIONS = setOf(".js", ".jsx", ".ts", ".tsx")
+
 /**
  * BUG_ANALYSIS 5.1 — I18nFramework 能力拆分。
  *
@@ -63,6 +66,16 @@ interface DetectionStrategy {
      * 一个兜底策略（当前为 [GenericStrategy]），且第三方框架注册后不会被兜底遮蔽。
      */
     val isFallback: Boolean get() = false
+
+    /**
+     * 本策略有能力处理的源文件后缀（小写、含点，如 ".vue" / ".html" / ".svelte"）。
+     * 纯 UI 能力（折叠 inlay / 触发器）用它做快速放行 gate，避免在无关文件（.json / .md 等）
+     * 上跑 PSI 遍历。默认覆盖通用 JS/TS（Generic / React / Solid 通用）：
+     *  - Vue 追加 ".vue"（SFC 模板）
+     *  - Svelte 追加 ".svelte"（SFC 模板）
+     *  - Angular 追加 ".html"（模板）
+     */
+    val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS
 
     /**
      * 判定 [element] 所在站点的「形态」（用于 [I18nProcessor.recordChange] 推导 isVue/isReact）。

@@ -39,6 +39,9 @@ object AngularI18nStrategy : I18nFramework {
         com.pan.extractor.scanner.AngularScanner
     override fun matches(element: PsiElement): Boolean = Util.isAngular(element)
 
+    /** Angular 还需处理 .html 模板文件（管道插值）与 .ts/.js（组件/服务）。 */
+    override val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS + ".html"
+
     /** ngx-translate 插值占位符 `{{0}}` / `{{1}}`（与 react-i18next 一致）。 */
     override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)
     override fun paramKey(index: Int): String = ReactI18nextStrategy.paramKey(index)

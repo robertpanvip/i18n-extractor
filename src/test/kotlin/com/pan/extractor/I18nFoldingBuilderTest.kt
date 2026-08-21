@@ -328,6 +328,45 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
     }
 
     /**
+     * 用户报告：`{{ $t(\`模型自动分段\`) }}`（反引号 key 的 mustache）未被折叠，而属性绑定
+     * `:title="$t('文档分段策略')"` 会折叠。根因：Vue 对反引号表达式注入的 PSI 不含
+     * JSCallExpression（见 VueI18nStrategy.collectExistingTKeysFromTemplate 注释），
+     * [I18nFoldToggleInlayProvider.collectJSCallExpressionsInjected] 也扫不到。修复后应通过
+     * 宿主原始文本兜底（[I18nFoldingBuilder.addRawBacktickFolds]）将这类调用折叠为译文。
+     */
+    fun testFoldVueBacktickMustacheRawTextFallback() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                '模型自动分段': '智能分片',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/Backtick.vue",
+                """
+                <template>
+                  <div :class="styles.title">{{ ${'$'}t(`模型自动分段`) }}</div>
+                </template>
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            // 以 .vue 宿主文件为 root：生产环境折叠 builder 也会被触发在顶层文件上
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+            System.out.println("==== BACKTICK descriptors = ${descriptors.map { it.placeholderText }}")
+            assertTrue(
+                "反引号 mustache 应通过原始文本兜底折叠为译文",
+                descriptors.any { it.placeholderText?.startsWith(hint("智能分片")) == true }
+            )
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
+    }
+
+    /**
      * 诊断：复刻 I18nFoldToggleInlayProvider.addFoldToggleInlays 的收集逻辑
      * （在宿主文件顶层 PSI 里 collectElementsOfType 找 JSCallExpression，不含注入片段），
      * 对比 React .tsx 与 Vue .vue 谁能被该 inlay 逻辑扫到。

@@ -33,6 +33,9 @@ object SvelteI18nStrategy : I18nFramework {
         com.pan.extractor.scanner.SvelteScanner
     override fun matches(element: PsiElement): Boolean = Util.isSvelte(element)
 
+    /** Svelte 还需处理 .svelte SFC（模板 + 脚本）与 .ts/.js。 */
+    override val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS + ".svelte"
+
     /** messageformat 位置占位符 `{0}` / `{1}`。 */
     override fun placeholderFor(index: Int): String = "{$index}"
     override fun paramKey(index: Int): String = index.toString()

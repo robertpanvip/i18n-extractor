@@ -68,6 +68,9 @@ This plugin helps developers quickly internationalize hard-coded strings in Java
         <!-- Vue 语言的 foldingBuilder 移至 vue-support.xml（可选依赖） -->
         <editorFactoryListener
                 implementation="com.pan.extractor.ui.I18nFoldToggleInlayProvider"/>
+        <!-- 切 tab 时才处理该编辑器的 inlay（避免项目恢复时一次性处理所有历史 tab） -->
+        <fileEditorManagerListener
+                implementation="com.pan.extractor.ui.I18nFoldToggleInlayProvider"/>
     </extensions>
     <actions>
         <!-- Refactor 菜单下的批量转换 -->

@@ -31,6 +31,9 @@ object VueI18nStrategy : I18nFramework {
         com.pan.extractor.scanner.VueScanner
     override fun matches(element: PsiElement): Boolean = Util.isVue(element)
 
+    /** Vue 还需处理 .vue SFC（模板 + 脚本）与 .ts/.js（组合式/纯工具文件）。 */
+    override val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS + ".vue"
+
     /** Vue 占位符前缀（默认 `N`）来自 [I18nSettings]，运行时读取以反映用户配置。 */
     private fun prefix(): String = I18nSettings.getInstance().vuePlaceholderPrefix()
 
