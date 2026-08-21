@@ -30,6 +30,8 @@ import com.intellij.ui.JBColor
 import java.awt.Graphics
 import java.awt.Rectangle
 import java.awt.event.MouseEvent
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -277,6 +279,31 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
 }
 
 /**
+ * 文件级集合缓存结果：缓存 [collectJSCallExpressions] 和 [collectRawTCalls] 的输出，
+ * 供折叠和 inlay 共用，避免重复 PSI 遍历和正则扫描。
+ */
+internal data class CachedCollectionResult(
+    val jsCalls: List<JSCallExpression>,
+    val rawTCalls: List<RawTCall>,
+    /** jsCalls 是否已计算（无计算时不可让另一方误用空列表） */
+    val jsCallsComputed: Boolean = false,
+    /** rawTCalls 是否已计算 */
+    val rawTCallsComputed: Boolean = false,
+    /** 缓存时的文件内容版本戳，用于检测文件修改后缓存失效 */
+    val modificationStamp: Long = 0L,
+)
+
+/**
+ * 文件级集合缓存：键为 [PsiFile] 弱引用，[PsiFile] 被 GC 回收时自动清理。
+ * 折叠和 inlay 共用此缓存，任一先计算完后另一方可直接复用，将每个文件的 PSI 遍历
+ * 和正则扫描从 2 次降为 1 次，大文件（数千行 TSX/Vue）显著减少重复开销。
+ *
+ * 线程安全：通过 [Collections.synchronizedMap] 保证 get/put 原子性。
+ * 正确性不依赖缓存命中：即使因时序问题双方同时计算，结果也是正确的，仅浪费一次计算。
+ */
+internal val collectionCache = Collections.synchronizedMap(WeakHashMap<PsiFile, CachedCollectionResult>())
+
+/**
  * 收集 [root] 所在宿主文档树中的 [JSCallExpression]（仅宿主树，不含注入片段）。
  *
  * 注意：Vue 模板表达式 `{{ $t(...) }}` / 属性绑定 `:x="$t(...)"` 是**注入语言**，注入出的
@@ -286,8 +313,27 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
  * 此函数只收集真正属于宿主文档树的调用（普通 .ts/.tsx/.js/.jsx、Vue `<script>` 块），
  * 其 textRange 即宿主坐标、node 即宿主树节点，也才能作为折叠描述符的锚点。
  */
-internal fun collectJSCallExpressions(root: PsiElement): List<JSCallExpression> =
-    PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).toList()
+internal fun collectJSCallExpressions(root: PsiElement): List<JSCallExpression> {
+    // 缓存命中：仅当 jsCalls 已标记为计算完成且文件版本戳未变时才复用，
+    // 避免文件修改后同一 PsiFile 实例返回过期数据。
+    if (root is PsiFile) {
+        val cached = collectionCache[root]
+        if (cached != null && cached.jsCallsComputed && cached.modificationStamp == root.modificationStamp) return cached.jsCalls
+    }
+    val result = PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).toList()
+    // 写入缓存：PSI 文件级共享，供折叠/inlay 另一方复用
+    if (root is PsiFile) {
+        val existing = collectionCache[root]
+        collectionCache[root] = CachedCollectionResult(
+            jsCalls = result,
+            rawTCalls = existing?.rawTCalls ?: emptyList(),
+            jsCallsComputed = true,
+            rawTCallsComputed = existing?.rawTCallsComputed ?: false,
+            modificationStamp = root.modificationStamp,
+        )
+    }
+    return result
+}
 
 /**
  * 模板表达式中的翻译调用（`$t('x')` / `$t("x")` / `$t(\`x\`)`）在 Vue 里是注入语言，
@@ -326,6 +372,10 @@ internal val RAW_T_CALL_OPENER_PATTERN = Regex(
  * 读取完整调用（含参数，括号平衡），产出**宿主文档绝对坐标**的折叠 / inlay 锚点（需在 read action 内调用）。
  */
 internal fun collectRawTCalls(file: PsiFile): List<RawTCall> {
+    // 缓存命中：仅当 rawTCalls 已标记为计算完成且文件版本戳未变时才复用，
+    // 避免文件修改后同一 PsiFile 实例返回过期数据。
+    val cached = collectionCache[file]
+    if (cached != null && cached.rawTCallsComputed && cached.modificationStamp == file.modificationStamp) return cached.rawTCalls
     val result = linkedMapOf<Int, RawTCall>() // startOffset -> call，天然去重
     PsiTreeUtil.collectElementsOfType(file, PsiLanguageInjectionHost::class.java).forEach { host ->
         val hostText = host.text
@@ -339,7 +389,17 @@ internal fun collectRawTCalls(file: PsiFile): List<RawTCall> {
             result[start] = RawTCall(key, host, TextRange(start, base + end), callText)
         }
     }
-    return result.values.toList()
+    val list = result.values.toList()
+    // 写入缓存
+    val existing = collectionCache[file]
+    collectionCache[file] = CachedCollectionResult(
+        jsCalls = existing?.jsCalls ?: emptyList(),
+        rawTCalls = list,
+        jsCallsComputed = existing?.jsCallsComputed ?: false,
+        rawTCallsComputed = true,
+        modificationStamp = file.modificationStamp,
+    )
+    return list
 }
 
 /** 自 [openIdx]（`(` 所在下标）向后找括号平衡的结束位置（返回开区间 end，即 `)` 后一位）。 */
