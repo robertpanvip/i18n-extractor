@@ -8,7 +8,9 @@ import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.JSVarStatement
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
@@ -157,14 +159,24 @@ object SymbolAnalyzer {
         return memo
     }
 
-    /** #4 按引用表达式 offset 缓存 resolve() 结果；同一引用在 detect/collect/祖先链里只解析一次。 */
+    /** #4 按引用表达式 offset 缓存 resolve() 结果；同一引用在 detect/collect/祖先链里只解析一次。
+     *  项目仍在索引（dumb）时**跳过 resolve()**：让 IDE 自己完成后台索引与
+     *  TypeScript Config Graph / import graph 的构建，插件绝不主动承担这些初始化成本
+     *  （否则会在无 Job/进度上下文的线程上触发 runBlockingCancellable 而抛 IllegalStateException）。
+     *  跳过时仅走文件级结构证明（第二层证据），零成本、零崩溃；等 IDE 分析就绪后再恢复精确 resolve。 */
     private fun resolvedOf(ref: JSReferenceExpression?): PsiElement? {
         if (ref == null) return null
-        // 用 ReadAction.compute 包裹 resolve()，确保 IntelliJ 线程上下文中有 ProgressIndicator，
+        // dumb 模式下不触发 resolve（单元测试保留 resolve 以维持示例/断言完整语义）
+        val containingFile = ref.containingFile as? PsiFile
+        if (containingFile != null &&
+            !ApplicationManager.getApplication().isUnitTestMode &&
+            DumbService.isDumb(containingFile.project)
+        ) return null
+        // 用 ReadAction.compute 包裹 resolve()，确保 IntelliJ 线程上下文中有 ProgressIndicator/Job，
         // 避免 TypeScript resolve 引擎中的 runBlockingCancellable 因缺少进度上下文而抛
         // "There is no ProgressIndicator or Job in this thread" 异常。
         fun resolveInReadAction(): PsiElement? = ReadAction.compute<PsiElement?, Throwable> { ref.resolve() }
-        val memo = fileScanGen(ref.containingFile as? PsiFile ?: return resolveInReadAction())
+        val memo = fileScanGen(containingFile ?: return resolveInReadAction())
             ?: return resolveInReadAction()
         return when (val v = memo.resolveResult.computeIfAbsent(ref.textRange.startOffset) { resolveInReadAction() ?: NO_RESOLVE }) {
             NO_RESOLVE -> null
