@@ -186,9 +186,12 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         messages: Map<String, String>,
         descriptors: MutableList<FoldingDescriptor>,
     ) {
-        // 反引号 key 调用（{{ $t(`..`) }}）：Vue 反引号注入的 PSI 坐标不可靠，统一交由
-        // [addRawBacktickFolds] 以宿主原始文本兜底折叠，此处跳过以免与兜底区域重复叠加。
-        if (isBacktickKeyCall(call)) return
+        // 注意：此方法仅由宿主树循环调用（调用方的 root.containingFile == contextFile），
+        // 传进来的 call 都是坐标可靠的宿主树调用（.ts/.tsx 属性绑定、Vue <script> 块等）。
+        // 因此**不被** Vue 反引号注入调用（那是注入子树，走 addRawFolds 兜底）。原本这里
+        // 用 isBacktickKeyCall 跳过所有反引号调用，会误伤 React 等的 `t(\`key\`)` 宿主调用，
+        // 使其既不走本路径、又因 raw 正则只认 $t/i18n 前缀而不兜底 → 反引号调用完全不折叠。
+        // 去掉该跳过：宿主树反引号调用坐标可靠，直接折叠；注入场景继续由 addRawFolds 兜底。
         val key = extractKey(call) ?: return
         val rawValue = messages[key] ?: return
         val params = extractInterpolationParams(call, messages)

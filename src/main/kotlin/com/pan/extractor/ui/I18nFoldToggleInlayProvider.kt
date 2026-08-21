@@ -234,9 +234,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             // 统一交由下方 collectRawTCalls 以宿主原始文本兜底（见函数注释）。
             collectJSCallExpressions(file).forEach { call ->
                 callStarts.add(call.textRange.startOffset)
-                // 反引号 key 调用（{{ $t(`..`) }}）注入坐标不可靠，inlay 交由下方
-                // collectRawTCalls 兜底，避免与兜底 inlay 重复叠加。
-                if (isBacktickKeyCall(call)) return@forEach
+                // 不再跳过反引号调用：宿主树里的 `t(\`key\`)`（React 属性/JSX 表达式、Vue
+                // <script> 块等）坐标可靠，应直接生成 inlay；Vue mustache 注入式 `$t(\`)`
+                // 本就不在宿主树里，由下方 collectRawTCalls 兜底，且按 callStarts 去重不叠加。
                 if (!fw.isTranslationCall(call)) return@forEach
                 translationCallCount++
                 val key = fw.extractKey(call) ?: return@forEach
@@ -314,19 +314,6 @@ internal class RawTCall(
                 ?: m.groupValues[2].takeIf { it.isNotEmpty() }
                 ?: m.groupValues[3].takeIf { it.isNotEmpty() }
     }
-}
-
-/**
- * 首参是否为无插值的反引号模板字符串（`$t(\`key\`)`）。是则命中坐标不可靠的反引号场景，
- * 折叠 / inlay 统一交由 [collectRawTCalls] 以宿主原始文本兜底，避免与兜底区域
- * 重复叠加。[I18nFoldingBuilder] 与 [I18nFoldToggleInlayProvider] 共用此判断。
- */
-internal fun isBacktickKeyCall(call: JSCallExpression): Boolean {
-    val first = call.arguments.firstOrNull() ?: return false
-    if (first !is com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression) return false
-    val text = first.text
-    if (text.length < 2) return false
-    return text.first() == '`' && text.last() == '`' && !text.contains("\${")
 }
 
 /** 匹配翻译调用起始：`$t(` / `$tc(` / `i18n.global.t(` / `i18n.t(`（含开始的 `(`）。 */
