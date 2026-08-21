@@ -87,6 +87,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
                     applyFoldsToEditors(project, document, descriptors.toList())
                 }
             }
+            .onError(java.util.function.Consumer<Throwable> { t ->
+                logger.warn("I18nFoldingBuilder: 计算折叠失败 file=${contextFile.name}", t)
+            })
 
         return FoldingDescriptor.EMPTY_ARRAY
     }
