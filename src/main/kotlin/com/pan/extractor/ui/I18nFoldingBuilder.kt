@@ -79,7 +79,6 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             computeFolds(root, contextFile, messages)
         }
             .inSmartMode(project)
-            .coalesceBy(this, root)
             .submit(AppExecutorUtil.getAppExecutorService())
             .onSuccess { descriptors ->
                 if (descriptors.isEmpty()) return@onSuccess
