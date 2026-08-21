@@ -5,7 +5,6 @@ import com.pan.extractor.messages.LocaleMessages
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
 
-import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
@@ -204,12 +203,13 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             val list = mutableListOf<InlayTarget>()
             var translationCallCount = 0
             val callStarts = mutableSetOf<Int>()
-            // Vue({{ }} / :绑定 注入) / Svelte / Angular 的模板表达式是注入语言，
-            // 仅在宿主树 collectElementsOfType 扫不到，需把注入片段也纳入。
-            collectJSCallExpressionsInjected(file).forEach { call ->
+            // 宿主树的 JSCallExpression（`<script>` 块 / 属性绑定 / .ts/.tsx）坐标即宿主文档坐标，
+            // 直接可用于 inlay。Vue mustache `{{ $t(...) }}` 是注入表达式，注入坐标并不可靠，
+            // 统一交由下方 collectRawTCalls 以宿主原始文本兜底（见函数注释）。
+            collectJSCallExpressions(file).forEach { call ->
                 callStarts.add(call.textRange.startOffset)
-                // 反引号 key 调用（{{ $t(`..`) }}）坐标不可靠，inlay 交由下方
-                // collectRawBacktickTCalls 兜底，避免与兜底 inlay 重复叠加。
+                // 反引号 key 调用（{{ $t(`..`) }}）注入坐标不可靠，inlay 交由下方
+                // collectRawTCalls 兜底，避免与兜底 inlay 重复叠加。
                 if (isBacktickKeyCall(call)) return@forEach
                 if (!fw.isTranslationCall(call)) return@forEach
                 translationCallCount++
@@ -217,9 +217,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 if (key !in messages) return@forEach
                 list.add(InlayTarget(call.textRange.endOffset))
             }
-            // 反引号 mustache（{{ $t(`..`) }}）注入 PSI 无 JSCallExpression，按原始文本兜底加 inlay，
-            // 使折叠切换标识也能落到这类调用上。与 JSCall 按起始偏移去重，避免重复叠加。
-            collectRawBacktickTCalls(file).forEach { raw ->
+            // 模板表达式（mustache / 属性）里的 $t('x') 调用按宿主原始文本兜底加 inlay，
+            // 使折叠切换标识落到这些调用上。与 JSCall 按起始偏移去重，避免重复叠加。
+            collectRawTCalls(file).forEach { raw ->
                 if (raw.range.startOffset in callStarts) return@forEach
                 if (raw.key !in messages) return@forEach
                 list.add(InlayTarget(raw.range.endOffset))
@@ -245,53 +245,48 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
 }
 
 /**
- * 累计 [root] 及其全部注入片段中的 [JSCallExpression]，按起始偏移去重。
+ * 收集 [root] 所在宿主文档树中的 [JSCallExpression]（仅宿主树，不含注入片段）。
  *
- * Vue 的 mustache `{{ $t(...) }}` / 指令绑定 `:x="$t(...)"`、Svelte 的 `{$t(...)}`、
- * Angular 模板插值 `{{ 'k' | translate }}` 都是**注入语言**，在宿主 PSI 树上直接
- * `collectElementsOfType` 扫不到（普通 .ts/.tsx/.js/.jsx 无注入，退化为宿主树扫描）。
- * 折叠 / inlay 都靠它保证模板表达式里的翻译调用能被识别。
- *
- * 需在 read action 内调用。
+ * 注意：Vue 模板表达式 `{{ $t(...) }}` / 属性绑定 `:x="$t(...)"` 是**注入语言**，注入出的
+ * [JSCallExpression].textRange 是**注入文件坐标**——若直接当作宿主文档坐标套用会错位折叠、
+ * 打断正常文字（历史上正是如此出现「2 个折叠预览、点开才恢复」）。因此模板/属性里的 `$t()`
+ * 调用**不**在此收集，统一交给 [collectRawTCalls] 以注入宿主原始文本正则兜底（宿主绝对坐标）。
+ * 此函数只收集真正属于宿主文档树的调用（普通 .ts/.tsx/.js/.jsx、Vue `<script>` 块），
+ * 其 textRange 即宿主坐标、node 即宿主树节点，也才能作为折叠描述符的锚点。
  */
-internal fun collectJSCallExpressionsInjected(root: PsiElement): List<JSCallExpression> {
-    val result = linkedMapOf<Int, JSCallExpression>() // startOffset -> call，天然去重
-    PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).forEach {
-        result[it.textRange.startOffset] = it
-    }
-    val project = root.project ?: return result.values.toList()
-    val inj = InjectedLanguageManager.getInstance(project)
-    PsiTreeUtil.collectElementsOfType(root, PsiLanguageInjectionHost::class.java).forEach { host ->
-        inj.getInjectedPsiFiles(host)?.forEach { pair ->
-            PsiTreeUtil.collectElementsOfType(pair.first, JSCallExpression::class.java).forEach {
-                result[it.textRange.startOffset] = it
-            }
-        }
-    }
-    return result.values.toList()
-}
+internal fun collectJSCallExpressions(root: PsiElement): List<JSCallExpression> =
+    PsiTreeUtil.collectElementsOfType(root, JSCallExpression::class.java).toList()
 
 /**
- * Vue 模板反引号 key 的 mustache（`{{ $t(\`\u6a21\u578b\u81ea\u52a8\u5206\u6bb5\`) }}`）字符串：
- * Vue 对反引号表达式注入出的 PSI 可能**不含** [JSCallExpression]（见
- * [com.pan.extractor.strategy.VueI18nStrategy.collectExistingTKeysFromTemplate] 注释），导致
- * 宿主树 + 注入片段都扫不到该调用。这里按注入宿主原始文本正则兜底，产出
- * 文档绝对坐标的反引号 `$t()` 折叠 / inlay 锚点。仅匹配反引号开头，普通单/双引号
- * 调用已有 [JSCallExpression]（经 [collectJSCallExpressionsInjected]），避免重复叠加。
+ * 模板表达式中的翻译调用（`$t('x')` / `$t("x")` / `$t(\`x\`)`）在 Vue 里是注入语言，
+ * 注入出的 [JSCallExpression] 的 textRange 是**注入文件**坐标，直接套用到宿主文档会产生
+ * 错位折叠（打断正常文字）。因此一律按注入宿主原始文本正则兜底，产出**宿主文档绝对坐标**
+ * 的折叠 / inlay 锚点。仅命中翻译资源中存在的 key。
  */
-internal val RAW_T_CALL_PATTERN =
-    Regex("(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\(\\s*(`)([^`]+)`\\s*[,)]")
+internal val RAW_T_CALL_PATTERN = Regex(
+    "(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))" +
+        "\\(\\s*(?:`([^`]*)`|'([^']*)'|\"([^\"]*)\")\\s*[,)]"
+)
 
-/** 反引号 `$t()` 原始文本调用：key + 所在宿主元素 + 文档绝对偏移范围。 */
+/** 反引号/单引号/双引号 `$t()` 原始文本调用：key + 所在宿主元素 + 文档绝对偏移范围 + 完整调用文本。 */
 internal class RawTCall(
     val key: String,
     val element: PsiElement,
     val range: TextRange,
-)
+    val text: String,
+) {
+    companion object {
+        /** 从正则匹配中提取 key（三个引号风格三选一，均已去引号）。 */
+        fun keyOf(m: MatchResult): String? =
+            m.groupValues[1].takeIf { it.isNotEmpty() }
+                ?: m.groupValues[2].takeIf { it.isNotEmpty() }
+                ?: m.groupValues[3].takeIf { it.isNotEmpty() }
+    }
+}
 
 /**
  * 首参是否为无插值的反引号模板字符串（`$t(\`key\`)`）。是则命中坐标不可靠的反引号场景，
- * 折叠 / inlay 统一交由 [collectRawBacktickTCalls] 以宿主原始文本兜底，避免与兜底区域
+ * 折叠 / inlay 统一交由 [collectRawTCalls] 以宿主原始文本兜底，避免与兜底区域
  * 重复叠加。[I18nFoldingBuilder] 与 [I18nFoldToggleInlayProvider] 共用此判断。
  */
 internal fun isBacktickKeyCall(call: JSCallExpression): Boolean {
@@ -302,17 +297,73 @@ internal fun isBacktickKeyCall(call: JSCallExpression): Boolean {
     return text.first() == '`' && text.last() == '`' && !text.contains("\${")
 }
 
-/** 在顶层文件所有注入宿主的原始文本中找反引号 `$t(`..`)` 调用。需在 read action 内调用。 */
-internal fun collectRawBacktickTCalls(file: PsiFile): List<RawTCall> {
+/** 匹配翻译调用起始：`$t(` / `$tc(` / `i18n.global.t(` / `i18n.t(`（含开始的 `(`）。 */
+internal val RAW_T_CALL_OPENER_PATTERN = Regex(
+    "(?:\\$(?:t|tc)|i18n\\.global\\.(?:t|tc)|i18n\\.(?:t|tc))\\s*\\("
+)
+
+/**
+ * 在顶层文件所有注入宿主的原始文本中找 `$t('..')` / `$t("..")` / `$t(\`..\`)` 调用，
+ * 读取完整调用（含参数，括号平衡），产出**宿主文档绝对坐标**的折叠 / inlay 锚点（需在 read action 内调用）。
+ */
+internal fun collectRawTCalls(file: PsiFile): List<RawTCall> {
     val result = linkedMapOf<Int, RawTCall>() // startOffset -> call，天然去重
     PsiTreeUtil.collectElementsOfType(file, PsiLanguageInjectionHost::class.java).forEach { host ->
+        val hostText = host.text
         val base = host.textRange.startOffset
-        RAW_T_CALL_PATTERN.findAll(host.text).forEach { m ->
-            val start = base + m.range.first
-            result[start] = RawTCall(m.groupValues[2], host, TextRange(start, base + m.range.last))
+        RAW_T_CALL_OPENER_PATTERN.findAll(hostText).forEach { om ->
+            val parenIdx = om.range.last // 即 `(` 的下标
+            val end = matchingParenEnd(hostText, parenIdx) ?: return@forEach
+            val callText = hostText.substring(om.range.first, end)
+            val key = RawTCall.keyOf(RAW_T_CALL_PATTERN.find(callText) ?: return@forEach) ?: return@forEach
+            val start = base + om.range.first
+            result[start] = RawTCall(key, host, TextRange(start, base + end), callText)
         }
     }
     return result.values.toList()
+}
+
+/** 自 [openIdx]（`(` 所在下标）向后找括号平衡的结束位置（返回开区间 end，即 `)` 后一位）。 */
+private fun matchingParenEnd(s: String, openIdx: Int): Int? {
+    var depth = 0
+    for (i in openIdx until s.length) {
+        when (s[i]) {
+            '(' -> depth++
+            ')' -> {
+                depth--
+                if (depth == 0) return i + 1
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * 从模板原始调用文本 `$t('key', { ... })` 中提取插值参数（Vue `{N0}` / React `{0}` 的替换值）。
+ * 与 [I18nFoldingBuilder] 基于 JSCallExpression 的参数提取逻辑等价，但工作在宿主原始文本上：
+ *  - 字面量： `N0: '搜索关键词'` / `"0": 2`
+ *  - 内层翻译调用：`N0: $t('搜索关键词')` —— 用内层 key 的译文作为参数值。
+ * 参数键统一去前缀 `N`。仅用于 [I18nFoldingBuilder.addRawFolds] 的模板兜底折叠。
+ */
+internal fun extractParamsFromText(rawText: String, messages: Map<String, String>): Map<String, String> {
+    if (!rawText.contains(',')) return emptyMap()
+    val result = mutableMapOf<String, String>()
+    val re = Regex("""["']?(\w+)["']?\s*:\s*("[^"]*"|'[^']*'|-?\d+)""")
+    re.findAll(rawText).forEach { match ->
+        val key = match.groupValues[1].removePrefix("N")
+        val rawValue = match.groupValues[2]
+        val value = if (rawValue.startsWith("\"") || rawValue.startsWith("'"))
+            rawValue.substring(1, rawValue.length - 1)
+        else rawValue
+        result[key] = value
+    }
+    val tRe = Regex("""["']?(\w+)["']?\s*:\s*(?:[\w.]+\s*\.\s*\$?t|\$?t)\s*\(\s*['"]([^'"]+)['"]\s*\)""")
+    tRe.findAll(rawText).forEach { match ->
+        val key = match.groupValues[1].removePrefix("N")
+        val innerKey = match.groupValues[2]
+        result[key] = messages[innerKey] ?: innerKey
+    }
+    return result
 }
 
 /** 在 t() 调用末尾渲染一个灰色 ↩ 符号，点击可折叠/展开。 */

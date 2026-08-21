@@ -331,8 +331,8 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
      * 用户报告：`{{ $t(\`模型自动分段\`) }}`（反引号 key 的 mustache）未被折叠，而属性绑定
      * `:title="$t('文档分段策略')"` 会折叠。根因：Vue 对反引号表达式注入的 PSI 不含
      * JSCallExpression（见 VueI18nStrategy.collectExistingTKeysFromTemplate 注释），
-     * [I18nFoldToggleInlayProvider.collectJSCallExpressionsInjected] 也扫不到。修复后应通过
-     * 宿主原始文本兜底（[I18nFoldingBuilder.addRawBacktickFolds]）将这类调用折叠为译文。
+     * 宿主树扫描（collectJSCallExpressions）也扫不到。修复后应通过
+     * 宿主原始文本兜底（[I18nFoldingBuilder.addRawFolds]）将这类调用折叠为译文。
      */
     fun testFoldVueBacktickMustacheRawTextFallback() {
         myFixture.addFileToProject(
@@ -479,5 +479,48 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
 
         assertTrue("tsx 顶层能扫到翻译调用", tsxTranslationCalls >= 1)
         System.out.println("==== DIAG 结论: tsx=$tsxTranslationCalls / vue 顶层=$vueTranslationCalls")
+    }
+
+    /**
+     * 回归：Vue 中折叠曾出现 2 个预览、打断正常文字、点开才恢复。
+     * 根因：mustache 注入出的 JSCallExpression.textRange 是**注入文件**坐标，被当作宿主
+     * 文档坐标套用，产生错位垃圾区域（`{{ $t('模型自动分段') }}` 的折叠落在 `<template>` 标签里）。
+     * 修复：宿主树的 JSCall 坐标即宿主坐标；模板表达式统一走原始文本兜底（宿主绝对坐标）。
+     * 断言：折叠区域的数量与文本都精确落位，不允许任何错位。
+     */
+    fun testFoldVueTemplateCallRegionsAreHostAligned() {
+        myFixture.addFileToProject(
+            "src/locales/en.ts",
+            """
+            export default {
+                '文档分段策略': 'Segmentation Strategy',
+                '模型自动分段': 'Auto Split',
+            }
+            """.trimIndent()
+        )
+        I18nSettings.getInstance().setFoldDisplayLanguage("en")
+        try {
+            val file = configureFile(
+                "src/Dupe.vue",
+                """
+                <template>
+                  <div>
+                    <span :title="${'$'}t('文档分段策略')">文</span>
+                    <span>{{ ${'$'}t('模型自动分段') }}</span>
+                  </div>
+                </template>
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+
+            val rangeTexts = descriptors.map { doc.getText(it.range).trim() }
+            System.out.println("==== DIAG-VUE rangeTexts = $rangeTexts")
+            // 必须恰好是两个调用各折叠一次，且折叠范围精确等于调用本身（不允许错位/多余区域）。
+            assertEquals(setOf("${'$'}t('文档分段策略')", "${'$'}t('模型自动分段')"), rangeTexts.toSet())
+            assertEquals("不应产生重复/错位的多余折叠区域", 2, descriptors.size)
+        } finally {
+            I18nSettings.getInstance().setFoldDisplayLanguage("zh")
+        }
     }
 }

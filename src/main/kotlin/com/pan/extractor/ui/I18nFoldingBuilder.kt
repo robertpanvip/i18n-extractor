@@ -78,16 +78,19 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     /** 同步计算折叠描述符（仅测试模式使用，生产环境走 [computeAndApplyFolds] 异步路径）。 */
     private fun computeFoldsSync(root: PsiElement, contextFile: PsiFile, messages: Map<String, String>): Array<FoldingDescriptor> {
         val t0 = System.nanoTime()
-        // Vue 模板 {{ }} / 指令绑定是注入语言，需连同注入片段一起扫（同 inlay）。
-        val callCount = collectJSCallExpressionsInjected(root)
+        // 宿主树（== 折叠目标文档）上的 $t/t() 调用：坐标即宿主坐标，可直接折叠。
+        // 模板表达式 {{ }} / 指令绑定是注入语言，注入 JSCall 坐标不可靠，统一交由 addRawFolds
+        // 兜底，故此处仅当 root 属于宿主 contextFile 时才扫宿主树（root 为注入 PSI 时跳过）。
         val descriptors = mutableListOf<FoldingDescriptor>()
-        for (call in callCount) {
-            addFoldingDescriptor(call, messages, descriptors)
+        if (root is PsiFile && root.containingFile == contextFile) {
+            for (call in collectJSCallExpressions(root)) {
+                addFoldingDescriptor(call, messages, descriptors)
+            }
         }
-        // 反引号 mustache（{{ $t(`..`) }}）注入 PSI 无 JSCallExpression，按宿主原始文本兜底折叠。
-        addRawBacktickFolds(contextFile, messages, descriptors)
+        // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
+        addRawFolds(contextFile, messages, descriptors)
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        logger.debug("I18nFoldingBuilder[测试/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descriptors.size} elapsed=${elapsedMs}ms")
+        logger.debug("I18nFoldingBuilder[测试/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")
         return descriptors.toTypedArray()
     }
 
@@ -101,19 +104,20 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
     ) {
         val t0 = System.nanoTime()
         val descriptors = ApplicationManager.getApplication().runReadAction<MutableList<FoldingDescriptor>> {
-            val callCount = collectJSCallExpressionsInjected(root)
             val descs = mutableListOf<FoldingDescriptor>()
-            for (call in callCount) {
-                addFoldingDescriptor(call, messages, descs)
+            if (root is PsiFile && root.containingFile == contextFile) {
+                for (call in collectJSCallExpressions(root)) {
+                    addFoldingDescriptor(call, messages, descs)
+                }
             }
-            // 反引号 mustache（{{ $t(`..`) }}）注入 PSI 无 JSCallExpression，按宿主原始文本兜底折叠。
-            addRawBacktickFolds(contextFile, messages, descs)
+            // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
+            addRawFolds(contextFile, messages, descs)
             // 日志里的 textLength 也需要读锁
             val elapsedMs = (System.nanoTime() - t0) / 1_000_000
             if (elapsedMs >= SLOW_FOLD_MS) {
-                logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descs.size} elapsed=${elapsedMs}ms")
+                logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
             } else {
-                logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B calls=${callCount.size} folded=${descs.size} elapsed=${elapsedMs}ms")
+                logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
             }
             descs
         }
@@ -198,20 +202,24 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         I18nFrameworkRegistry.detect(call).extractKey(call)
 
     /**
-     * 反引号 mustache（`{{ $t(\`模型自动分段\`) }}`）兜底折叠：Vue 对该类反引号表达式注入出的
-     * PSI 不含 [JSCallExpression]，[collectJSCallExpressionsInjected] 也扫不到，因此必须按
-     * 顶层文件注入宿主的原始文本正则识别。锚定宿主元素、使用文档绝对偏移，与已有描述符按
-     * 起始偏移去重，仅命中翻译资源中存在的 key。
+     * 模板表达式 `$t('x')` / `$t("x")` / `$t(\`x\`)` 兜底折叠：Vue 对这类表达式注入出的
+     * [JSCallExpression] 的 textRange 是注入文件坐标，直接套用会产生错位折叠（打断正常文字）。
+     * 因此统一按顶层文件注入宿主的**原始文本**正则识别，锚定宿主元素、使用宿主文档绝对偏移，
+     * 与已有描述符按起始偏移去重，仅命中翻译资源中存在的 key。
      */
-    private fun addRawBacktickFolds(
+    private fun addRawFolds(
         contextFile: PsiFile,
         messages: Map<String, String>,
         out: MutableList<FoldingDescriptor>,
     ) {
         val occupiedStarts = out.mapTo(mutableSetOf()) { it.range.startOffset }
-        for (raw in collectRawBacktickTCalls(contextFile)) {
+        val fw = I18nFrameworkRegistry.detect(contextFile)
+        for (raw in collectRawTCalls(contextFile)) {
             if (raw.range.startOffset in occupiedStarts) continue
-            val value = messages[raw.key] ?: continue
+            val rawValue = messages[raw.key] ?: continue
+            // 模板兜底同样支持插值参数（React {0} / Vue {N0}），与宿主树 t() 折叠行为一致。
+            val params = extractParamsFromText(raw.text, messages)
+            val value = fw.interpolatePlaceholders(rawValue, params)
             occupiedStarts.add(raw.range.startOffset)
             out.add(FoldingDescriptor(raw.element.node, raw.range, null, value + TOGGLE_HINT))
         }
