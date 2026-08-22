@@ -118,12 +118,120 @@ object LocaleMessages {
         return parseEntry(project, entry)
     }
 
-    private fun parseEntry(project: Project, entry: com.intellij.openapi.vfs.VirtualFile): Map<String, String> {
+    /**
+     * ── spread 解析用正则（一次编译，线程安全）──
+     */
+    private val SPREAD_RE = Regex("""\.\.\.(\w+)""")
+    private val IMPORT_RE = Regex("""import\s+(\w+)\s+from\s+['"]([^'"]+)['"]""")
+
+    private fun parseEntry(project: Project, entry: VirtualFile): Map<String, String> {
         val text = Util.readVirtualFileText(project, entry) ?: return emptyMap()
         return when (entry.extension?.lowercase()) {
             "json" -> parseJsonFlat(text)
-            else -> parseTsFlat(text)
+            else -> parseTsFlatWithSpread(project, entry, text, mutableSetOf())
         }
+    }
+
+    /**
+     * 解析 TS/JS 翻译资源，并跟随 `...X` spread 引用（如 `import cn from "xx"` + `...cn`）
+     * 递归解析被引用的翻译文件，将结果合并到当前 map。
+     *
+     * @param visited 已处理过的文件路径集合，防止循环引用
+     */
+    private fun parseTsFlatWithSpread(
+        project: Project,
+        entry: VirtualFile,
+        text: String,
+        visited: MutableSet<String>,
+    ): Map<String, String> {
+        val info = TsFileEditor.parseTsExportedObject(text) ?: return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        flattenNested(info.staticKV, "", out)
+
+        // 1. 在 export 对象体中找到 `...X` 引用
+        val objBody = text.substring(info.objectRange.first, info.objectRange.last + 1)
+        val spreadVars = SPREAD_RE.findAll(objBody).map { it.groupValues[1] }.toSet()
+        if (spreadVars.isEmpty()) return out
+
+        // 2. 解析 import 语句
+        val imports = IMPORT_RE.findAll(text).associate { it.groupValues[1] to it.groupValues[2] }
+
+        // 3. 解析每个 spread 引用
+        for (varName in spreadVars) {
+            val importPath = imports[varName] ?: continue
+            val resolvedFile = resolveImport(entry, importPath) ?: continue
+            if (!visited.add(resolvedFile.path)) continue // 防循环
+            val resolvedText = Util.readVirtualFileText(project, resolvedFile) ?: continue
+            if (resolvedFile.extension?.lowercase() == "json") {
+                out.putAll(parseJsonFlat(resolvedText))
+            } else {
+                out.putAll(parseTsFlatWithSpread(project, resolvedFile, resolvedText, visited))
+            }
+        }
+        return out
+    }
+
+    /**
+     * 解析 JS/TS import 路径为本地 VirtualFile。
+     * - 相对路径（./foo）→ 相对于当前文件查找
+     * - 绝对路径（/abs/path）→ 项目根相对
+     * - 裸包名（如 "xx"）→ 沿目录向上找 node_modules/xx
+     */
+    private fun resolveImport(fromFile: VirtualFile, spec: String): VirtualFile? {
+        val clean = spec.trim()
+        if (clean.isEmpty()) return null
+        val base = fromFile.parent ?: return null
+        val candidates = if (clean.startsWith(".") || clean.startsWith("/")) {
+            val rel = if (clean.startsWith("/")) clean.removePrefix("/") else clean
+            listOf(
+                rel, "$rel.ts", "$rel.tsx", "$rel.js", "$rel.jsx", "$rel.json",
+                "$rel/index.ts", "$rel/index.js", "$rel/index.json"
+            ).distinct()
+        } else {
+            // 裸包名：沿目录向上找 node_modules/<spec>
+            return resolveNodeModulesPackage(base, clean)
+        }
+        for (p in candidates) {
+            val vf = base.findFileByRelativePath(p) ?: continue
+            if (!vf.isDirectory) return vf
+        }
+        return null
+    }
+
+    /**
+     * 在 node_modules 中查找裸包名对应的入口文件。
+     * 优先 package.json 的 main 字段，否则回退 index.js / index.json。
+     */
+    private fun resolveNodeModulesPackage(fromDir: VirtualFile, pkgName: String): VirtualFile? {
+        var dir: VirtualFile? = fromDir
+        while (dir != null) {
+            val nm = dir.findChild("node_modules") ?: run { dir = dir.parent; continue }
+            val pkg = nm.findFileByRelativePath(pkgName) ?: run { dir = dir.parent; continue }
+            if (pkg.isDirectory) {
+                // 尝试 package.json 的 main 字段
+                val pkgJson = pkg.findChild("package.json")
+                if (pkgJson != null) {
+                    try {
+                        val root = JsonParser.parseString(String(pkgJson.contentsToByteArray(), Charsets.UTF_8))
+                        val main = root.takeIf { it.isJsonObject }?.asJsonObject?.get("main")
+                            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                        if (main != null) {
+                            val mainFile = pkg.findFileByRelativePath(main)
+                            if (mainFile != null && !mainFile.isDirectory) return mainFile
+                        }
+                    } catch (_: Exception) { }
+                }
+                // 回退 index.js / index.json
+                for (fallback in listOf("index.js", "index.json", "index.ts")) {
+                    val f = pkg.findChild(fallback) ?: continue
+                    if (!f.isDirectory) return f
+                }
+            } else {
+                return pkg // 直接是文件
+            }
+            dir = dir.parent
+        }
+        return null
     }
 
     private fun parseJsonFlat(text: String): Map<String, String> {
