@@ -5,6 +5,7 @@ import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ResourcePlan
 import com.pan.extractor.planner.RewritePlan
 import com.pan.extractor.resource.JsonWriter
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.staticparser.StaticObjectParser
 import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.Logger
@@ -335,7 +336,7 @@ object ProjectPreflightValidator {
                     )
                     issues += PreflightIssue(
                         "RESOURCE_OBJECT_MISSING",
-                        "ResourcePlan[target=${plan.targetPath}] 找不到可导出的 TS/JS 对象字面量（需要 export default / export const / module.exports）",
+                        I18nExtractorBundle.message("preflight.resource.object.missing.tsjs", plan.targetPath),
                         blocking = false,
                     )
                     return
@@ -398,7 +399,7 @@ object ProjectPreflightValidator {
         if (!isStructurallyBalanced(plan.newExpression)) {
             issues += PreflightIssue(
                 "REWRITE_RESULT_UNBALANCED",
-                "RewritePlan[siteId=${plan.siteId}] 合成的替换表达式（newExpression=${plan.newExpression}）括号/引号不闭合，会产生非法代码"
+                I18nExtractorBundle.message("preflight.rewrite.unbalanced", plan.siteId, plan.newExpression)
             )
         }
     }

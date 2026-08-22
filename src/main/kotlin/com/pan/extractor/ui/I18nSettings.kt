@@ -2,6 +2,7 @@ package com.pan.extractor.ui
 
 import com.pan.extractor.lang.LanguageExtractor
 import com.pan.extractor.lang.LanguageRegistry
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
 
@@ -16,10 +17,12 @@ import com.intellij.openapi.components.Storage
  *  - [FILE]：明确选「写入文件」→ 每次提取后自动写回入口多语言文件，不再弹窗询问。
  *  - [ASK]：每次弹窗时展示输出方式选项（默认，向后兼容）。
  */
-enum class OutputDestination(val label: String) {
-    CLIPBOARD("剪贴板"),
-    FILE("写入文件"),
-    ASK("每次询问");
+enum class OutputDestination(val labelKey: String) {
+    CLIPBOARD("output.clipboard"),
+    FILE("output.file"),
+    ASK("output.ask");
+
+    val label: String get() = I18nExtractorBundle.message(labelKey)
 
     companion object {
         fun safeValueOf(raw: String?): OutputDestination = when (raw?.trim()) {
@@ -35,9 +38,11 @@ enum class OutputDestination(val label: String) {
  *  - [I18NEXT]：react-i18next（默认，`t('key')` + `{{0}}` 占位）。
  *  - [REACT_INTL]：react-intl（`formatMessage({ id: 'key' })` + ICU `{0}` 占位）。
  */
-enum class ReactLibrary(val label: String) {
-    I18NEXT("react-i18next（默认）"),
-    REACT_INTL("react-intl");
+enum class ReactLibrary(val labelKey: String) {
+    I18NEXT("react.library.i18next"),
+    REACT_INTL("react.library.react.intl");
+
+    val label: String get() = I18nExtractorBundle.message(labelKey)
 
     companion object {
         fun safeValueOf(raw: String?): ReactLibrary = when (raw?.trim()) {

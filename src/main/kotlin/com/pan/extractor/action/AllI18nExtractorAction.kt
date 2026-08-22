@@ -1,5 +1,6 @@
 package com.pan.extractor.action
 
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.project.Util
 import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.orchestrator.ApplyOptions
@@ -298,7 +299,7 @@ class AllI18nExtractorAction : AnAction() {
         //   这里改成 Task.Backgroundable，onSuccess 里再在 EDT 弹对话框并启动写入任务。
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             project,
-            "i18n 全项目：扫描文件并分析中文…",
+            I18nExtractorBundle.message("action.progress.batch.scan"),
             true
         ) {
             private var files: List<VirtualFile> = emptyList()
@@ -307,7 +308,7 @@ class AllI18nExtractorAction : AnAction() {
 
             override fun run(indicator: ProgressIndicator) {
                 indicator.isIndeterminate = false
-                indicator.text = "发现待处理文件（tsconfig include / 全局回退）"
+                indicator.text = I18nExtractorBundle.message("action.progress.batch.found")
                 indicator.fraction = 0.05
                 indicator.checkCanceled()
                 val allFiles = try {
@@ -318,7 +319,7 @@ class AllI18nExtractorAction : AnAction() {
                 // Bug 2: 翻译资源文件不进入 Processor
                 files = allFiles.filterNot { EntryFileLocator.isTranslationResourceFile(it) }
                 if (files.isEmpty()) return
-                indicator.text = "分析 ${files.size} 个文件中的硬编码中文"
+                indicator.text = I18nExtractorBundle.message("action.progress.batch.analyzing", files.size)
                 indicator.fraction = 0.2
                 try {
                     collection = Orchestrator.collect(project, files, contextPsi, indicator)
@@ -334,18 +335,18 @@ class AllI18nExtractorAction : AnAction() {
                     LOG.error("i18n 全项目扫描/分析阶段异常：${t.message?.take(120)}", t)
                     Orchestrator.notifyNothingExtracted(
                         project,
-                        "整个项目（内部异常: ${t.javaClass.simpleName}）"
+                        I18nExtractorBundle.message("action.progress.batch.scope")
                     )
                     return
                 }
                 if (files.isEmpty()) {
-                    Orchestrator.notifyNothingExtracted(project, "整个项目（没有可处理的 TS/TSX/VUE 文件）")
+                    Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
                     return
                 }
                 val c = collection ?: return
                 if (c.processors.isEmpty()) {
                     if (c.extracted.isEmpty()) {
-                        Orchestrator.notifyNothingExtracted(project, "整个项目")
+                        Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
                     }
                     return
                 }
@@ -370,14 +371,14 @@ class AllI18nExtractorAction : AnAction() {
         val confirmed = try {
             dialog.showAndGet()
         } catch (t: Throwable) {
-            Orchestrator.notifyInternalError(project, "i18n 提取确认对话框异常", t)
+            Orchestrator.notifyInternalError(project, I18nExtractorBundle.message("orchestrator.notify.internal.title"), t)
             false
         }
         if (confirmed) {
             try {
                 ProgressManager.getInstance().run(object : Task.Backgroundable(
                     project,
-                    "i18n 全项目写入中…",
+                    I18nExtractorBundle.message("action.progress.batch.writing"),
                     true
                 ) {
                     private var output: Orchestrator.OutputResult =
@@ -386,7 +387,7 @@ class AllI18nExtractorAction : AnAction() {
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = false
                         indicator.fraction = 0.0
-                        indicator.text = "准备写入：预计算合并分组..."
+                        indicator.text = I18nExtractorBundle.message("action.progress.batch.preparing")
                         indicator.text2 = ""
                         output = Orchestrator.apply(
                             project, collection,
@@ -404,7 +405,7 @@ class AllI18nExtractorAction : AnAction() {
                     override fun onSuccess() {
                         Orchestrator.notifyExtractSuccess(
                             project,
-                            title = "全项目国际化提取完成",
+                            title = I18nExtractorBundle.message("action.progress.batch.complete"),
                             extractedCount = collection.extracted.size,
                             processedFiles = collection.fileCount,
                             output = output,
@@ -412,14 +413,14 @@ class AllI18nExtractorAction : AnAction() {
                     }
 
                     override fun onThrowable(error: Throwable) {
-                        Orchestrator.notifyInternalError(project, "全项目 i18n 提取写入失败", error)
+                        Orchestrator.notifyInternalError(project, I18nExtractorBundle.message("orchestrator.notify.internal.title"), error)
                     }
                 })
             } catch (t: Throwable) {
-                Orchestrator.notifyInternalError(project, "全项目 i18n 提取：启动后台任务失败", t)
+                Orchestrator.notifyInternalError(project, I18nExtractorBundle.message("orchestrator.notify.internal.title"), t)
             }
         } else if (collection.extracted.isEmpty()) {
-            Orchestrator.notifyNothingExtracted(project, "整个项目")
+            Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.pan.extractor.validator
 
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.ui.*
 
 import com.pan.extractor.ui.ExtractedStringsDialog
@@ -55,7 +56,7 @@ object ChangeValidator {
         }
         if (invalid.isNotEmpty()) {
             throw IllegalStateException(
-                "有 ${invalid.size} 处待改写站点已失效，操作已中止（未修改任何文件）：\n" + invalid.joinToString("\n")
+                I18nExtractorBundle.message("change.validator.invalid.sites", invalid.size, invalid.joinToString("\n"))
             )
         }
     }

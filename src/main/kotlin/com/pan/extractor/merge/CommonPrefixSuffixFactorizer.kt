@@ -1,6 +1,7 @@
 package com.pan.extractor.merge
 
 import java.util.Collections
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.ui.*
 
 import com.intellij.openapi.application.ApplicationManager
@@ -129,7 +130,7 @@ object CommonPrefixSuffixFactorizer {
         val finalDigit = if (digit.isEmpty() && finalAffix.isEmpty() && allSites.size >= 2) {
             listOf(DigitGroupCandidate(
                 id = "DG0",
-                skeleton = "（没有可自动抽取的数字骨架，无法合并；手动编辑翻译即可）",
+                skeleton = I18nExtractorBundle.message("merge.factorizer.no.digit.skeleton"),
                 digits = emptyList(),
                 perSites = allSites.take(8).map { DigitPerSite(it, emptyList(), true) },
                 selected = false,

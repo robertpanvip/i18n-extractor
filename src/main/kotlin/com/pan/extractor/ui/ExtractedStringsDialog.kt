@@ -11,6 +11,7 @@ import com.pan.extractor.bootstrap.I18nBootstrap
 import com.pan.extractor.bootstrap.I18nBootstrapSupport
 import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.*
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.analyzer.*
 
 import com.google.gson.GsonBuilder
@@ -111,7 +112,7 @@ class ExtractedStringsDialog(
     private lateinit var digitModel: DigitModel
 
     init {
-        title = "提取的中文字符串"
+        title = I18nExtractorBundle.message("extracted.strings.dialog.title")
         isModal = true
         init()
     }
@@ -137,8 +138,8 @@ class ExtractedStringsDialog(
         this.editor = editor
 
         val tabs = JTabbedPane()
-        tabs.addTab("翻译 JSON 预览", editor.component)
-        tabs.addTab("合并建议（公共前后缀 + 汉字+数字抽取）", buildMergeTab())
+        tabs.addTab(I18nExtractorBundle.message("tab.json.preview"), editor.component)
+        tabs.addTab(I18nExtractorBundle.message("tab.merge.suggestions"), buildMergeTab())
 
         // 外层：tabs 在 NORTH/CENTER，配置面板在 SOUTH（仅当输出去向为「每次询问」时展示）
         val root = JPanel(BorderLayout(0, 10))
@@ -192,7 +193,7 @@ class ExtractedStringsDialog(
     /** 构造输出方式配置面板（底部）。 */
     private fun buildOutputConfigPanel(): JComponent {
         val panel = JPanel(GridBagLayout())
-        panel.border = BorderFactory.createTitledBorder("输出方式（偏好会记住到项目级别）")
+        panel.border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("output.panel.title"))
 
         val gbc0 = GridBagConstraints().apply {
             gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST
@@ -221,8 +222,8 @@ class ExtractedStringsDialog(
         val radioPanel = JPanel()
         radioPanel.layout = BoxLayout(radioPanel, BoxLayout.Y_AXIS)
         val group = ButtonGroup()
-        radioClipboard = JRadioButton("拷贝到剪贴板（默认：复制 JSON key-value，需手动贴到语言包里）")
-        radioOverwrite = JRadioButton("覆盖入口中文多语言文件（自动把新 key 合并写回 .ts/.json 入口）")
+        radioClipboard = JRadioButton(I18nExtractorBundle.message("radio.clipboard"))
+        radioOverwrite = JRadioButton(I18nExtractorBundle.message("radio.overwrite"))
         group.add(radioClipboard); group.add(radioOverwrite)
         radioPanel.add(radioClipboard)
         radioPanel.add(radioOverwrite)
@@ -232,11 +233,11 @@ class ExtractedStringsDialog(
 
         // 行 0 中：入口文件路径文本框
         entryPathField = JTextField()
-        entryPathField.toolTipText = "中文语言包入口文件（zh-CN.ts / zh_CN.json / messages.zhs.ts 等）"
+        entryPathField.toolTipText = I18nExtractorBundle.message("entry.file.tooltip")
         panel.add(entryPathField, gbc1)
 
         // 行 0 右：选择文件按钮
-        btnPickEntry = JButton("选择…")
+        btnPickEntry = JButton(I18nExtractorBundle.message("button.pick.entry"))
         btnPickEntry.addActionListener { onPickEntryFile() }
         panel.add(btnPickEntry, gbc2)
 
@@ -254,11 +255,11 @@ class ExtractedStringsDialog(
                 else -> missing.framework.id
             }
             val chk = JCheckBox(
-                "<html>项目尚未初始化多语言（$frameworkLabel）。勾选后自动：<br>" +
+                I18nExtractorBundle.message("bootstrap.checkbox.header", frameworkLabel) +
                     (if (missing.depsToAdd.isNotEmpty())
-                        "&nbsp;&nbsp;• 在 package.json 添加依赖 ${missing.dependencyLabel}<br>"
+                        I18nExtractorBundle.message("bootstrap.checkbox.deps", missing.dependencyLabel)
                     else "") +
-                    "&nbsp;&nbsp;• 创建 i18n 初始化文件（src/i18n.ts）与中文语言包入口文件（src/locales/&lt;locale&gt;.ts）</html>"
+                    I18nExtractorBundle.message("bootstrap.checkbox.create.files")
             )
             chk.isSelected = true
             chkI18nBootstrap = chk
@@ -288,9 +289,9 @@ class ExtractedStringsDialog(
         }
         if (candidate != null) {
             entryPathField.text = candidate.path
-            lblEntryStatus.text = "<html><span style=\"color:#2e7d32\">✓ 已定位中文入口：${candidate.name}（${candidate.extension?.uppercase()}）</span></html>"
+            lblEntryStatus.text = I18nExtractorBundle.message("status.auto.found", candidate.name, candidate.extension?.uppercase().orEmpty())
         } else {
-            lblEntryStatus.text = "<html><span style=\"color:#c62828\">未自动找到中文入口文件，请点击「选择…」手动指定 zh-CN.ts / zh_CN.json</span></html>"
+            lblEntryStatus.text = I18nExtractorBundle.message("status.no.entry")
             if (radioOverwrite.isSelected) {
                 // 没找到入口 → 自动退回 clipboard，避免用户误选覆盖
                 radioClipboard.isSelected = true
@@ -319,8 +320,8 @@ class ExtractedStringsDialog(
             val ext = vf.extension?.lowercase()
             ext in setOf("ts", "tsx", "js", "jsx", "json")
         }
-        descriptor.title = "选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等）"
-        descriptor.description = "只接受 .ts / .tsx / .js / .jsx / .json 后缀"
+        descriptor.title = I18nExtractorBundle.message("file.chooser.title")
+        descriptor.description = I18nExtractorBundle.message("file.chooser.description")
 
         val initialFile = entryPathField.text?.takeIf { it.isNotBlank() }
             ?.let { LocalFileSystem.getInstance().findFileByPath(it) }
@@ -331,11 +332,11 @@ class ExtractedStringsDialog(
             entryPathField.text = chosen.path
             val ext = chosen.extension?.lowercase()
             lblEntryStatus.text = if (ext in setOf("ts", "tsx", "js", "jsx")) {
-                "<html><span style=\"color:#1565c0\">✓ 选中 TS/JS 入口：${chosen.name}（将解析 export default / export const 对象字面量，表达式部分原样保留）</span></html>"
+                I18nExtractorBundle.message("status.selected.tsjs", chosen.name)
             } else if (ext == "json") {
-                "<html><span style=\"color:#2e7d32\">✓ 选中 JSON 入口：${chosen.name}（直接合并 JSON 写回）</span></html>"
+                I18nExtractorBundle.message("status.selected.json", chosen.name)
             } else {
-                "<html><span style=\"color:#c62828\">⚠ 文件后缀 ${chosen.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json</span></html>"
+                I18nExtractorBundle.message("status.unsupported.extension", chosen.extension.orEmpty())
             }
         }
     }
@@ -410,8 +411,8 @@ class ExtractedStringsDialog(
                 if (pathText.isEmpty()) {
                     JOptionPane.showMessageDialog(
                         this.contentPanel,
-                        "请选择中文语言包入口文件（zh-CN.ts / zh_CN.json 等），或切换为「拷贝到剪贴板」模式。",
-                        "入口文件未指定",
+                        I18nExtractorBundle.message("error.no.entry.file"),
+                        I18nExtractorBundle.message("error.no.entry.title"),
                         JOptionPane.WARNING_MESSAGE
                     )
                     return
@@ -420,8 +421,8 @@ class ExtractedStringsDialog(
                 if (f == null || !f.isValid || f.isDirectory) {
                     JOptionPane.showMessageDialog(
                         this.contentPanel,
-                        "入口文件不存在或无效：$pathText\n请重新选择，或切换为「拷贝到剪贴板」模式。",
-                        "入口文件无效",
+                        I18nExtractorBundle.message("error.invalid.entry", pathText),
+                        I18nExtractorBundle.message("error.invalid.entry.title"),
                         JOptionPane.WARNING_MESSAGE
                     )
                     return
@@ -430,8 +431,8 @@ class ExtractedStringsDialog(
                 if (ext !in setOf("ts", "tsx", "js", "jsx", "json")) {
                     JOptionPane.showMessageDialog(
                         this.contentPanel,
-                        "入口文件后缀 ${f.extension} 不支持，仅支持 .ts/.tsx/.js/.jsx/.json。",
-                        "入口文件类型不支持",
+                        I18nExtractorBundle.message("error.unsupported.extension", f.extension.orEmpty()),
+                        I18nExtractorBundle.message("error.unsupported.type.title"),
                         JOptionPane.WARNING_MESSAGE
                     )
                     return
@@ -445,8 +446,8 @@ class ExtractedStringsDialog(
             if (wantOverwrite && entryFile == null) {
                 JOptionPane.showMessageDialog(
                     this.contentPanel,
-                    "设置为「写入文件」但未自动定位到入口多语言文件。\n请先到 Settings → I18n Extractor 切回「每次询问」手动选择，或确认项目里存在 <locale>.ts/.json 入口文件。",
-                    "未找到入口文件",
+                    I18nExtractorBundle.message("error.file.mode.no.entry"),
+                    I18nExtractorBundle.message("error.file.mode.no.entry.title"),
                     JOptionPane.WARNING_MESSAGE
                 )
                 return
@@ -490,12 +491,12 @@ class ExtractedStringsDialog(
 
         // 1) 公共前后缀表
         val affixCols = Vector<String>().apply {
-            add("选")
-            add("骨架值")
-            add("骨架key (可编辑)")
-            add("差异段 (前5)")
-            add("示例句子 (前3)")
-            add("命中数")
+            add(I18nExtractorBundle.message("table.column.select"))
+            add(I18nExtractorBundle.message("table.column.skeleton"))
+            add(I18nExtractorBundle.message("table.column.skeleton.key"))
+            add(I18nExtractorBundle.message("table.column.diffs"))
+            add(I18nExtractorBundle.message("table.column.examples"))
+            add(I18nExtractorBundle.message("table.column.count"))
         }
         val affixRows = Vector<Vector<Any?>>()
         for (g in affixGroups) {
@@ -519,17 +520,17 @@ class ExtractedStringsDialog(
             columnModel.getColumn(5).preferredWidth = 60
         }
         val affixPane = JScrollPane(affixTable).apply {
-            border = BorderFactory.createTitledBorder("公共前后缀合并（骨架中间 {N0} 留差）；≥2 字自动出候选")
+            border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("border.affix.merge"))
             preferredSize = Dimension(960, 320)
         }
 
         // 2) 汉字+数字抽取表
         val digitCols = Vector<String>().apply {
-            add("选")
-            add("骨架值（{N0} = 数字占位）")
-            add("骨架key (可编辑)")
-            add("数字示例 (前5)")
-            add("命中数")
+            add(I18nExtractorBundle.message("table.column.select"))
+            add(I18nExtractorBundle.message("table.column.digit.skeleton"))
+            add(I18nExtractorBundle.message("table.column.digit.key"))
+            add(I18nExtractorBundle.message("table.column.digit.examples"))
+            add(I18nExtractorBundle.message("table.column.digit.count"))
         }
         val digitRows = Vector<Vector<Any?>>()
         for (g in digitGroups) {
@@ -551,17 +552,11 @@ class ExtractedStringsDialog(
             columnModel.getColumn(4).preferredWidth = 60
         }
         val digitPane = JScrollPane(digitTable).apply {
-            border = BorderFactory.createTitledBorder("汉字 + 数字 抽取（特别处理：原句中数字抽成 {N0}，差异是数字字面量）")
+            border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("border.digit.merge"))
             preferredSize = Dimension(960, 220)
         }
 
-        val hint = JLabel(
-            "<html>" +
-            "提示：① 表中每行默认勾选，可去掉不想要的合并；" +
-            "② 『骨架key』可编辑，对应翻译资源 JSON 里的键；" +
-            "③ OK 后，被选中的 site 会重写成 <code>\$t('骨架{N0}', { N0: \$t('差异') })</code> 形式。" +
-            "</html>"
-        )
+        val hint = JLabel(I18nExtractorBundle.message("merge.tab.hint"))
 
         root.add(hint, BorderLayout.NORTH)
         root.add(affixPane, BorderLayout.CENTER)

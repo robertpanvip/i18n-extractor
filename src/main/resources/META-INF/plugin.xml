@@ -37,7 +37,7 @@ This plugin helps developers quickly internationalize hard-coded strings in Java
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup
-                id="Vue i18n 提取提示"
+                id="I18nExtractorNotification"
                 displayType="BALLOON"
                 toolWindowId="Project"
                 isLogByDefault="false"

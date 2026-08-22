@@ -1,5 +1,6 @@
 package com.pan.extractor.orchestrator
 
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.project.Util
 import com.pan.extractor.core.I18nProcessor
 import com.pan.extractor.merge.MergeApplier
@@ -104,8 +105,8 @@ object I18nExtractionOrchestrator {
             // 每分析一个文件，推进一次进度（含 cancel 检查），让批量提取的进度条持续更新。
             if (indicator != null) {
                 indicator.checkCanceled()
-                indicator.text = "分析中：${file.name} (${idx + 1}/$total)"
-                indicator.text2 = "已提取 ${extracted.size} 条 key"
+                indicator.text = I18nExtractorBundle.message("action.progress.analyzing.file", file.name, idx + 1, total)
+                indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
                 indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
             }
             ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
@@ -220,8 +221,8 @@ object I18nExtractionOrchestrator {
             throw t
         }
 
-        indicator.text = "等待 EDT 写入窗口（原子 command）"
-        indicator.text2 = "EDT 空闲后单 command 统一提交，失败将整体回滚"
+        indicator.text = I18nExtractorBundle.message("orchestrator.waiting.edt")
+        indicator.text2 = I18nExtractorBundle.message("orchestrator.waiting.edt.detail")
         indicator.fraction = 0.05
 
         // ══════════════════════════════════════════════════════════════════════════════
@@ -310,8 +311,8 @@ object I18nExtractionOrchestrator {
                     }
                 }
                 indicator.fraction = max(indicator.fraction, waitFraction.coerceAtMost(0.9))
-                indicator.text = "EDT 执行中：原子写入 ${collection.processors.size} 个文件（import + \$t 替换 + 骨架 + 资源写回）"
-                indicator.text2 = "已等待 ${elapsedMs / 1000}s（仍在单个 WriteCommandAction 内，失败会整体回滚）"
+                indicator.text = I18nExtractorBundle.message("orchestrator.edt.writing", collection.processors.size)
+                indicator.text2 = I18nExtractorBundle.message("orchestrator.edt.waiting", elapsedMs / 1000)
                 indicator.checkCanceled()
             } catch (e: java.util.concurrent.ExecutionException) {
                 val cause = e.cause ?: e
@@ -328,7 +329,7 @@ object I18nExtractionOrchestrator {
             }
         }
         indicator.fraction = 1.0
-        indicator.text = "已完成单 command 原子写入（入口 / 剪贴板）"
+        indicator.text = I18nExtractorBundle.message("orchestrator.complete")
         indicator.text2 = ""
         return output
     }
@@ -374,14 +375,14 @@ object I18nExtractionOrchestrator {
                     return OutputResult(
                         copiedToClipboard = true,
                         overwroteEntryFile = false,
-                        fallbackReason = t.message?.take(40) ?: "写文件异常"
+                        fallbackReason = t.message?.take(40) ?: I18nExtractorBundle.message("orchestrator.fallback.reason.write")
                     )
                 }
             } else {
                 val reason = when (ext) {
-                    "ts", "tsx", "js", "jsx" -> "TS/JS 入口未找到 export default/export const 对象字面量，或包含无法解析结构"
-                    "json" -> "JSON 解析失败"
-                    else -> "不支持的入口文件后缀"
+                    "ts", "tsx", "js", "jsx" -> I18nExtractorBundle.message("orchestrator.fallback.tsjs")
+                    "json" -> I18nExtractorBundle.message("orchestrator.fallback.json")
+                    else -> I18nExtractorBundle.message("orchestrator.fallback.unsupported")
                 }
                 val content = Util.getJsonContent(jsonPretty)
                 CopyPasteManager.getInstance().setContents(StringSelection(content))
@@ -412,20 +413,20 @@ object I18nExtractionOrchestrator {
         output: OutputResult,
     ) {
         val filesPart = when {
-            processedFiles > 1 -> "（扫描 $processedFiles 个文件）"
+            processedFiles > 1 -> I18nExtractorBundle.message("orchestrator.notify.scanned", processedFiles)
             else -> ""
         }
         val outputPart = when {
             output.overwroteEntryFile && output.entryFileName != null ->
-                "，已合并写回入口文件「${output.entryFileName}」"
+                I18nExtractorBundle.message("orchestrator.notify.merged", output.entryFileName)
             output.copiedToClipboard && output.fallbackReason != null ->
-                "，JSON 已复制到剪贴板（写回入口失败：${output.fallbackReason}）"
-            output.copiedToClipboard -> "，JSON 已复制到剪贴板"
+                I18nExtractorBundle.message("orchestrator.notify.fallback", output.fallbackReason)
+            output.copiedToClipboard -> I18nExtractorBundle.message("orchestrator.notify.clipboard")
             else -> ""
         }
-        val subtitle = "提取 $extractedCount 条 key$filesPart$outputPart"
+        val subtitle = I18nExtractorBundle.message("orchestrator.notify.subtitle", extractedCount, filesPart, outputPart)
         val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("Vue i18n 提取提示")
+            .getNotificationGroup("I18nExtractorNotification")
         Notifications.Bus.notify(
             notificationGroup.createNotification(title, subtitle, NotificationType.INFORMATION),
             project
@@ -435,11 +436,11 @@ object I18nExtractionOrchestrator {
     /** 当没有中文可提取时，通知用户「取消」的原因，避免以为插件没反应。 */
     fun notifyNothingExtracted(project: Project, scope: String) {
         val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("Vue i18n 提取提示")
+            .getNotificationGroup("I18nExtractorNotification")
         Notifications.Bus.notify(
             notificationGroup.createNotification(
-                "未找到可提取的中文",
-                "$scope 中未发现硬编码中文或 t 调用，无需处理。",
+                I18nExtractorBundle.message("orchestrator.notify.nothing.title"),
+                I18nExtractorBundle.message("orchestrator.notify.nothing.body", scope),
                 NotificationType.WARNING
             ),
             project
@@ -453,15 +454,19 @@ object I18nExtractionOrchestrator {
     fun notifyInternalError(project: Project, title: String, throwable: Throwable) {
         LOG.warn("I18n Extractor 内部异常 —— $title", throwable)
         val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("Vue i18n 提取提示")
+            .getNotificationGroup("I18nExtractorNotification")
         val msg = buildString {
             append(throwable.javaClass.simpleName)
             val m = throwable.message
             if (!m.isNullOrBlank()) append(": ").append(m.take(140))
-            append("；详情见 idea.log，若可稳定复现请附日志反馈。")
+            append(I18nExtractorBundle.message("orchestrator.notify.internal.detail"))
         }
         Notifications.Bus.notify(
-            notificationGroup.createNotification(title, msg, NotificationType.ERROR),
+            notificationGroup.createNotification(
+                I18nExtractorBundle.message("orchestrator.notify.internal.title"),
+                msg,
+                NotificationType.ERROR
+            ),
             project
         )
     }

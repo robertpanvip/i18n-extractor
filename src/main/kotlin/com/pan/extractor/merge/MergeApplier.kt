@@ -3,6 +3,7 @@ package com.pan.extractor.merge
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.project.I18nPsiTools
 import com.pan.extractor.core.I18nProcessor
+import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.ui.*
 
 import com.intellij.lang.javascript.psi.impl.JSChangeUtil
@@ -134,7 +135,7 @@ object MergeApplier {
         // ③ 预构建骨架重写计划（数据化 [RewritePlan]，不再包闭包）
         //    计划由 Planner 层产出（ExtractionPlanner.buildRewritePlans）—— 差分占位表达式已按
         //    每个 site 的 Vue/React 形态渲染好；此处把计划解析为纯数据，交给统一解释器执行。
-        indicator?.text = "生成骨架重写任务列表（公共前后缀/数字抽取）"
+        indicator?.text = I18nExtractorBundle.message("merge.applier.generating.skeleton.plans")
         val finalExtracted: MutableMap<String, String> = LinkedHashMap(extracted)
 
         val skeletonPlans = com.pan.extractor.planner.ExtractionPlanner

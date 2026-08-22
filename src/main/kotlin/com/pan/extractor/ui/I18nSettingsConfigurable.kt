@@ -3,6 +3,7 @@ package com.pan.extractor.ui
 import com.pan.extractor.lang.LanguageRegistry
 import com.pan.extractor.*
 import com.pan.extractor.analyzer.*
+import com.pan.extractor.messages.I18nExtractorBundle
 
 import com.intellij.openapi.options.Configurable
 import java.awt.BorderLayout
@@ -51,7 +52,7 @@ class I18nSettingsConfigurable : Configurable {
 
         // ── 上半：目标语言多选 ──
         val langPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
-        langPanel.border = BorderFactory.createTitledBorder("目标语言（勾选要提取的语言）")
+        langPanel.border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("settings.lang.panel.border"))
         val langBox = JPanel(GridLayout(0, 2, 8, 4))
         for (ex in LanguageRegistry.all) {
             val cb = JCheckBox("${ex.displayName} (${ex.id})")
@@ -65,36 +66,36 @@ class I18nSettingsConfigurable : Configurable {
         // ── 中：提取行为与目录设置 ──
         val settings = I18nSettings.getInstance()
         val center = JPanel(GridLayout(0, 2, 10, 6))
-        center.border = BorderFactory.createTitledBorder("提取行为与目录")
+        center.border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("settings.behavior.border"))
 
-        center.add(JLabel("最小提取长度（少于该字符数不提取）:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.min.length.label")))
         minLengthSpinner = JSpinner(SpinnerNumberModel(settings.minStringLength(), 1, 100, 1))
         center.add(minLengthSpinner!!)
 
-        center.add(JLabel("合并建议阈值（公共前后缀合计字符数）:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.merge.threshold.label")))
         mergeThresholdSpinner = JSpinner(SpinnerNumberModel(settings.mergeAffixThreshold(), 1, 100, 1))
         center.add(mergeThresholdSpinner!!)
 
-        center.add(JLabel("扫描排除目录（逗号分隔目录名）:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.exclude.dirs.label")))
         excludeDirsField = JTextField(settings.excludeDirs().joinToString(","))
         center.add(excludeDirsField!!)
 
-        center.add(JLabel("自定义翻译目录（逗号分隔目录名）:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.custom.dirs.label")))
         customDirsField = JTextField(settings.customTranslationDirs().joinToString(","))
         center.add(customDirsField!!)
 
-        center.add(JLabel("Vue 占位符前缀（如 N→{N0}，不能为空）:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.vue.prefix.label")))
         vuePrefixField = JTextField(settings.vuePlaceholderPrefix())
         center.add(vuePrefixField!!)
 
-        center.add(JLabel("\$t() 折叠展示语言:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.fold.lang.label")))
         foldLangCombo = JComboBox(
             LanguageRegistry.all.map { "${it.displayName} (${it.id})" }.toTypedArray()
         )
         foldLangCombo!!.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
         center.add(foldLangCombo!!)
 
-        center.add(JLabel("React 多语言库:"))
+        center.add(JLabel(I18nExtractorBundle.message("settings.react.library.label")))
         reactLibraryCombo = JComboBox(
             ReactLibrary.entries.map { it.label }.toTypedArray()
         )
@@ -105,7 +106,7 @@ class I18nSettingsConfigurable : Configurable {
 
         // ── 下半：输出去向单选 ──
         val outPanel = JPanel()
-        outPanel.border = BorderFactory.createTitledBorder("提取结果输出去向")
+        outPanel.border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("settings.output.border"))
         outPanel.layout = javax.swing.BoxLayout(outPanel, javax.swing.BoxLayout.Y_AXIS)
         val current = settings.outputDestination()
         val group = ButtonGroup()
@@ -116,7 +117,7 @@ class I18nSettingsConfigurable : Configurable {
             outPanel.add(rb)
         }
         outPanel.add(
-            JLabel("「剪贴板」/「写入文件」：提取时不弹窗询问，直接按此方式输出；「每次询问」则弹窗时展示选项。")
+            JLabel(I18nExtractorBundle.message("settings.output.hint"))
         )
         root.add(outPanel, BorderLayout.SOUTH)
 
