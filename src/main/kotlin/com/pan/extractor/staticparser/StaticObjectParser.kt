@@ -119,6 +119,21 @@ object StaticObjectParser {
                 return ExportAnchor(braceIdx, "default:${m.groupValues[1]}", inferIndent(text, braceIdx))
             }
         }
+        // 模式 7：export default <name>; —— <name> 指向同文件 const/let/var <name> = {...} 的对象字面量。
+        // 覆盖「先定义对象字面量、再导出一份引用」这一常见翻译入口形态（如 `const messages = {...}; export default messages`）。
+        // findBalancedCloseBrace 会跳过 export default <name> 行，因此必须回推到 <name> 定义处的对象字面量。
+        run {
+            val refRe = Regex("""\bexport\s+default\s+([A-Za-z_$][\w$]*)""")
+            val rm = refRe.find(text) ?: return@run
+            val name = rm.groupValues[1]
+            val constRe = Regex("""\b(const|let|var)\s+${Regex.escape(name)}\s*(?::[^=\n]*)?\s*=\s*\{""")
+            val cm = constRe.find(text) ?: return@run
+            val eqLocal = cm.value.lastIndexOf('=')
+            var bi = cm.range.first + eqLocal + 1
+            while (bi < text.length && text[bi] != '{') bi++
+            if (bi >= text.length) return@run
+            return ExportAnchor(bi, "named:$name", inferIndent(text, bi))
+        }
         return null
     }
 
