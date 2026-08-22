@@ -365,15 +365,32 @@ class ExtractedStringsDialog(
     override fun doOKAction() {
         val destination = I18nSettings.getInstance().outputDestination()
 
-        // ── ⓪ 用户勾选了“自动初始化 i18n” → 执行 bootstrap ──
-        //    自动创建的中文入口文件直接作为写回目标
-        val bootstrapEntry = if (destination == OutputDestination.ASK) {
-            applyBootstrapIfChecked()
-        } else null
+        // ── ⓪ 初始化：确保写回目标入口文件在写入前已存在且可解析 ──
+        //    勾选“自动初始化 i18n”会执行 bootstrap；此外，当用户最终要“写入文件”但
+        //    项目需初始化却未勾选时，也自动先初始化（创建可解析的 zh-CN.ts + i18n.ts + 补依赖），
+        //    从而保证写回目标是已经初始化的入口，而不是空/未初始化的文件 → 不再报
+        //    RESOURCE_OBJECT_MISSING、也不用再把资源回退剪贴板。
+        val wantFileWrite = when (destination) {
+            OutputDestination.ASK -> radioOverwrite.isSelected
+            else -> destination == OutputDestination.FILE
+        }
+        var bootstrapEntry: VirtualFile? = null
+        if (destination == OutputDestination.ASK) bootstrapEntry = applyBootstrapIfChecked()
+        if (bootstrapEntry == null && wantFileWrite && bootstrapMissing != null && contextPsiFile != null) {
+            try {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    bootstrapEntry = I18nBootstrap.maybeApply(project, contextPsiFile!!, bootstrapMissing!!)
+                }
+            } catch (t: Throwable) {
+                LOG.warn("ExtractedStringsDialog: 写入文件前自动初始化失败，回退为 null", t)
+                bootstrapEntry = null
+            }
+        }
         if (bootstrapEntry != null) {
+            bootstrapPerformed = true
             selectedEntryFile = bootstrapEntry
             if (::entryPathField.isInitialized) {
-                entryPathField.text = bootstrapEntry.path
+                entryPathField.text = bootstrapEntry!!.path
             }
         }
 
