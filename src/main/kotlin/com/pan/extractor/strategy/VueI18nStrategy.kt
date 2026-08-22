@@ -218,7 +218,7 @@ object VueI18nStrategy : I18nFramework {
             "import zh from './$entryImport';\n"
         } else ""
         val messagesBlock = if (!entryImport.isNullOrBlank()) {
-            "  messages: {\n    $defaultLocale: zh,\n  },\n"
+            "  messages: {\n    '$defaultLocale': zh,\n  },\n"
         } else ""
         // 用 trimMargin("|") 而非 trimIndent：messagesBlock 内部带 2/4 空格的相对缩进，
         // 若用 trimIndent 会被插值块的最小缩进（2sp）拉低基准，导致所有顶层行多出不该有的前导缩进。

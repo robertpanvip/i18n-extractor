@@ -1,6 +1,7 @@
 package com.pan.extractor.core
 
 import com.pan.extractor.bootstrap.I18nBootstrapSupport
+import com.pan.extractor.strategy.AngularI18nStrategy
 import com.pan.extractor.strategy.ReactI18nextStrategy
 import com.pan.extractor.strategy.SolidI18nStrategy
 import com.pan.extractor.strategy.VueI18nStrategy
@@ -247,7 +248,7 @@ class I18nBootstrapSupportTest {
             |  lng: 'zh',
             |  fallbackLng: 'zh',
             |  resources: {
-            |    zh: { translation: zh },
+            |    'zh': { translation: zh },
             |  },
             |});
             |
@@ -270,7 +271,7 @@ class I18nBootstrapSupportTest {
             |  locale: 'zh-CN',
             |  fallbackLocale: 'zh-CN',
             |  messages: {
-            |    zh-CN: zh,
+            |    'zh-CN': zh,
             |  },
             |});
             |
@@ -288,7 +289,7 @@ class I18nBootstrapSupportTest {
             |import { useI18n } from '@solid-primitives/i18n';
             |import zh from './zh';
             |
-            |const dict = { zh: zh };
+            |const dict = { 'zh': zh };
             |
             |export function createAppI18n() {
             |  const [t, { locale }] = useI18n(dict, () => 'zh');
@@ -296,6 +297,20 @@ class I18nBootstrapSupportTest {
             |}
         """.trimMargin() + "\n"
         assertEquals("Solid 初始化文件顶层不应有多余前导缩进（且 import/dict 行不应塌缩到 0 缩进）", expected, content)
+    }
+
+    @Test
+    fun angularInitFileRegistersTranslationAndLocale() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            AngularI18nStrategy, "zh-CN", "zh-CN"
+        )
+        assertTrue(content.contains("import { TranslateModule, TranslateService } from '@ngx-translate/core';"))
+        assertTrue(content.contains("import zh from './zh-CN';"))
+        assertTrue("init 文件必须消费 zh（注册进 setTranslation），不得是未使用导入",
+            content.contains("translate.setTranslation(defaultLocale(), zh);"))
+        assertTrue(content.contains("translate.setDefaultLang(defaultLocale());"))
+        assertTrue(content.contains("translate.use(defaultLocale());"))
+        assertTrue(content.contains("TranslateModule.forRoot()"))
     }
 
     // ── addDepsToPackageJson ──────────────────────────────────

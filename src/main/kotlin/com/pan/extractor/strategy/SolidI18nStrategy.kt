@@ -46,7 +46,7 @@ object SolidI18nStrategy : I18nFramework {
             "import zh from './$entryImport';\n"
         } else ""
         val dictLine = if (!entryImport.isNullOrBlank()) {
-            "const dict = { $defaultLocale: zh };\n"
+            "const dict = { '$defaultLocale': zh };\n"
         } else ""
         val providerLine = if (!entryImport.isNullOrBlank()) {
             "  const [t, { locale }] = useI18n(dict, () => '$defaultLocale');\n"

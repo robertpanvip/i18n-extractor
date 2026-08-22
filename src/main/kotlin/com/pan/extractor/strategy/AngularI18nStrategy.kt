@@ -106,9 +106,12 @@ object AngularI18nStrategy : I18nFramework {
         val importLine = if (!entryImport.isNullOrBlank()) {
             "import zh from './$entryImport';\n"
         } else ""
+        // ngx-translate 的翻译资源须显式注册到 TranslateService 才会生效：
+        // 注入 TranslateService，把语言包对象注册进 setTranslation，并设默认/当前语言。
+        // （此前只 import zh 却从未使用 → 未使用导入 + 资源从未挂载，翻译不生效。）
         return """
             import { NgModule } from '@angular/core';
-            import { TranslateModule } from '@ngx-translate/core';
+            import { TranslateModule, TranslateService } from '@ngx-translate/core';
             $importLine
             export function defaultLocale(): string {
               return '$defaultLocale';
@@ -117,7 +120,13 @@ object AngularI18nStrategy : I18nFramework {
             @NgModule({
               imports: [TranslateModule.forRoot()],
             })
-            export class AppI18nModule {}
+            export class AppI18nModule {
+              constructor(translate: TranslateService) {
+                translate.setDefaultLang(defaultLocale());
+                translate.use(defaultLocale());
+                ${if (!entryImport.isNullOrBlank()) "translate.setTranslation(defaultLocale(), zh);" else ""}
+              }
+            }
         """.trimIndent() + "\n"
     }
 }
