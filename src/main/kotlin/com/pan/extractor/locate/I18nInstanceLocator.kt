@@ -48,33 +48,9 @@ object I18nInstanceLocator {
 
     /** [findVueI18nInstanceFile] 的 root 版本：给定项目根，查找调用了 createI18n( 的文件。 */
     fun findVueI18nInstanceFileInRoot(projectRoot: VirtualFile, project: Project? = null): VirtualFile? {
-        val commonDirs = listOf(
-            "src/locales",
-            "locales",
-            "src/i18n",
-            "i18n",
-            "src/locale",
-            "locale"
-        )
-
-        // 阶段 1：常见目录内精确匹配 .ts/.tsx/.js/.jsx 文件（最大深度 2）
-        for (relPath in commonDirs) {
-            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
-            if (!dir.isDirectory) continue
-            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
-                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                    if (hasRealCreateI18nCall(vf, project)) vf else null
-                } else null
-            }
-            if (result != null) return result
-        }
-
-        // 阶段 2：常见目录未命中，在项目根做 walk（最大深度 4，排除 node_modules）
-        val excludeDirs = I18nSettings.getInstance().excludeDirs()
-        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
-            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                if (hasRealCreateI18nCall(vf, project)) vf else null
-            } else null
+        val commonDirs = listOf("src/locales", "locales", "src/i18n", "i18n", "src/locale", "locale")
+        return walkForInitFile(projectRoot, commonDirs, project) { vf, proj ->
+            hasRealCreateI18nCall(vf, proj)
         }
     }
 
@@ -202,27 +178,13 @@ object I18nInstanceLocator {
      */
     private fun hasRealCreateI18nCall(vf: VirtualFile, project: Project?): Boolean {
         val text = try {
-            String(vf.contentsToByteArray(), Charsets.UTF_8)
+            String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
             LOG.warn("I18nInstanceLocator: 读取文件内容失败，判定无 createI18n 调用", e)
             return false
         }
         val code = stripJsComments(text)
         if (!code.contains("createI18n(") && !code.contains("createI18n (")) return false
-        if (project == null) return true
-        val psi = PsiManager.getInstance(project).findFile(vf) ?: return true
-        return containsI18nInitCall(psi)
-    }
-
-    /**
-     * 通用 PSI 级确认（BUG_ANALYSIS 5.3）：[textPassed] 为文本级检测结果。
-     * - 文本级未命中 → false；
-     * - 命中且无 [project]（无法获得 PSI）→ 退回文本级结果 true；
-     * - 命中且有 [project] → 加载 PSI 用 [containsI18nInitCall] 复核，排除字符串字面量 /
-     *   注释里的 `createI18n(` / `i18n.init(` / `initReactI18next` / `useI18n(` 等字样误判。
-     */
-    private fun confirmI18nInitViaPsi(project: Project?, vf: VirtualFile, textPassed: Boolean): Boolean {
-        if (!textPassed) return false
         if (project == null) return true
         val psi = PsiManager.getInstance(project).findFile(vf) ?: return true
         return containsI18nInitCall(psi)
@@ -250,33 +212,14 @@ object I18nInstanceLocator {
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
         )
-        for (relPath in commonDirs) {
-            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
-            if (!dir.isDirectory) continue
-            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
-                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                    val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                    if (confirmI18nInitViaPsi(project, vf, isI18nInitText(t))) vf else null
-                } else null
+        return walkForInitFile(projectRoot, commonDirs, project) { vf, _ ->
+            val t = try {
+                String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+            } catch (e: Exception) {
+                LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
+                return@walkForInitFile false
             }
-            if (result != null) return result
-        }
-        val excludeDirs = I18nSettings.getInstance().excludeDirs()
-        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
-            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                if (confirmI18nInitViaPsi(project, vf, isI18nInitText(t))) vf else null
-            } else null
+            isI18nInitText(t)
         }
     }
 
@@ -293,33 +236,14 @@ object I18nInstanceLocator {
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
         )
-        for (relPath in commonDirs) {
-            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
-            if (!dir.isDirectory) continue
-            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
-                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                    val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                    if (confirmI18nInitViaPsi(project, vf, isReactI18nInitWithExport(t))) vf else null
-                } else null
+        return walkForInitFile(projectRoot, commonDirs, project) { vf, _ ->
+            val t = try {
+                String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+            } catch (e: Exception) {
+                LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
+                return@walkForInitFile false
             }
-            if (result != null) return result
-        }
-        val excludeDirs = I18nSettings.getInstance().excludeDirs()
-        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
-            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                if (confirmI18nInitViaPsi(project, vf, isReactI18nInitWithExport(t))) vf else null
-            } else null
+            isReactI18nInitWithExport(t)
         }
     }
 
@@ -346,33 +270,14 @@ object I18nInstanceLocator {
             "src/locales", "locales", "src/i18n", "i18n",
             "src/locale", "locale", "src/lang", "lang"
         )
-        for (relPath in commonDirs) {
-            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
-            if (!dir.isDirectory) continue
-            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
-                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                    val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                    if (confirmI18nInitViaPsi(project, vf, isSolidI18nInitWithExport(t))) vf else null
-                } else null
+        return walkForInitFile(projectRoot, commonDirs, project) { vf, _ ->
+            val t = try {
+                String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+            } catch (e: Exception) {
+                LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
+                return@walkForInitFile false
             }
-            if (result != null) return result
-        }
-        val excludeDirs = I18nSettings.getInstance().excludeDirs()
-        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
-            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
-                val t = try {
-                        String(vf.contentsToByteArray(), Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        LOG.debug("I18nInstanceLocator: 遍历时读取文件失败，跳过该文件", e)
-                        return@walkVirtualFile null
-                    }
-                if (confirmI18nInitViaPsi(project, vf, isSolidI18nInitWithExport(t))) vf else null
-            } else null
+            isSolidI18nInitWithExport(t)
         }
     }
 
@@ -388,6 +293,35 @@ object I18nInstanceLocator {
             EXPORT_FUNCTION_I18N_STAR_RE.containsMatchIn(code) ||
             EXPORT_NAMED_I18N_STAR_RE.containsMatchIn(code) ||
             EXPORT_DEFAULT_I18N_STAR_RE.containsMatchIn(code)
+    }
+
+    /**
+     * 通用底层：在项目根目录下查找符合条件的 i18n 初始化文件。
+     * 先遍历常见目录（深度 2），再回退到项目根广域扫描（深度 4，排除 excludeDirs）。
+     * 四个 findXxxInRoot 方法已全部收敛至此，消除重复的目录遍历 + 文件读取 + try-catch 模式。
+     */
+    private fun walkForInitFile(
+        projectRoot: VirtualFile,
+        commonDirs: List<String>,
+        project: Project?,
+        predicate: (VirtualFile, Project?) -> Boolean,
+    ): VirtualFile? {
+        for (relPath in commonDirs) {
+            val dir = ProjectStructure.findRelativeFile(projectRoot, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val result = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                    if (predicate(vf, project)) vf else null
+                } else null
+            }
+            if (result != null) return result
+        }
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
+        return ProjectStructure.walkVirtualFile(projectRoot, maxDepth = 4, enterFilter = { it.name !in excludeDirs }) { vf ->
+            if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in TS_JS_EXTS) {
+                if (predicate(vf, project)) vf else null
+            } else null
+        }
     }
 
     /**
