@@ -58,7 +58,7 @@ intellijPlatform {
                 <li>Multi-framework support with auto-detection: Vue (vue-i18n), React (react-i18next &amp; react-intl), Angular (ngx-translate), Solid (solid-i18n), Svelte (svelte-i18n)</li>
                 <li>Multi-language extraction for 10 languages (zh / ja / ko / en / fr / ru / de / es / it / pt), target languages configurable in Settings</li>
                 <li>Merge suggestions: public prefix / suffix grouping and digit-placeholder grouping to consolidate similar strings</li>
-                <li>Auto-injection of global ${'$'}t and import / hook planning per framework</li>
+                <li>Auto-injection of global \${'$'}t and import / hook planning per framework</li>
                 <li>More stable extraction, improved idempotency and expanded regression coverage</li>
             </ul>
             <h4>1.2.0</h4>
@@ -84,12 +84,14 @@ tasks {
         useJUnit()
 
         // 限制单 worker 堆与并行 fork，避免沙箱/CI 低内存环境 full-suite OOM（SIGKILL 137）。
-        maxHeapSize = "768m"
+        maxHeapSize = "1024m"
         maxParallelForks = 1
         // 每个测试类启用独立 fork JVM：多个类在单个 fork 内顺序执行时，IDEA 平台测试的
         // 原生/直接内存（DirectBuffer、JIT、VFS caches）会跨类累积，最终被 cgroup OOM-kill
         // （Gradle Test Executor 退出码 137、末位测试被标 SKIPPED）。按类重启可重置该内存。
         //forkEvery = 1
+        // 测试 JVM 优化：ParallelGC 高吞吐 + 主动释放空闲堆，减少 GC 停顿时间
+        jvmArgs("-XX:+UseParallelGC", "-XX:MinHeapFreeRatio=5", "-XX:MaxHeapFreeRatio=25")
 
         testLogging {
             showStandardStreams = true
