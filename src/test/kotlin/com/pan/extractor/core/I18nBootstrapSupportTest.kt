@@ -161,7 +161,7 @@ class I18nBootstrapSupportTest {
             SolidI18nStrategy, "zh", "zh-CN"
         )
         assertTrue(content.contains("import { useI18n } from '@solid-primitives/i18n';"))
-        assertTrue(content.contains("import zh from './locales/zh-CN';"))
+        assertTrue(content.contains("import zh from './zh-CN';"))
         assertTrue(content.contains("useI18n(dict, () => 'zh')"))
         assertTrue(content.contains("export function createAppI18n"))
     }
@@ -184,7 +184,7 @@ class I18nBootstrapSupportTest {
         )
         assertTrue(content.contains("import i18n from 'i18next';"))
         assertTrue(content.contains("import { initReactI18next } from 'react-i18next';"))
-        assertTrue(content.contains("import zh from './locales/zh-CN';"))
+        assertTrue(content.contains("import zh from './zh-CN';"))
         assertTrue(content.contains("i18n.use(initReactI18next).init("))
         assertTrue(content.contains("lng: 'zh'"))
         assertTrue(content.contains("export default i18n;"))
@@ -207,7 +207,7 @@ class I18nBootstrapSupportTest {
             VueI18nStrategy, "zh-CN", "zh-CN"
         )
         assertTrue(content.contains("import { createI18n } from 'vue-i18n';"))
-        assertTrue(content.contains("import zh from './locales/zh-CN';"))
+        assertTrue(content.contains("import zh from './zh-CN';"))
         assertTrue(content.contains("const i18n = createI18n("))
         assertTrue(content.contains("legacy: false"))
         assertTrue(content.contains("locale: 'zh-CN'"))
@@ -226,7 +226,7 @@ class I18nBootstrapSupportTest {
         val expected = """
             |import i18n from 'i18next';
             |import { initReactI18next } from 'react-i18next';
-            |import zh from './locales/zh-CN';
+            |import zh from './zh-CN';
             |
             |i18n.use(initReactI18next).init({
             |  lng: 'zh',
@@ -248,7 +248,7 @@ class I18nBootstrapSupportTest {
         )
         val expected = """
             |import { createI18n } from 'vue-i18n';
-            |import zh from './locales/zh-CN';
+            |import zh from './zh-CN';
             |
             |const i18n = createI18n({
             |  legacy: false,
@@ -271,7 +271,7 @@ class I18nBootstrapSupportTest {
         )
         val expected = """
             |import { useI18n } from '@solid-primitives/i18n';
-            |import zh from './locales/zh';
+            |import zh from './zh';
             |
             |const dict = { zh: zh };
             |

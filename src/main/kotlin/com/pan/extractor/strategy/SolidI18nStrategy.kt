@@ -42,7 +42,7 @@ object SolidI18nStrategy : I18nFramework {
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
         val importLine = if (!entryImport.isNullOrBlank()) {
-            "import zh from './locales/$entryImport';\n"
+            "import zh from './$entryImport';\n"
         } else ""
         val dictLine = if (!entryImport.isNullOrBlank()) {
             "const dict = { $defaultLocale: zh };\n"

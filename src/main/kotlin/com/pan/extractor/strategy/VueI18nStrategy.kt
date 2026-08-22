@@ -215,7 +215,7 @@ object VueI18nStrategy : I18nFramework {
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
         val importLine = if (!entryImport.isNullOrBlank()) {
-            "import zh from './locales/$entryImport';\n"
+            "import zh from './$entryImport';\n"
         } else ""
         val messagesBlock = if (!entryImport.isNullOrBlank()) {
             "  messages: {\n    $defaultLocale: zh,\n  },\n"

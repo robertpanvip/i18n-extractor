@@ -17,7 +17,7 @@ import com.intellij.psi.PsiManager
  * 在用户于最后确认弹框中选择「确定」后，真正落地三件事：
  *   1. 修改 package.json，添加缺的多语言依赖（React → i18next + react-i18next；Vue → vue-i18n）
  *   2. 自动创建中文语言包入口文件（src/locales/<defaultLocale>.ts），保证后续写回有目标
- *   3. 创建 i18n 初始化文件（src/i18n.ts），并自动填充中文入口 import
+ *   3. 创建 i18n 初始化文件（src/locales/i18n.ts），并自动填充中文入口 import
  *
  * 必须在 WriteCommandAction + EDT 内调用（会写 VFS）。
  * 新建文件使用 PSI 创建（[com.intellij.psi]），使文件与内容进入 undo 栈，Ctrl+Z 可整体回滚，而非
@@ -90,8 +90,8 @@ object I18nBootstrap {
             }
         }
 
-        // ── 3) 初始化文件：优先 src/i18n.ts，其次项目根 i18n.ts ──
-        val initVf = baseDir.findChild("i18n.ts")
+        // ── 3) 初始化文件：与语言包同放 locales 目录（src/locales/i18n.ts）──
+        val initVf = localesDir?.findChild("i18n.ts")
         if (initVf == null) {
             val entryName = entryVf?.nameWithoutExtension ?: defaultLocale
             val content = I18nBootstrapSupport.buildInitFileContent(
@@ -101,7 +101,11 @@ object I18nBootstrap {
             )
             try {
                 // 与语言包入口一致：PSI 建空文件 + Document 写内容，保证可撤销
-                val psiDir = PsiManager.getInstance(project).findDirectory(baseDir)
+                val psiDir = if (localesDir != null) {
+                    PsiManager.getInstance(project).findDirectory(localesDir)
+                } else {
+                    PsiManager.getInstance(project).findDirectory(baseDir)
+                }
                 if (psiDir != null) {
                     val vf = psiDir.createFile("i18n.ts").virtualFile
                     if (vf != null) {
