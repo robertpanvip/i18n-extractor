@@ -6,11 +6,15 @@ import com.pan.extractor.analyzer.*
 import com.pan.extractor.messages.I18nExtractorBundle
 
 import com.intellij.openapi.options.Configurable
+import com.intellij.ide.CopyPasteManager
+import com.intellij.openapi.ui.Messages
+import com.pan.extractor.log.PluginLogBuffer
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.GridLayout
 import javax.swing.BorderFactory
 import javax.swing.ButtonGroup
+import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
@@ -119,6 +123,23 @@ class I18nSettingsConfigurable : Configurable {
         outPanel.add(
             JLabel(I18nExtractorBundle.message("settings.output.hint"))
         )
+
+        // ── 诊断日志：一键复制到剪贴板，便于排查如"选了 react-intl 但 app.tsx 未提取"之类问题 ──
+        val logRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
+        logRow.border = BorderFactory.createEmptyBorder(8, 0, 0, 0)
+        val copyLogBtn = JButton("复制诊断日志")
+        copyLogBtn.toolTipText = "点击后把插件内存中的诊断日志（含 I18n detect 行）复制到剪贴板"
+        copyLogBtn.addActionListener { copyDiagnosticLog() }
+        logRow.add(copyLogBtn)
+        val clearLogBtn = JButton("清空")
+        clearLogBtn.toolTipText = "清空已收集的诊断日志"
+        clearLogBtn.addActionListener {
+            PluginLogBuffer.clear()
+            Messages.showInfoMessage("诊断日志已清空。", "I18n Extractor")
+        }
+        logRow.add(clearLogBtn)
+        outPanel.add(logRow)
+
         root.add(outPanel, BorderLayout.SOUTH)
 
         panel = root
@@ -184,6 +205,18 @@ class I18nSettingsConfigurable : Configurable {
         vuePrefixField = null
         foldLangCombo = null
         reactLibraryCombo = null
+    }
+
+    /**
+     * 把插件内存中的诊断日志（含 "I18n detect ..." 行）复制到系统剪贴板。
+     * 便于在"选了 react-intl 但某文件未提取"等场景下，把日志直接粘给开发者排查。
+     */
+    private fun copyDiagnosticLog() {
+        val lines = PluginLogBuffer.dump()
+        val text = lines.ifEmpty { "（暂无日志）" }
+        val cnt = lines.lineSequence().count()
+        CopyPasteManager.getInstance().setContents(com.intellij.ide.TextCopyable(text))
+        Messages.showInfoMessage("诊断日志已复制到剪贴板（$cnt 行）。", "I18n Extractor")
     }
 
     /** 配置项 "显示名 (id)" → id。 */
