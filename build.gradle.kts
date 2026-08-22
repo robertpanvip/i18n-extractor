@@ -89,7 +89,7 @@ tasks {
         // 每个测试类启用独立 fork JVM：多个类在单个 fork 内顺序执行时，IDEA 平台测试的
         // 原生/直接内存（DirectBuffer、JIT、VFS caches）会跨类累积，最终被 cgroup OOM-kill
         // （Gradle Test Executor 退出码 137、末位测试被标 SKIPPED）。按类重启可重置该内存。
-        forkEvery = 1
+        //forkEvery = 1
         // 测试 JVM 优化：ParallelGC 高吞吐 + 主动释放空闲堆，减少 GC 停顿时间
         jvmArgs("-XX:+UseParallelGC", "-XX:MinHeapFreeRatio=5", "-XX:MaxHeapFreeRatio=25")
 
