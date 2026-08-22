@@ -186,36 +186,54 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
     }
 
     /**
-     * 文档变化后防抖：用户停止输入 [DEBOUNCE_MS] 后全量重新同步 inlay，
-     * 保证「翻译调用被改掉 / key 不再存在于翻译资源」时旧 inlay 被清除。
-     * 连续修改只在用户停止输入后触发一次。
+     * 文档变化后防抖：只更新编辑偏移附近的一个翻译调用 inlay。
+     * 连续修改只在用户停止输入 [DEBOUNCE_MS] 后触发一次。
+     *
+     * 与全量重扫不同，这里只检查编辑偏移处的 [JSCallExpression]：
+     * - 若该处仍是有效翻译调用 → 更新 inlay（移除旧的 + 添加新的）
+     * - 若该处不再是翻译调用（`call == null` 或 key 已失效）→ 移除旧 inlay
+     * 不扫描整个文件，大文件编辑时不会卡顿。
      */
     private fun scheduleDebouncedRecompute(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>, changeOffset: Int) {
         debounceFutures.remove(editor)?.cancel(false)
         val future = AppExecutorUtil.getAppScheduledExecutorService().schedule({
             if (editor.isDisposed || project.isDisposed) return@schedule
-            resyncToggleInlays(editor, project, file, messages)
+            updateToggleInlayAtOffset(editor, project, file, messages, changeOffset)
         }, DEBOUNCE_MS, TimeUnit.MILLISECONDS)
         debounceFutures[editor] = future
     }
 
     /**
-     * 全量重新同步 inlay：后台 read-action 中基于最新 PSI 重新扫描全部翻译调用，
-     * 然后在 EDT 上移除旧 inlay 并按新结果重建——确保修改文本后失效的 inlay 被清除、
-     * 新增/移动的翻译调用被挂上 inlay。
+     * 局部更新：在 ReadAction 中查找编辑偏移处的 [JSCallExpression]，若命中且 key 在
+     * 翻译文案中则添加/更新 inlay；若不再是有效翻译调用则移除该位置的旧 inlay。
+     *
+     * 不扫描整个文件，只检查编辑点附近的单个调用。
      */
-    private fun resyncToggleInlays(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>) {
+    private fun updateToggleInlayAtOffset(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>, offset: Int) {
         if (editor.isDisposed || project.isDisposed) return
 
         ReadAction.nonBlocking<Unit> {
             if (editor.isDisposed || project.isDisposed || DumbService.isDumb(project)) return@nonBlocking
-            val targets = computeToggleTargets(file, messages)
+
+            val call = PsiTreeUtil.findElementOfClassAtOffset(
+                file, offset, JSCallExpression::class.java, false
+            )
             ApplicationManager.getApplication().invokeLater {
                 if (editor.isDisposed) return@invokeLater
-                removeAllToggleInlays(editor)
-                val inlayModel = editor.inlayModel
-                for (offset in targets) {
-                    inlayModel.addInlineElement(offset, false, I18nFoldToggleRenderer(editor))
+                if (call != null) {
+                    val fw = I18nFrameworkRegistry.detect(call)
+                    val isTranslation = fw.isTranslationCall(call)
+                    val key = if (isTranslation) fw.extractKey(call) else null
+                    val callEnd = call.textRange.endOffset
+                    // 移除该偏移处的旧 inlay
+                    removeToggleInlaysAtOffset(editor, callEnd)
+                    if (key != null && key in messages) {
+                        editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor))
+                    }
+                } else {
+                    // 编辑偏移处不再是翻译调用（如被删除），移除该位置附近的旧 inlay。
+                    // 文档修改后 inlay 偏移会被编辑器自动调整，加一个查找范围覆盖偏移漂移。
+                    removeToggleInlaysAtOffset(editor, offset, 50)
                 }
             }
         }
@@ -223,7 +241,18 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             .submit(AppExecutorUtil.getAppExecutorService())
     }
 
-    /** 移除编辑器中所有本插件的 [I18nFoldToggleRenderer] 类型 inlay。 */
+    /** 移除编辑器中指定偏移附近 [I18nFoldToggleRenderer] 类型 inlay。 */
+    private fun removeToggleInlaysAtOffset(editor: Editor, offset: Int, range: Int = 0) {
+        val start = maxOf(0, offset - range)
+        val end = minOf(editor.document.textLength, offset + range)
+        for (inlay in editor.inlayModel.getInlineElementsInRange(start, end)) {
+            if (inlay.renderer is I18nFoldToggleRenderer) {
+                inlay.dispose()
+            }
+        }
+    }
+
+    /** 移除编辑器中所有本插件的 [I18nFoldToggleRenderer] 类型 inlay（仅在编辑器打开/tab切换时一次调用）。 */
     private fun removeAllToggleInlays(editor: Editor) {
         val inlayModel = editor.inlayModel
         for (inlay in inlayModel.getInlineElementsInRange(0, editor.document.textLength)) {
@@ -231,29 +260,6 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                 inlay.dispose()
             }
         }
-    }
-
-    /**
-     * 计算文件中所有应挂 inlay 的偏移（翻译调用结束偏移）。
-     * 与 [addFoldToggleInlaysUnderProgress] 的扫描逻辑一致，需在 read action 内调用。
-     */
-    private fun computeToggleTargets(file: PsiFile, messages: Map<String, String>): List<Int> {
-        val fw = I18nFrameworkRegistry.detect(file)
-        val targets = mutableListOf<Int>()
-        val callStarts = mutableSetOf<Int>()
-        collectJSCallExpressions(file).forEach { call ->
-            callStarts.add(call.textRange.startOffset)
-            if (!fw.isTranslationCall(call)) return@forEach
-            val key = fw.extractKey(call) ?: return@forEach
-            if (key !in messages) return@forEach
-            targets.add(call.textRange.endOffset)
-        }
-        collectRawTCalls(file).forEach { raw ->
-            if (raw.range.startOffset in callStarts) return@forEach
-            if (raw.key !in messages) return@forEach
-            targets.add(raw.range.endOffset)
-        }
-        return targets
     }
 
     /**
