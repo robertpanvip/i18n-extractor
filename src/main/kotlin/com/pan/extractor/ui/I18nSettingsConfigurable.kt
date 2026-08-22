@@ -6,7 +6,8 @@ import com.pan.extractor.analyzer.*
 import com.pan.extractor.messages.I18nExtractorBundle
 
 import com.intellij.openapi.options.Configurable
-import com.intellij.ide.CopyPasteManager
+import java.awt.datatransfer.StringSelection
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.ui.Messages
 import com.pan.extractor.log.PluginLogBuffer
 import java.awt.BorderLayout
@@ -215,7 +216,7 @@ class I18nSettingsConfigurable : Configurable {
         val lines = PluginLogBuffer.dump()
         val text = lines.ifEmpty { "（暂无日志）" }
         val cnt = lines.lineSequence().count()
-        CopyPasteManager.getInstance().setContents(com.intellij.ide.TextCopyable(text))
+        CopyPasteManager.getInstance().setContents(StringSelection(text))
         Messages.showInfoMessage("诊断日志已复制到剪贴板（$cnt 行）。", "I18n Extractor")
     }
 
