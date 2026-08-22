@@ -3,13 +3,11 @@ package com.pan.extractor.validator
 import com.pan.extractor.model.ExtractionSite
 import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ResourcePlan
-import com.pan.extractor.planner.RewriteKind
 import com.pan.extractor.planner.RewritePlan
 import com.pan.extractor.resource.JsonWriter
 import com.pan.extractor.staticparser.StaticObjectParser
 import com.google.gson.JsonParser
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.PsiElement
 import java.nio.charset.StandardCharsets
 
 /** 单条 preflight 校验结果：错误码 + 人类可读描述。 */
@@ -103,8 +101,8 @@ object ProjectPreflightValidator {
                         "RewritePlan[siteId=${rp.siteId}] 的目标 PSI 已失效（文件可能已被外部修改）"
                     )
                 } else {
-                    // A1b：替换后语法有效性 —— 用 newExpression 模拟文本替换，校验结果文件仍结构平衡。
-                    checkRewritePostSyntax(rp, ptr.element!!, issues)
+                    // A1b：替换后语法有效性 —— 仅校验合成的 newExpression 自身结构完整。
+                    checkRewritePostSyntax(rp, issues)
                 }
             }
         }
@@ -363,46 +361,30 @@ object ProjectPreflightValidator {
 
     // ==========================================================================
     // A1b：替换后语法有效性校验
-    // 目标：在写入前模拟 [RewritePlan] 的文本替换，确认替换后目标文件仍「结构平衡」
-    // （括号 / 引号成对、不断弦），避免把半成品（未闭合的 $t(、残缺的模板插值）写进源码。
-    // 采用与 StaticValueParser 一致的轻量扫描，不依赖具体语言的完整解析器。
+    // 目标：在写入前核对本次合成的替换文本（newExpression）结构自洽（括号 / 引号成对），
+    // 避免把半成品（未闭合的 $t( 等）写进源码。只校验合成表达式本身，不做整个文件扫描，
+    // 以根除朴素扫描器在真实源码（正则/模板/JSX/注释）上的误报。
     // ==========================================================================
 
-    /** 对 [plan] 模拟替换：[target] 文本区间 → [plan.newExpression]，再校验结果结构平衡。
+    /**
+     * 替换后语法有效性校验。
      *
-     *  采用「增量判定」：只有当**原文件**本身扫描平衡、而替换结果不平衡时才报错。真实源码里
-     *  常见的正则字面量（如 `/['"]+/`）、模板插值等构造会让朴素扫描器误判「不平衡」；若因此
-     *  对每个 rewrite 都报错，会连累同一文件所有改写误报 REWRITE_RESULT_UNBALANCED。既然
-     *  原文件已经让扫描器判为不平衡，就该跳过——只该怪罪真正「从平衡变不平衡」的改写。 */
-    private fun checkRewritePostSyntax(plan: RewritePlan, target: PsiElement, issues: MutableList<PreflightIssue>) {
-        val vf = target.containingFile?.virtualFile ?: return
-        val text = readText(vf) ?: return
-        val (start, end) = replacementRange(plan, target) ?: return
-        if (start < 0 || end < start || end > text.length) return
-        // 原文件已不平衡（正则/模板等导致扫描器误判）→ 无从判断本次改写是否引入不平衡，保守跳过。
-        if (!isStructurallyBalanced(text)) return
-        val after = text.substring(0, start) + plan.newExpression + text.substring(end)
-        if (!isStructurallyBalanced(after)) {
+     * 只校验本次**合成的替换文本**（[plan.newExpression]）自身是否结构自洽（括号 / 引号闭合）。
+     * 实际写入走真实 PSI 编辑器替换（结构感知），因此只要插入的表达式自身完整，目标文件必然合法；
+     * 无需再对「替换后的整个文件」做文字平衡扫描。改用本细粒度校验以根除旧实现的误报——
+     * 旧实现用朴素字符扫描器校验全文，真实源码里正则字面量、模板插值、JSX、泛型、注释等构造
+     * 会让扫描器误判「不平衡」，连累同文件所有改写误报 REWRITE_RESULT_UNBALANCED 并中断整批写入。
+     */
+    private fun checkRewritePostSyntax(plan: RewritePlan, issues: MutableList<PreflightIssue>) {
+        if (!isStructurallyBalanced(plan.newExpression)) {
             issues += PreflightIssue(
                 "REWRITE_RESULT_UNBALANCED",
-                "RewritePlan[siteId=${plan.siteId}] 替换后文件括号/引号不平衡（newExpression=${plan.newExpression}），可能产生非法代码"
+                "RewritePlan[siteId=${plan.siteId}] 合成的替换表达式（newExpression=${plan.newExpression}）括号/引号不闭合，会产生非法代码"
             )
         }
     }
 
-    /** 计算替换区间：XML_TEXT 用多个 XmlText 节点的并集，其余用目标 [target] 的 textRange。 */
-    private fun replacementRange(plan: RewritePlan, target: PsiElement): Pair<Int, Int>? {
-        if (plan.kind == RewriteKind.SKELETON) return null // 骨架重写由 MergeApplier 合成，无法用 newExpression 文本模拟
-        if (plan.kind == RewriteKind.XML_TEXT) {
-            val els = plan.xmlTextPointers.mapNotNull { it.element }
-            if (els.isEmpty()) return null
-            return els.minOf { it.textRange.startOffset } to els.maxOf { it.textRange.endOffset }
-        }
-        val tr = target.textRange ?: return null
-        return tr.startOffset to tr.endOffset
-    }
-
-    /** 轻量结构平衡校验：扫描 `()[]{}` 与引号，忽略字符串与注释内部，判定括号成对 + 引号闭合。 */
+    /** 轻量结构自洽校验：扫描 `()[]{}` 与引号，忽略字符串与注释内部，判定括号成对 + 引号闭合。 */
     private fun isStructurallyBalanced(text: String): Boolean {
         val stack = ArrayDeque<Char>()
         var i = 0
