@@ -153,11 +153,15 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         for (textEditor in editors) {
             val editor = textEditor.editor
             if (editor.isDisposed) continue
+            val docLen = editor.document.textLength
             val fm = editor.foldingModel
             fm.runBatchFoldingOperation {
                 for (desc in descriptors) {
                     val range = desc.range
                     if (range.isEmpty) continue
+                    // 异步计算期间文档可能已被修改（用户编辑保存），偏移量可能已超出新文档长度；
+                    // 校验失败时静默跳过，避免 Invalid offsets 崩溃。
+                    if (range.startOffset < 0 || range.endOffset > docLen || range.startOffset > range.endOffset) continue
                     val fold = fm.addFoldRegion(range.startOffset, range.endOffset, desc.placeholderText ?: "")
                     fold?.isExpanded = false
                 }
