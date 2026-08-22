@@ -450,6 +450,11 @@ internal val RAW_T_CALL_PATTERN = Regex(
         "\\(\\s*(?:`([^`]*)`|'([^']*)'|\"([^\"]*)\")\\s*[,)]"
 )
 
+/** Angular | translate 管道原始文本匹配：`'key' | translate` 或 `"key" | translate`。 */
+internal val ANGULAR_PIPE_PATTERN = Regex(
+    """(?:'([^']*)'|"([^"]*)")\s*\|\s*translate"""
+)
+
 /** 反引号/单引号/双引号 `$t()` 原始文本调用：key + 所在宿主元素 + 文档绝对偏移范围 + 完整调用文本。 */
 internal class RawTCall(
     val key: String,
@@ -504,6 +509,23 @@ internal fun collectRawTCalls(file: PsiFile): List<RawTCall> {
         modificationStamp = file.modificationStamp,
     )
     return list
+}
+
+/** Angular `| translate` 管道原始文本调用：`'key' | translate` / `"key" | translate`。
+ * 与 [collectRawTCalls] 互补，覆盖 Angular 模板的管道语法（非函数调用、无 $t 前缀）。
+ * 直接在文件文本上搜索，不依赖 PsiLanguageInjectionHost（Angular 模板可能无注入宿主）。 */
+internal fun collectAngularPipeCalls(file: PsiFile): List<RawTCall> {
+    val result = linkedMapOf<Int, RawTCall>()
+    val text = file.text
+    ANGULAR_PIPE_PATTERN.findAll(text).forEach { m ->
+        val key = m.groupValues[1].takeIf { it.isNotEmpty() }
+            ?: m.groupValues[2].takeIf { it.isNotEmpty() } ?: return@forEach
+        val start = m.range.first
+        val end = m.range.last + 1
+        val element = file.findElementAt(start) ?: return@forEach
+        result[start] = RawTCall(key, element, TextRange(start, end), m.value)
+    }
+    return result.values.toList()
 }
 
 /** 自 [openIdx]（`(` 所在下标）向后找括号平衡的结束位置（返回开区间 end，即 `)` 后一位）。 */

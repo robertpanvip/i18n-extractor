@@ -253,6 +253,14 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             occupiedStarts.add(raw.range.startOffset)
             out.add(FoldingDescriptor(raw.element.node, raw.range, null, value + TOGGLE_HINT))
         }
+        // Angular `| translate` 管道：非函数调用，与 $t 正则不匹配，需单独搜索。
+        // 与 collectRawTCalls 语义对称：仅在翻译资源中存在的 key 才折叠。
+        for (raw in collectAngularPipeCalls(contextFile)) {
+            if (raw.range.startOffset in occupiedStarts) continue
+            val rawValue = messages[raw.key] ?: continue
+            occupiedStarts.add(raw.range.startOffset)
+            out.add(FoldingDescriptor(raw.element.node, raw.range, null, rawValue + TOGGLE_HINT))
+        }
     }
 
     /**

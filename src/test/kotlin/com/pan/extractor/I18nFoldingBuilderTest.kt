@@ -185,6 +185,23 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         }
     }
 
+    /** Angular `| translate` 管道折叠：`{{ 'key' | translate }}` 应被识别并折叠。 */
+    fun testFoldAngularPipeTranslate() {
+        val file = configureFile(
+            "src/app.component.html",
+            """
+            <div>{{ '你好世界' | translate }}</div>
+            <span>{{ 'hello' | translate: { '0': name } }}</span>
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+        assertEquals("Angular 管道应折叠 2 处", 2, descriptors.size)
+        val placeholders = descriptors.map { it.placeholderText }.toSet()
+        assertTrue("应含「你好世界」", placeholders.contains(hint("你好世界")))
+        assertTrue("应含「你好」", placeholders.contains(hint("你好")))
+    }
+
     /** 用户报告的问题复现：React 项目 key 含 {0} 占位符时应将 {0} 替换为实际参数值。 */
     fun testFoldTsxWithPlaceholderInKey() {
         myFixture.addFileToProject(
