@@ -69,9 +69,12 @@ if [ "${#PROXY_ARGS[@]}" -gt 0 ]; then
 fi
 
 # 4) 用 --no-daemon 强制单次构建，并把 java.home 显式指到 JDK 21 ----------------
+#    -PforkTest=true：本地沙箱内存有限（4GiB），按类独立 fork 避免 OOM；
+#    线上 CI 不传此标记，不走 forkEvery，套件跑得更快。
 echo "[run-tests] 开始执行: gradle test $*"
 exec "$GRADLE_BIN" test \
   "$@" \
+  -PforkTest=true \
   --no-daemon \
   -Dorg.gradle.java.home="$JDK21" \
   "${PROXY_ARGS[@]}"
