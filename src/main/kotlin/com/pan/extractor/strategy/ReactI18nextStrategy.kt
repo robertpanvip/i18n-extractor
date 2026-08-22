@@ -149,9 +149,14 @@ object ReactI18nextStrategy : I18nFramework {
 
         // 即使本文件没有待提取文案，只要它是 React 组件 / hook 文件，也应完成接线（注入
         // useTranslation hook），否则选 react-i18next 后像 app.tsx 这类空文案组件文件不会有任何变化。
+        //
+        // 例外：文件已显式导入全局 i18n 实例（`import i18n from 'i18next'` 或
+        // `import { getI18n } ...`）时，`i18n.t(...)` 视为有效的全局调用，不再注入组件级
+        // useTranslation hook（避免把已走全局实例的老代码误切到组件 hook）。
         val isComponentFile = ProjectStructure.findReactComponentFunctions(file).isNotEmpty() ||
             ProjectStructure.findHookFunctions(file).isNotEmpty()
-        if (d.hasExtractedStrings || isComponentFile) {
+        val alreadyHasGlobalI18nInstance = injector.hasI18nInstanceImported(file)
+        if ((d.hasExtractedStrings || isComponentFile) && !alreadyHasGlobalI18nInstance) {
             if (d.tFunctionName != "i18n.t" && !d.needInjectGlobalDollarT) {
                 val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
                 if (importsInFile.none { it.text.contains("useTranslation") }) {

@@ -9,6 +9,7 @@ import com.pan.extractor.strategy.SolidI18nStrategy
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 
 /**
@@ -71,10 +72,10 @@ object I18nBootstrapSupport {
         val strategy = when {
             hasVueDep -> VueI18nStrategy
             hasSolidDep -> SolidI18nStrategy
-            // React：按用户设置选择 react-i18next 或 react-intl（决定初始化文件与补依赖）
-            hasReactDep -> if (com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary()
-                    == com.pan.extractor.ui.ReactLibrary.REACT_INTL
-                ) ReactIntlStrategy else ReactI18nextStrategy
+            // React：按用户设置选择 react-i18next 或 react-intl（决定初始化文件与补依赖）。
+            // 仅在实际 IDE（存在 Application）时读取用户设置；纯 JUnit 环境（无 Application）
+            // 回退默认 react-i18next，保证 detectMissing 仍可作为"纯函数"被测。
+            hasReactDep -> if (reactLibraryIsIntl()) ReactIntlStrategy else ReactI18nextStrategy
             else -> return null
         }
         val deps = strategy.bootstrapDeps
@@ -102,6 +103,13 @@ object I18nBootstrapSupport {
         defaultLocale: String,
         entryImport: String? = null,
     ): String = framework.buildInitFile(defaultLocale, entryImport)
+
+    /** React 库是否选为 intl。仅在存在 Application（真实 IDE）时查询设置，否则回退 false（默认 i18next）。 */
+    private fun reactLibraryIsIntl(): Boolean {
+        val app = ApplicationManager.getApplication() ?: return false
+        return com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary() ==
+            com.pan.extractor.ui.ReactLibrary.REACT_INTL
+    }
 
     /** 生成一个最简可写回的中文语言包入口文件内容（export default 对象字面量）。 */
     fun buildLocaleEntryFileContent(): String =
