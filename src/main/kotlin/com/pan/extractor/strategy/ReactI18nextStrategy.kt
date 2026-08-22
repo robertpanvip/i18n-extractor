@@ -144,7 +144,11 @@ object ReactI18nextStrategy : I18nFramework {
             }
         }
 
-        if (d.hasExtractedStrings) {
+        // 即使本文件没有待提取文案，只要它是 React 组件 / hook 文件，也应完成接线（注入
+        // useTranslation hook），否则选 react-i18next 后像 app.tsx 这类空文案组件文件不会有任何变化。
+        val isComponentFile = ProjectStructure.findReactComponentFunctions(file).isNotEmpty() ||
+            ProjectStructure.findHookFunctions(file).isNotEmpty()
+        if (d.hasExtractedStrings || isComponentFile) {
             if (d.tFunctionName != "i18n.t" && !d.needInjectGlobalDollarT) {
                 val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
                 if (importsInFile.none { it.text.contains("useTranslation") }) {

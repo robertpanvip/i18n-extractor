@@ -202,6 +202,69 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * BUG 回归：选 react-i18next 后，即使组件文件（如 app.tsx）没有任何待提取中文文案，
+     * 也应对每个 React 组件 / hook 文件完成接线（注入 useTranslation），否则 app.tsx 不会变化。
+     */
+    fun testReactEmptyComponentFileStillInjectsUseTranslation() {
+        val file = myFixture.configureByText(
+            "App.tsx",
+            """
+            import React from 'react';
+            export default function App() {
+                return <div><span>no-chinese-here</span></div>;
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "空文案组件文件也应注入 useTranslation 完成接线, got:\n$resultText",
+            compact.contains("import{useTranslation}from'react-i18next'") &&
+                compact.contains("const{t}=useTranslation()")
+        )
+    }
+
+    /**
+     * BUG 回归（react-intl）：组件文件没有待提取文案时，仍应注入 useIntl + 解构 formatMessage
+     * 完成接线，否则 app.tsx 不会变化。
+     */
+    fun testReactIntlEmptyComponentFileStillInjectsUseIntl() {
+        val settings = com.pan.extractor.ui.I18nSettings.getInstance()
+        val original = settings.reactLibrary()
+        try {
+            settings.setReactLibrary(com.pan.extractor.ui.ReactLibrary.REACT_INTL)
+            val file = myFixture.configureByText(
+                "App.tsx",
+                """
+                import React from 'react';
+                export default function App() {
+                    return <div><span>no-chinese-here</span></div>;
+                }
+                """.trimIndent()
+            )
+
+            val processor = I18nProcessor(project, file)
+            processor.collect()
+            processor.runWithUndo()
+
+            val resultText = file.text
+            val compact = resultText.replace("\\s+".toRegex(), "")
+            assertTrue(
+                "空文案组件文件也应注入 useIntl 完成接线, got:\n$resultText",
+                compact.contains("import{useIntl}from'react-intl'") &&
+                    compact.contains("const{formatMessage}=useIntl()")
+            )
+        } finally {
+            settings.setReactLibrary(original)
+        }
+    }
+
+    /**
      * 测试箭头函数组件中注入 useTranslation hook
      */
     fun testReactArrowFunctionComponentHookInjection() {

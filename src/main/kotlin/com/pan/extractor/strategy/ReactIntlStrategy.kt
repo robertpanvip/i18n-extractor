@@ -1,6 +1,7 @@
 package com.pan.extractor.strategy
 
 import com.pan.extractor.project.Util
+import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.core.ImportManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
@@ -106,7 +107,11 @@ object ReactIntlStrategy : I18nFramework {
         decision: ImportManager.InjectionDecision,
         injector: ImportManager,
     ): ImportPlan {
-        if (!decision.hasExtractedStrings) {
+        // 即使本文件没有待提取文案，只要它是 React 组件 / hook 文件，也应完成接线（注入
+        // useIntl hook），否则选 react-intl 后像 app.tsx 这类空文案组件文件不会有任何变化。
+        val isComponentFile = ProjectStructure.findReactComponentFunctions(file).isNotEmpty() ||
+            ProjectStructure.findHookFunctions(file).isNotEmpty()
+        if (!decision.hasExtractedStrings && !isComponentFile) {
             return ImportPlan(fileName = file.name, frameworkId = id)
         }
         val imports = mutableListOf<String>()
