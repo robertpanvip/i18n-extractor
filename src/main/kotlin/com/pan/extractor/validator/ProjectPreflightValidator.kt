@@ -368,12 +368,19 @@ object ProjectPreflightValidator {
     // 采用与 StaticValueParser 一致的轻量扫描，不依赖具体语言的完整解析器。
     // ==========================================================================
 
-    /** 对 [plan] 模拟替换：[target] 文本区间 → [plan.newExpression]，再校验结果结构平衡。 */
+    /** 对 [plan] 模拟替换：[target] 文本区间 → [plan.newExpression]，再校验结果结构平衡。
+     *
+     *  采用「增量判定」：只有当**原文件**本身扫描平衡、而替换结果不平衡时才报错。真实源码里
+     *  常见的正则字面量（如 `/['"]+/`）、模板插值等构造会让朴素扫描器误判「不平衡」；若因此
+     *  对每个 rewrite 都报错，会连累同一文件所有改写误报 REWRITE_RESULT_UNBALANCED。既然
+     *  原文件已经让扫描器判为不平衡，就该跳过——只该怪罪真正「从平衡变不平衡」的改写。 */
     private fun checkRewritePostSyntax(plan: RewritePlan, target: PsiElement, issues: MutableList<PreflightIssue>) {
         val vf = target.containingFile?.virtualFile ?: return
         val text = readText(vf) ?: return
         val (start, end) = replacementRange(plan, target) ?: return
         if (start < 0 || end < start || end > text.length) return
+        // 原文件已不平衡（正则/模板等导致扫描器误判）→ 无从判断本次改写是否引入不平衡，保守跳过。
+        if (!isStructurallyBalanced(text)) return
         val after = text.substring(0, start) + plan.newExpression + text.substring(end)
         if (!isStructurallyBalanced(after)) {
             issues += PreflightIssue(

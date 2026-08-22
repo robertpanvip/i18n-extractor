@@ -200,6 +200,27 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
         assertTrue("模板注释含孤引号不应干扰平衡判定，实际=${result.issues.map { it.code }}", result.isValid)
     }
 
+    // 回归：真实源码中正则字面量（如 split /['",、]+/）含引号，会让朴素扫描器误判整文件不平衡。
+    // 若因此对每个 rewrite 都报错，会连累同文件所有改写误报 REWRITE_RESULT_UNBALANCED。
+    // 增量判定：原文件本身已被扫描器判为不平衡 → 跳过本次改写，不再误报。
+    fun testRewriteResultBalancedDespiteRegexWithQuoteInFile() {
+        val psi = myFixture.configureByText("re.ts", "const parts = s.split(/['\"]+/, 10);\nconst x = 'hi';\n")
+        val el = psi.findElementAt("const parts = s.split(/['\"]+/, 10);\nconst x = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s4", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "t('hi')", target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s4", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("含正则字面量的文件不应因朴素扫描误报，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
     // ── A2：Import ────────────────────────────────────────────────
 
     fun testImportUnresolvedFails() {
