@@ -231,9 +231,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
                         editor.inlayModel.addInlineElement(callEnd, false, I18nFoldToggleRenderer(editor))
                     }
                 } else {
-                    // 编辑偏移处不再是翻译调用（如被删除），移除该位置附近的旧 inlay。
-                    // 文档修改后 inlay 偏移会被编辑器自动调整，加一个查找范围覆盖偏移漂移。
-                    removeToggleInlaysAtOffset(editor, offset, 50)
+                    // 编辑偏移处不再是翻译调用（如被删除），移除该偏移处的旧 inlay。
+                    // 文档修改后 inlay 偏移会被编辑器自动调整到编辑起始位置，直接用精确偏移。
+                    removeToggleInlaysAtOffset(editor, offset)
                 }
             }
         }
@@ -241,11 +241,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             .submit(AppExecutorUtil.getAppExecutorService())
     }
 
-    /** 移除编辑器中指定偏移附近 [I18nFoldToggleRenderer] 类型 inlay。 */
-    private fun removeToggleInlaysAtOffset(editor: Editor, offset: Int, range: Int = 0) {
-        val start = maxOf(0, offset - range)
-        val end = minOf(editor.document.textLength, offset + range)
-        for (inlay in editor.inlayModel.getInlineElementsInRange(start, end)) {
+    /** 移除编辑器中指定偏移处的 [I18nFoldToggleRenderer] 类型 inlay。 */
+    private fun removeToggleInlaysAtOffset(editor: Editor, offset: Int) {
+        for (inlay in editor.inlayModel.getInlineElementsInRange(offset, offset)) {
             if (inlay.renderer is I18nFoldToggleRenderer) {
                 inlay.dispose()
             }
