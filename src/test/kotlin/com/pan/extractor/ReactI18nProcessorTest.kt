@@ -2146,4 +2146,39 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             analyzer.existingStrings.containsKey("普通问候")
         )
     }
+
+    /** BUG 复现：与用户 app.tsx 1:1 —— react-intl 单文件提取，两段 JS 字符串中文都应被改写为 formatMessage。 */
+    fun testReactIntlAppLikeSingleFileExtraction() {
+        val (resultText, analyzer) = runReactIntlExtract(
+            """
+            import styles from "./App.module.less";
+
+            export default function App() {
+                let a="你好Hello333"
+                return (
+                    <div
+                        className={styles["app-root"]}
+                    >
+                        {"你好Hello223" }
+                    </div>
+                );
+            }
+            """.trimIndent()
+        )
+        val c = resultText.replace(" ", "")
+        // 两段中文都应被提取进 extractedStrings
+        assertTrue(
+            "react-intl 应提取 '你好Hello333'，got=${analyzer.extractedStrings}",
+            analyzer.extractedStrings.values.contains("你好Hello333")
+        )
+        assertTrue(
+            "react-intl 应提取 '你好Hello223'，got=${analyzer.extractedStrings}",
+            analyzer.extractedStrings.values.contains("你好Hello223")
+        )
+        // 应生成 formatMessage(...) 改写
+        assertTrue(
+            "app.tsx 应出现 formatMessage 改写，got:\n$resultText",
+            c.contains("formatMessage({")
+        )
+    }
 }
