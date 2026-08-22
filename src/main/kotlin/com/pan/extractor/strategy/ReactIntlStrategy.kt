@@ -5,6 +5,7 @@ import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.core.ImportManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
@@ -74,6 +75,22 @@ object ReactIntlStrategy : I18nFramework {
         val method = call.methodExpression as? JSReferenceExpression ?: return null
         val text = method.text
         return if (text == "intl.formatMessage" || text == "props.intl.formatMessage") text else null
+    }
+
+    /**
+     * react-intl 调用形态 `formatMessage({ id: 'key' }[, values])`：
+     * 覆盖默认取"首字符串参数"的实现（默认对对象首参返回 null，导致折叠/引用失效）。
+     * - 已证明是翻译调用（复用默认 [isTranslationCall]）；
+     * - 首参对象字面量中转 `id` 属性值作为 key（与 [I18nAnalyzer] 提取逻辑一致）。
+     * 非对象形态（如本地 `t('x')`）回退到默认实现。
+     */
+    override fun extractKey(call: JSCallExpression): String? {
+        val firstArg = call.arguments.firstOrNull() as? JSObjectLiteralExpression
+            ?: return super.extractKey(call)
+        if (!isTranslationCall(call)) return null
+        val idProp = firstArg.properties.firstOrNull { it.name == "id" } ?: return null
+        val idStr = idProp.value as? JSLiteralExpression ?: return null
+        return idStr.stringValue?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {

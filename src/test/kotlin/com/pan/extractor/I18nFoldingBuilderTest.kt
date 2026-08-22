@@ -158,9 +158,35 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
         assertTrue("应含「你好」", placeholders.contains(hint("你好")))
     }
 
+    /** react-intl 折叠：`formatMessage({ id: 'key' })` 首参是对象描述符，应从 id 属性提取 key。 */
+    fun testFoldReactIntlObjectDescriptor() {
+        val originalLibrary = I18nSettings.getInstance().reactLibrary()
+        I18nSettings.getInstance().setReactLibrary(com.pan.extractor.ui.ReactLibrary.REACT_INTL)
+        try {
+            val file = configureFile(
+                "src/App.tsx",
+                """
+                import { useIntl } from 'react-intl';
+                export default function App() {
+                    const { formatMessage } = useIntl();
+                    let a = formatMessage({ id: '你好世界' });
+                    return <div>{ formatMessage({ id: 'hello' }) }</div>;
+                }
+                """.trimIndent()
+            )
+            val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
+            assertEquals("react-intl 对象描述符应折叠 2 处", 2, descriptors.size)
+            val placeholders = descriptors.map { it.placeholderText }.toSet()
+            assertTrue("应含「你好世界」", placeholders.contains(hint("你好世界")))
+            assertTrue("应含「你好」", placeholders.contains(hint("你好")))
+        } finally {
+            I18nSettings.getInstance().setReactLibrary(originalLibrary)
+        }
+    }
+
     /** 用户报告的问题复现：React 项目 key 含 {0} 占位符时应将 {0} 替换为实际参数值。 */
     fun testFoldTsxWithPlaceholderInKey() {
-        // 额外添加含 {0} 占位符的翻译条目（React 格式，不带 N 前缀）
         myFixture.addFileToProject(
             "src/locales/en.ts",
             """
