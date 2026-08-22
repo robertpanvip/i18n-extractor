@@ -107,7 +107,7 @@ object EntryFileLocator {
         // 快速剔除：只处理受支持的脚本后缀，避免误伤 index.d.ts 之类
         val knownExt = lower.endsWith(".ts") || lower.endsWith(".tsx") ||
             lower.endsWith(".js") || lower.endsWith(".jsx") ||
-            lower.endsWith(".json")
+            lower.endsWith(".json") || lower.endsWith(".cn")
         if (!knownExt) return false
 
         // 1) 路径目录段命中：locales / i18n / locale / lang / translations / ...
@@ -246,7 +246,7 @@ object EntryFileLocator {
             val hit = ProjectStructure.walkVirtualFile(dir, maxDepth = 2) { vf ->
                 if (vf.isDirectory || !vf.isValid) return@walkVirtualFile null
                 val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
-                if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
+                if (ext !in setOf("ts","tsx","js","jsx","json","cn")) return@walkVirtualFile null
                 val nameNoExt = vf.nameWithoutExtension
                 if (isTargetLocaleBasename(nameNoExt, candidates, extractors)) vf else null
             }
@@ -259,7 +259,7 @@ object EntryFileLocator {
         return ProjectStructure.walkVirtualFile(root, maxDepth = 5, enterFilter = { it.name !in excludeDirs }) { vf ->
             if (vf.isDirectory || !vf.isValid) return@walkVirtualFile null
             val ext = vf.extension?.lowercase() ?: return@walkVirtualFile null
-            if (ext !in setOf("ts","tsx","js","jsx","json")) return@walkVirtualFile null
+            if (ext !in setOf("ts","tsx","js","jsx","json","cn")) return@walkVirtualFile null
             // 目录段命中翻译目录 or 基名像目标语言 locale
             val pathLike = isTranslationResourceFile(vf.name, vf.path)
             val baseLike = isTargetLocaleBasename(vf.nameWithoutExtension, candidates, extractors)
