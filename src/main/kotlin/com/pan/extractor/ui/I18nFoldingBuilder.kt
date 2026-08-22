@@ -156,6 +156,14 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             val docLen = editor.document.textLength
             val fm = editor.foldingModel
             fm.runBatchFoldingOperation {
+                // 记录当前被用户展开的折叠区间（用户手动展开后必须保留，
+                // 否则本构建器异步重建折叠时会把用户展开的折叠重新折叠回去）。
+                val userExpanded = mutableSetOf<Pair<Int, Int>>()
+                for (existing in fm.allFoldRegions) {
+                    if (existing.isExpanded) {
+                        userExpanded.add(existing.startOffset to existing.endOffset)
+                    }
+                }
                 // 清除全部旧折叠区域，避免编辑后残留的旧折叠与新折叠叠加导致显示混乱。
                 // 本构建器异步计算折叠，绕过平台自动管理，必须手动清理。
                 for (existing in fm.allFoldRegions) {
@@ -168,7 +176,8 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
                     // 校验失败时静默跳过，避免 Invalid offsets 崩溃。
                     if (range.startOffset < 0 || range.endOffset > docLen || range.startOffset > range.endOffset) continue
                     val fold = fm.addFoldRegion(range.startOffset, range.endOffset, desc.placeholderText ?: "")
-                    fold?.isExpanded = false
+                    // 若该区间此前被用户展开，则保留展开状态；否则默认折叠。
+                    fold?.isExpanded = (range.startOffset to range.endOffset) in userExpanded
                 }
             }
         }
