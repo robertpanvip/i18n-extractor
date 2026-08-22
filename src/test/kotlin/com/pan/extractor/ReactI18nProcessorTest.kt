@@ -1988,6 +1988,64 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
     // P1（§26-React Intl）：react-intl 结构化形态黑盒 —— 不重复提取 / 不二次 $t 包装
     // ============================================================
 
+    /**
+     * BUG 回归（重启后 react-intl 已接线文件 + 新中文）：app.tsx 上一轮已被注入
+     * `useIntl` + 已有 formatMessage 调用，重启后仅新增一条中文，应正常提取为新 key，
+     * 而不应因「文件里已有 formatMessage」而整体失败 / 不提取。
+     */
+    fun testReactIntlAlreadyWiredFileExtractsNewChinese() {
+        val (resultText, analyzer) = runReactIntlExtract(
+            """
+            import React from 'react';
+            import { useIntl } from 'react-intl';
+            export default function App() {
+                const { formatMessage } = useIntl();
+                return <div title="新加入中文">你好世界</div>;
+            }
+            """.trimIndent()
+        )
+        // 提取已发生；只校验两个文本都已改成 formatMessage 形态（属性/文本节点引号风格不同，故按形如
+        // "formatMessage({ id:" 出现两次断言，而不绑定单/双/反引号的具体写法）。
+        val occurrences = Regex("""formatMessage\(\{[^}]*id:""").findAll(resultText).count()
+        assertTrue(
+            "重启后已有 react-intl 接线的文件仍应提取两处新中文, got:\n$resultText",
+            occurrences >= 2 &&
+                resultText.contains("新加入中文") &&
+                resultText.contains("你好世界")
+        )
+    }
+
+    /**
+     * BUG 回归（内容感知检测）：即使用户设置读成默认 i18next（模拟重启后设置失联），
+     * 一个已含 `import ... from 'react-intl'` 的文件仍应命中 react-intl 而非被 i18next 接管，
+     * 从而避免向 react-intl 项目注入 useTranslation/t(...) 的混合/失败提取。
+     */
+    fun testReactIntlFramedFileDetectedEvenWhenSettingIsI18next() {
+        val settings = com.pan.extractor.ui.I18nSettings.getInstance()
+        val original = settings.reactLibrary()
+        try {
+            settings.setReactLibrary(com.pan.extractor.ui.ReactLibrary.I18NEXT)
+            val file = myFixture.configureByText(
+                "App.tsx",
+                """
+                import { useIntl } from 'react-intl';
+                export default function App() {
+                    const { formatMessage } = useIntl();
+                    return <div>你好</div>;
+                }
+                """.trimIndent()
+            )
+            val framework = com.pan.extractor.strategy.I18nFrameworkRegistry.detect(file)
+            assertEquals(
+                "设置读成 i18next 时，已按 react-intl 接线的文件也应命中 react-intl",
+                "react-intl",
+                framework.id
+            )
+        } finally {
+            settings.setReactLibrary(original)
+        }
+    }
+
     /** 切到 react-intl 并跑 collect + undo，返回改写后的文件文本。 */
     private fun runReactIntlExtract(text: String): Pair<String, com.pan.extractor.analyzer.I18nAnalyzer> {
         val settings = com.pan.extractor.ui.I18nSettings.getInstance()

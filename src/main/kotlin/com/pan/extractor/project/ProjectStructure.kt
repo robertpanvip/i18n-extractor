@@ -575,6 +575,27 @@ object ProjectStructure {
     }
 
     /**
+     * 判断文件是否**已按 react-intl 接线**（文件内容层面，与用户设置无关）。
+     *
+     * 用于让框架检测在「用户设置因重启/失联而暂时读不到 react-intl」时仍能对已接线文件
+     * 正确命中 react-intl，避免被默认的 react-i18next 误接管（否则会向 react-intl 项目
+     * 注入 useTranslation + t(...)，出现混合/不成功的提取）。命中任一 react-intl 典型
+     * 用法即返回 true：
+     *   - 存在 `from 'react-intl'` 的 import / export / side-effect import；
+     *   - 出现 `useIntl()` / `formatMessage(` / `createIntl(` / `<IntlProvider` / `<RawIntlProvider`。
+     */
+    fun isReactIntlFramed(file: PsiFile?): Boolean {
+        file ?: return false
+        if (file.containingFile?.name?.endsWith(".vue", ignoreCase = true) == true) return false
+        val text = file.containingFile?.text ?: return false
+        if (IMPORT_FROM_REACT_INTL.containsMatchIn(text)) return true
+        return REACT_INTL_IDIOM_RE.containsMatchIn(text)
+    }
+
+    private val IMPORT_FROM_REACT_INTL = Regex("""(?:import|export)\s+.*\bfrom\s+['"]react-intl['"]""", RegexOption.DOT_MATCHES_ALL)
+    private val REACT_INTL_IDIOM_RE = Regex("""\b(?:useIntl|createIntl|IntlProvider|RawIntlProvider)\b|<IntlProvider|<RawIntlProvider|formatMessage\s*\(""")
+
+    /**
      * 检测项目是否「缺 i18n 依赖且未初始化」（React 缺 i18next / Vue 缺 vue-i18n）。
      * 基于 [currentPsiFile] 向上定位项目根，读取 package.json 判定依赖，并检查是否已有初始化文件。
      *

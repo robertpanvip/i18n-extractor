@@ -24,7 +24,9 @@ object ReactI18nextStrategy : I18nFramework {
     override val paramKeyNeedsQuote = true
     override val scanner: com.pan.extractor.scanner.SourceScanner =
         com.pan.extractor.scanner.ReactScanner
-    override fun matches(element: PsiElement): Boolean = Util.isReact(element)
+    override fun matches(element: PsiElement): Boolean =
+        Util.isReact(element) &&
+            !ProjectStructure.isReactIntlFramed(element.containingFile ?: element as? PsiFile)
 
     override fun placeholderFor(index: Int): String = "{{$index}}"
     override fun paramKey(index: Int): String = index.toString()
