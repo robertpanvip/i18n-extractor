@@ -83,25 +83,21 @@ tasks {
     test {
         useJUnit()
 
-        // 限制并行 fork 数（3 核足够），CI 和本地统一使用。
-        maxParallelForks = 1
-        // 以下内存限制仅本地生效（scripts/run-tests.sh 传 -PforkTest=true），
-        // 因为本地沙箱 cgroup 只有 4GiB，堆 + metaspace + native 直接内存容易超限。
-        // 线上 CI（约 7GB）内存充足，无需此限制，且去掉后跑得更快。
+        // 仅本地生效（scripts/run-tests.sh 传 -PforkTest=true）：
+        // 本地沙箱 cgroup 只有 4GiB，堆 + metaspace + native 直接内存容易超限，
+        // 需限制并行 fork 数、堆大小、按类独立 fork 并限定 metaspace。
+        // 线上 CI（约 7GB 多核）内存充足，保持默认参数跑得更快。
         if (project.findProperty("forkTest") == "true") {
+            maxParallelForks = 1
             maxHeapSize = "768m"
-            // 每个测试类独立 fork JVM，避免 IDEA 平台原生/直接内存跨类累积导致 OOM。
             forkEvery = 1
             jvmArgs(
+                "-XX:+UseParallelGC",
+                "-XX:MinHeapFreeRatio=5",
+                "-XX:MaxHeapFreeRatio=25",
                 "-XX:MaxMetaspaceSize=512m"
             )
         }
-        // 测试 JVM GC 优化（CI 和本地均适用）：ParallelGC 高吞吐 + 主动释放空闲堆。
-        jvmArgs(
-            "-XX:+UseParallelGC",
-            "-XX:MinHeapFreeRatio=5",
-            "-XX:MaxHeapFreeRatio=25"
-        )
 
         testLogging {
             showStandardStreams = true
