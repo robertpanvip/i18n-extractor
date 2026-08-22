@@ -7,6 +7,7 @@ import com.pan.extractor.planner.RewritePlan
 import com.pan.extractor.resource.JsonWriter
 import com.pan.extractor.staticparser.StaticObjectParser
 import com.google.gson.JsonParser
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import java.nio.charset.StandardCharsets
 
@@ -60,6 +61,8 @@ data class PreflightResult(val issues: List<PreflightIssue>) {
  * [requireValidWithActualFiles]，收到 [IllegalStateException] 即中止整批写入。
  */
 object ProjectPreflightValidator {
+
+    private val LOG = Logger.getInstance(ProjectPreflightValidator::class.java)
 
     /**
      * 校验三类修改目标，返回 [PreflightResult]（不抛异常，供调用方决定策略）。
@@ -325,6 +328,11 @@ object ProjectPreflightValidator {
             "ts", "tsx", "js", "jsx" -> {
                 val info = StaticObjectParser.parseTsExportedObject(text)
                 if (info == null) {
+                    // 【诊断】无法导出的入口多半是"还未初始化的空文件/占位/re-export"。
+                    // 把准确目标与内容头部打出来，便于定位"为什么写不进 / 是不是没初始化"。
+                    LOG.warn(
+                        "RESOURCE_OBJECT_MISSING 诊断: target=${plan.targetPath} len=${text.length} head=${text.take(300).replace('\n', ' ')}"
+                    )
                     issues += PreflightIssue(
                         "RESOURCE_OBJECT_MISSING",
                         "ResourcePlan[target=${plan.targetPath}] 找不到可导出的 TS/JS 对象字面量（需要 export default / export const / module.exports）",
