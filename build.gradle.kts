@@ -83,27 +83,24 @@ tasks {
     test {
         useJUnit()
 
-        // 限制单 worker 堆与并行 fork，避免沙箱/CI 低内存环境 full-suite OOM（SIGKILL 137）。
-        // 堆控制在 768m：fork JVM 的 RSS（堆 + metaspace + native/直接内存）叠加 Gradle daemon，
-        // 需整体落在 cgroup 4GiB 限内，过大（1024m）会在重型 IDE 平台测试类上触发 cgroup OOM-kill。
-        maxHeapSize = "768m"
+        // 限制并行 fork 数（3 核足够），CI 和本地统一使用。
         maxParallelForks = 1
-        // 每个测试类启用独立 fork JVM：多个类在单个 fork 内顺序执行时，IDEA 平台测试的
-        // 原生/直接内存（DirectBuffer、JIT、VFS caches）会跨类累积，最终被 cgroup OOM-kill
-        // （Gradle Test Executor 退出码 137、末位测试被标 SKIPPED）。按类重启可重置该内存。
-        //
-        // 仅本地（scripts/run-tests.sh 传 -PforkTest=true）启用，避免线上 CI 不必要的
-        // 启动开销（CI 内存充足，多个类顺序执行不会 OOM）。
+        // 以下内存限制仅本地生效（scripts/run-tests.sh 传 -PforkTest=true），
+        // 因为本地沙箱 cgroup 只有 4GiB，堆 + metaspace + native 直接内存容易超限。
+        // 线上 CI（约 7GB）内存充足，无需此限制，且去掉后跑得更快。
         if (project.findProperty("forkTest") == "true") {
+            maxHeapSize = "768m"
+            // 每个测试类独立 fork JVM，避免 IDEA 平台原生/直接内存跨类累积导致 OOM。
             forkEvery = 1
+            jvmArgs(
+                "-XX:MaxMetaspaceSize=512m"
+            )
         }
-        // 测试 JVM 优化：ParallelGC 高吞吐 + 主动释放空闲堆，减少 GC 停顿时间；
-        // MaxMetaspaceSize 限定平台元数据，防止 metaspace 膨胀推高 RSS。
+        // 测试 JVM GC 优化（CI 和本地均适用）：ParallelGC 高吞吐 + 主动释放空闲堆。
         jvmArgs(
             "-XX:+UseParallelGC",
             "-XX:MinHeapFreeRatio=5",
-            "-XX:MaxHeapFreeRatio=25",
-            "-XX:MaxMetaspaceSize=512m"
+            "-XX:MaxHeapFreeRatio=25"
         )
 
         testLogging {
