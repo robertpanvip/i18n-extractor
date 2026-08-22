@@ -2046,6 +2046,45 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * BUG 回归（项目级 react-intl 初始化兜底）：App.tsx 还是一个干净组件（自身没有
+     * useState/formatMessage 导入，即上一轮初始化后尚未接线），但项目里已存在
+     * `src/locales/i18n.ts`（含 createIntl 的 react-intl 初始化）。此时即便设置读成
+     * 默认 i18next，也应命中 react-intl —— 否则 App.tsx 的中文会被 i18next 误接管。
+     */
+    fun testReactIntlProjectInitFallbackDetectsCleanComponent() {
+        myFixture.addFileToProject(
+            "src/locales/i18n.ts",
+            """
+            import { createIntl } from 'react-intl';
+            import zh from './zh';
+            export const intl = createIntl({ locale: 'zh', messages: zh });
+            """.trimIndent()
+        )
+        myFixture.addFileToProject("src/locales/zh.ts", "export default {\n};\n")
+        val settings = com.pan.extractor.ui.I18nSettings.getInstance()
+        val original = settings.reactLibrary()
+        try {
+            settings.setReactLibrary(com.pan.extractor.ui.ReactLibrary.I18NEXT)
+            val file = myFixture.configureByText(
+                "App.tsx",
+                """
+                export default function App() {
+                    return <div title="新中文">你好</div>;
+                }
+                """.trimIndent()
+            )
+            val framework = com.pan.extractor.strategy.I18nFrameworkRegistry.detect(file)
+            assertEquals(
+                "项目存在 react-intl 初始化文件时，干净的组件文件也应命中 react-intl",
+                "react-intl",
+                framework.id
+            )
+        } finally {
+            settings.setReactLibrary(original)
+        }
+    }
+
     /** 切到 react-intl 并跑 collect + undo，返回改写后的文件文本。 */
     private fun runReactIntlExtract(text: String): Pair<String, com.pan.extractor.analyzer.I18nAnalyzer> {
         val settings = com.pan.extractor.ui.I18nSettings.getInstance()

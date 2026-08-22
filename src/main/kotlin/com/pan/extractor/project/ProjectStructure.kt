@@ -589,11 +589,43 @@ object ProjectStructure {
         if (file.containingFile?.name?.endsWith(".vue", ignoreCase = true) == true) return false
         val text = file.containingFile?.text ?: return false
         if (IMPORT_FROM_REACT_INTL.containsMatchIn(text)) return true
-        return REACT_INTL_IDIOM_RE.containsMatchIn(text)
+        if (REACT_INTL_IDIOM_RE.containsMatchIn(text)) return true
+        // 兜底：当前文件本身还没接线（仍待提取中文），但项目已用 react-intl 初始化
+        // （常见 i18n 目录下的初始化文件含 createIntl(...) / <IntlProvider>）→ 仍视为 react-intl，
+        // 覆盖「上一轮已建 react-intl 初始化、重启后 app.tsx 还是干净中文」的重启场景。
+        return projectHasReactIntlInit(file)
     }
+
+    /** 在项目根常见 i18n 目录下定位"已按 react-intl 初始化"的文件（含 createIntl / IntlProvider 初始化文本）。 */
+    private fun projectHasReactIntlInit(file: PsiFile): Boolean {
+        val root = findProjectRoot(file) ?: return false
+        for (relPath in I18N_COMMON_DIRS) {
+            val dir = findRelativeFile(root, relPath) ?: continue
+            if (!dir.isDirectory) continue
+            val hit = walkVirtualFile(dir, maxDepth = 2) { vf ->
+                if (vf.isValid && !vf.isDirectory && vf.extension?.lowercase() in I18N_TS_JS_EXTS) {
+                    val t = try {
+                        String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (t != null && REACT_INTL_INIT_RE.containsMatchIn(I18nInstanceLocator.stripJsComments(t))) vf else null
+                } else null
+            }
+            if (hit != null) return true
+        }
+        return false
+    }
+
+    private val I18N_COMMON_DIRS = listOf(
+        "src/locales", "locales", "src/i18n", "i18n",
+        "src/locale", "locale", "src/lang", "lang",
+    )
+    private val I18N_TS_JS_EXTS = setOf("ts", "tsx", "js", "jsx")
 
     private val IMPORT_FROM_REACT_INTL = Regex("""(?:import|export)\s+.*\bfrom\s+['"]react-intl['"]""", RegexOption.DOT_MATCHES_ALL)
     private val REACT_INTL_IDIOM_RE = Regex("""\b(?:useIntl|createIntl|IntlProvider|RawIntlProvider)\b|<IntlProvider|<RawIntlProvider|formatMessage\s*\(""")
+    private val REACT_INTL_INIT_RE = Regex("""\bcreateIntl\s*\(|<IntlProvider\b|<RawIntlProvider\b""")
 
     /**
      * 检测项目是否「缺 i18n 依赖且未初始化」（React 缺 i18next / Vue 缺 vue-i18n）。
