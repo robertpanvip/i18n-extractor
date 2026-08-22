@@ -26,7 +26,8 @@ object ReactI18nextStrategy : I18nFramework {
         com.pan.extractor.scanner.ReactScanner
     override fun matches(element: PsiElement): Boolean =
         Util.isReact(element) &&
-            !ProjectStructure.isReactIntlFramed(element.containingFile ?: element as? PsiFile)
+            com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary() !=
+                com.pan.extractor.ui.ReactLibrary.REACT_INTL
 
     override fun placeholderFor(index: Int): String = "{{$index}}"
     override fun paramKey(index: Int): String = index.toString()

@@ -37,9 +37,8 @@ object ReactIntlStrategy : I18nFramework {
 
     override fun matches(element: PsiElement): Boolean =
         Util.isReact(element) &&
-            (com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary() ==
-                com.pan.extractor.ui.ReactLibrary.REACT_INTL ||
-                ProjectStructure.isReactIntlFramed(element.containingFile ?: element as? PsiFile))
+            com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary() ==
+                com.pan.extractor.ui.ReactLibrary.REACT_INTL
 
     /** react-intl 使用 ICU 消息格式，位置参数占位符为单花括号 `{0}`。 */
     override fun placeholderFor(index: Int): String = "{$index}"
