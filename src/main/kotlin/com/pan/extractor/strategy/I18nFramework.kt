@@ -8,6 +8,8 @@ import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.openapi.diagnostic.Logger
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.planner.ImportPlan
 
 /** 各框架通用的 JS/TS 源文件后缀（小写、含点）。不使用 SFC/模板扩展名的策略直接复用。 */
@@ -359,6 +361,8 @@ interface CallExpressionStrategy {
  */
 object I18nFrameworkRegistry {
 
+    private val LOG = Logger.getInstance(I18nFramework::class.java)
+
     private val strategies = mutableListOf<I18nFramework>()
 
     init {
@@ -403,14 +407,27 @@ object I18nFrameworkRegistry {
      */
     fun detect(element: PsiElement): I18nFramework {
         var fallback: I18nFramework = GenericStrategy
+        var matched: I18nFramework? = null
         for (s in strategies) {
             if (s.isFallback) {
                 fallback = s
                 continue
             }
-            if (s.matches(element)) return s
+            if (s.matches(element)) {
+                matched = s
+                break
+            }
         }
-        return fallback
+        val result = matched ?: fallback
+        // 运行时诊断：记录「设置里的 react 库值 + 实际命中的框架」。用户反馈"选了 react-intl
+        // 但 app.tsx 未被提取/未发生变化"时，用这行日志锁定根因是 settings 值还是检测逻辑。
+        val fileName = (element as? PsiFile ?: element.containingFile)?.name ?: "-"
+        PluginLogBuffer.info(
+            LOG,
+            "I18n detect: file=$fileName, reactLibrary=${com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary()}, " +
+                "framework=${result.id}"
+        )
+        return result
     }
 
     /** 当前注册的全部策略（含 fallback），供断言/调试使用。只读快照。 */
