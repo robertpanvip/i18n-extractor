@@ -143,6 +143,63 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
         assertTrue("完整替换应通过，实际=${result.issues.map { it.code }}", result.isValid)
     }
 
+    // 回归：newExpression 本身平衡、但文件里有注释含孤引号（如 `// it's`、`/* can't */`、
+    // `<!-- it's -->`）时，旧实现把注释里的单引号当成未闭合字符串，导致整文件误判不平衡，
+    // 连累同文件所有 rewrite 报 REWRITE_RESULT_UNBALANCED。注释内容应被整体忽略。
+    fun testRewriteResultBalancedDespiteLineCommentWithQuote() {
+        val psi = myFixture.configureByText("c.ts", "// it's fine\nconst x = 'hi';\n")
+        val el = psi.findElementAt("// it's fine\nconst x = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s1", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "t('hi')", target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s1", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("行注释含孤引号不应干扰平衡判定，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
+    fun testRewriteResultBalancedDespiteBlockCommentWithOrphanBrace() {
+        val psi = myFixture.configureByText("b.ts", "/* just a } brace */\nconst y = 'k';\n")
+        val el = psi.findElementAt("/* just a } brace */\nconst y = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s2", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "t('k')", target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s2", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("块注释内孤括号不应干扰平衡判定，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
+    fun testRewriteResultBalancedDespiteHtmlCommentWithQuote() {
+        val psi = myFixture.configureByText("d.tsx", "<!-- it's a note -->\nconst z = 'v';\n")
+        val el = psi.findElementAt("<!-- it's a note -->\nconst z = ".length)!!
+        val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(el)
+        val rp = RewritePlan(
+            siteId = "s3", kind = RewriteKind.JS_LITERAL, processorIndex = 0,
+            newExpression = "t('v')", target = ptr,
+        )
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = listOf(rp),
+            sites = listOf(site("s3", ptr)),
+            processorCount = 1,
+            importFiles = emptyMap(),
+            resourceFiles = emptyMap(),
+        )
+        assertTrue("模板注释含孤引号不应干扰平衡判定，实际=${result.issues.map { it.code }}", result.isValid)
+    }
+
     // ── A2：Import ────────────────────────────────────────────────
 
     fun testImportUnresolvedFails() {

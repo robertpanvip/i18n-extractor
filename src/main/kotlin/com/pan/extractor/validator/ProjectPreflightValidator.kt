@@ -395,7 +395,7 @@ object ProjectPreflightValidator {
         return tr.startOffset to tr.endOffset
     }
 
-    /** 轻量结构平衡校验：扫描 `()[]{}` 与引号，忽略字符串内部，判定括号成对 + 引号闭合。 */
+    /** 轻量结构平衡校验：扫描 `()[]{}` 与引号，忽略字符串与注释内部，判定括号成对 + 引号闭合。 */
     private fun isStructurallyBalanced(text: String): Boolean {
         val stack = ArrayDeque<Char>()
         var i = 0
@@ -406,6 +406,26 @@ object ProjectPreflightValidator {
                 if (c == '\\') i++
                 else if (c == quote) quote = null
                 i++
+                continue
+            }
+            // 注释内部整体跳过（`//` 行注释 / `/* */` 块注释 / `<!-- -->` 模板注释），
+            // 否则注释里的单引号/孤括号会污染全文平衡判定（如 `// it's` 被误当未闭合字符串，
+            // 连累同文件所有 rewrite 误报 REWRITE_RESULT_UNBALANCED）。
+            if (c == '/' && i + 1 < text.length && text[i + 1] == '/') {
+                i += 2
+                while (i < text.length && text[i] != '\n' && text[i] != '\r') i++
+                continue
+            }
+            if (c == '/' && i + 1 < text.length && text[i + 1] == '*') {
+                i += 2
+                while (i < text.length && !(text[i] == '*' && i + 1 < text.length && text[i + 1] == '/')) i++
+                i = (i + 2).coerceAtMost(text.length)
+                continue
+            }
+            if (c == '<' && i + 3 < text.length && text[i + 1] == '!' && text[i + 2] == '-' && text[i + 3] == '-') {
+                i += 4
+                while (i < text.length && !(text[i] == '-' && i + 1 < text.length && text[i + 1] == '-' && i + 2 < text.length && text[i + 2] == '>')) i++
+                i = (i + 3).coerceAtMost(text.length)
                 continue
             }
             when (c) {
