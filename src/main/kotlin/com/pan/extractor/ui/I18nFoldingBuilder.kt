@@ -156,6 +156,11 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             val docLen = editor.document.textLength
             val fm = editor.foldingModel
             fm.runBatchFoldingOperation {
+                // 清除全部旧折叠区域，避免编辑后残留的旧折叠与新折叠叠加导致显示混乱。
+                // 本构建器异步计算折叠，绕过平台自动管理，必须手动清理。
+                for (existing in fm.allFoldRegions) {
+                    fm.removeFoldRegion(existing)
+                }
                 for (desc in descriptors) {
                     val range = desc.range
                     if (range.isEmpty) continue
