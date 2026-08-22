@@ -4,6 +4,7 @@ import com.pan.extractor.bootstrap.I18nBootstrapSupport
 import com.pan.extractor.strategy.AngularI18nStrategy
 import com.pan.extractor.strategy.ReactI18nextStrategy
 import com.pan.extractor.strategy.SolidI18nStrategy
+import com.pan.extractor.strategy.TranslocoI18nStrategy
 import com.pan.extractor.strategy.VueI18nStrategy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -311,6 +312,19 @@ class I18nBootstrapSupportTest {
         assertTrue(content.contains("translate.setDefaultLang(defaultLocale());"))
         assertTrue(content.contains("translate.use(defaultLocale());"))
         assertTrue(content.contains("TranslateModule.forRoot()"))
+    }
+
+    @Test
+    fun translocoInitFileRegistersTranslationAndLocale() {
+        val content = I18nBootstrapSupport.buildInitFileContent(
+            TranslocoI18nStrategy, "zh-CN", "zh-CN"
+        )
+        assertTrue(content.contains("import { TranslocoModule, TranslocoService } from '@jsverse/transloco';"))
+        assertTrue(content.contains("import zh from './zh-CN';"))
+        assertTrue("init 文件必须消费 zh（注册进 setTranslation），不得是未使用导入",
+            content.contains("this.translocoService.setTranslation(zh, '', 'zh-CN');"))
+        assertTrue(content.contains("this.translocoService.setActiveLang(defaultLocale());"))
+        assertTrue(content.contains("TranslocoModule"))
     }
 
     // ── addDepsToPackageJson ──────────────────────────────────

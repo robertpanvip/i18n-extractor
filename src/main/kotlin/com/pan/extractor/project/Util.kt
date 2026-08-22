@@ -192,4 +192,6 @@ object Util {
     fun isSvelte(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isSvelte(element)
 
     fun isAngular(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isAngular(element)
+
+    fun isTransloco(element: com.intellij.psi.PsiElement): Boolean = ProjectStructure.isTransloco(element)
 }

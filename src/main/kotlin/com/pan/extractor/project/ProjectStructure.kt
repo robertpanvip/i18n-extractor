@@ -42,6 +42,8 @@ object ProjectStructure {
     private val SVELTE_KEY_RE = Regex(""""svelte"\s*:\s*"""")
     private val NGX_TRANSLATE_KEY_RE = Regex(""""@ngx-translate/core"\s*:\s*"""")
     private val ANGULAR_CORE_KEY_RE = Regex(""""@angular/core"\s*:\s*""")
+    /** @jsverse/transloco（更名后）与 @ngneat/transloco（旧名）都识别为 Transloco。 */
+    private val TRANSLOCLO_KEY_RE = Regex(""""@(?:jsverse|ngneat)/transloco"\s*:\s*""")
 
     /**
      * 提取 package.json 中所有依赖段（dependencies/devDependencies/peerDependencies/optionalDependencies）
@@ -274,6 +276,43 @@ object ProjectStructure {
         } else {
             false
         }
+    }
+
+    /**
+     * 判断当前元素是否处于 Transloco 上下文。
+     *
+     * 与 [isAngular] 同构，但面向 {@code @jsverse/transloco}（更名后）/{@code @ngneat/transloco}（旧名）：
+     * 依赖 transloco，且不依赖 vue / solid-js / svelte → 按 Transloco 处理（.ts / .html 等）。
+     * 找不到 package.json → false。
+     */
+    fun isTransloco(element: PsiElement): Boolean {
+        val containingFile = element.containingFile ?: return false
+        if (containingFile.name.endsWith(".vue", ignoreCase = true) ||
+            containingFile.name.endsWith(".svelte", ignoreCase = true)
+        ) {
+            return false
+        }
+        var dir: VirtualFile? = containingFile.virtualFile?.parent ?: return false
+        while (dir != null) {
+            val pkgFile = dir.findChild("package.json")
+            if (pkgFile != null) {
+                return try {
+                    val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
+                    val deps = dependencyBlock(content)
+                    @Suppress("NAME_SHADOWING")
+                    val hasTransloco = deps.contains(TRANSLOCLO_KEY_RE)
+                    val hasVue = deps.contains(VUE_KEY_RE)
+                    val hasSolid = deps.contains(SOLID_KEY_RE)
+                    val hasSvelte = deps.contains(SVELTE_KEY_RE)
+                    hasTransloco && !hasVue && !hasSolid && !hasSvelte
+                } catch (e: Exception) {
+                    PluginLogBuffer.warn(LOG,"ProjectStructure: 读取 package.json 依赖失败，按未解析处理（isTransloco）", e)
+                    false
+                }
+            }
+            dir = dir.parent
+        }
+        return false
     }
 
     /**

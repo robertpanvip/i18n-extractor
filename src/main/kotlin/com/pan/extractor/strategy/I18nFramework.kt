@@ -372,6 +372,9 @@ object I18nFrameworkRegistry {
         // Svelte 靠 .svelte 扩展名或 svelte 依赖识别；置于 React 之前使 svelte 项目优先命中。
         register(SvelteI18nStrategy)
         // Angular（ngx-translate）靠 @angular/core / @ngx-translate/core 依赖识别；置于 React 之前。
+        // Transloco 与 ngx-translate 都依赖 @angular/core：Transloco 需在其前注册，使
+        // @jsverse/transloco 项目优先命中 TranslocoStrategy，其余落到 AngularI18nStrategy。
+        register(TranslocoI18nStrategy)
         register(AngularI18nStrategy)
         // react-intl 与 react-i18next 共存：两者都靠 Util.isReact 识别，靠用户设置
         // （React 多语言库 → react-intl）区分。注册顺序放 react-i18next 之前，

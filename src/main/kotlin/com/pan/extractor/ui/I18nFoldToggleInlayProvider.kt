@@ -450,9 +450,9 @@ internal val RAW_T_CALL_PATTERN = Regex(
         "\\(\\s*(?:`([^`]*)`|'([^']*)'|\"([^\"]*)\")\\s*[,)]"
 )
 
-/** Angular | translate 管道原始文本匹配：`'key' | translate` 或 `"key" | translate`。 */
+/** Angular | translate / transloco 管道原始文本匹配：`'key' | translate` 或 `"key" | translate|transloco`。 */
 internal val ANGULAR_PIPE_PATTERN = Regex(
-    """(?:'([^']*)'|"([^"]*)")\s*\|\s*translate"""
+    """(?:'([^']*)'|"([^"]*)")\s*\|\s*(?:translate|transloco)"""
 )
 
 /** 反引号/单引号/双引号 `$t()` 原始文本调用：key + 所在宿主元素 + 文档绝对偏移范围 + 完整调用文本。 */
