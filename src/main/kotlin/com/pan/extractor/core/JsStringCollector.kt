@@ -395,16 +395,17 @@ class JsStringCollector(
         if (ele.parent is TypeScriptEnumField) {
             if (processedEnums.add(ele.parent.parent)) {
                 val notificationGroup = NotificationGroupManager.getInstance()
-                    .getNotificationGroup("Vue i18n 提取提示")  // 自定义组名
+                    .getNotificationGroup("I18nExtractorNotification")
 
-                val notification = notificationGroup.createNotification(
-                    "跳过枚举成员 i18n 提取",
-                    "枚举成员初始化值（如 ${ele.parent.parent.parent.text}）不支持运行时 \$t()，会报 TS18033 错误。\n" +
-                            "建议改为 const 对象",
-                    NotificationType.WARNING
-                )
-
-                Notifications.Bus.notify(notification, processor.project)
+                if (notificationGroup != null) {
+                    val notification = notificationGroup.createNotification(
+                        "跳过枚举成员 i18n 提取",
+                        "枚举成员初始化值（如 ${ele.parent.parent.parent.text}）不支持运行时 \$t()，会报 TS18033 错误。\n" +
+                                "建议改为 const 对象",
+                        NotificationType.WARNING
+                    )
+                    Notifications.Bus.notify(notification, processor.project)
+                }
             }
             return
         }

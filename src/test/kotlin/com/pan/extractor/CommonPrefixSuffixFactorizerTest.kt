@@ -149,7 +149,7 @@ class CommonPrefixSuffixFactorizerTest {
     fun testNoMergePlaceholderShowWhenSitesTwo() {
         val sites = siteRefs("苹果", "香蕉")
         val (affix, digit) = CommonPrefixSuffixFactorizer.factorize(sites)
-        assertTrue("无公共前后缀且无数字，应生成占位提示候选，实际 affix=$affix digit=$digit", digit.any { !it.selected && it.skeleton.contains("没有可自动抽取") })
+        assertTrue("无公共前后缀且无数字，应生成占位提示候选，实际 affix=$affix digit=$digit", digit.any { !it.selected && it.skeleton.contains("No auto-extractable digit skeleton") })
     }
 
     /**
