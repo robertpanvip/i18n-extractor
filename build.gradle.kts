@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.7.6"
+version = "1.7.7"
 
 repositories {
     mavenCentral()
