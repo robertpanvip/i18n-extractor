@@ -374,6 +374,37 @@ class ProjectPreflightValidatorTest : BasePlatformTestCase() {
             result.issues.any { it.code == "RESOURCE_OBJECT_MISSING" })
     }
 
+    fun testResourceObjectMissingIsWarningNotBlocking() {
+        // 目标 TS/JS 无可解析导出对象 → 报警告但不阻断整批写入（写回层会优雅回退剪贴板）。
+        val psi = myFixture.configureByText("loc.ts", "const x = 1;\n")
+        val result = ProjectPreflightValidator.preflightValidate(
+            rewrites = emptyList(),
+            sites = emptyList(),
+            processorCount = 0,
+            importFiles = emptyMap(),
+            resourceFiles = mapOf(
+                ResourcePlan(targetPath = "loc.ts", format = "ts") to psi.virtualFile,
+            ),
+        )
+        assertTrue("仅资源不可解析不应阻断写入，实际=${result.issues.map { it.code }}", result.isValid)
+        assertTrue("RESOURCE_OBJECT_MISSING 应为非阻断警告",
+            result.issues.filter { it.code == "RESOURCE_OBJECT_MISSING" }.all { !it.blocking })
+        // 若该 issue 是唯一问题，requireValidWithActualFiles 不应抛异常（不 abort 整批改写）。
+        try {
+            ProjectPreflightValidator.requireValidWithActualFiles(
+                rewrites = emptyList(),
+                sites = emptyList(),
+                processorCount = 0,
+                importFiles = emptyMap(),
+                resourceFiles = mapOf(
+                    ResourcePlan(targetPath = "loc.ts", format = "ts") to psi.virtualFile,
+                ),
+            )
+        } catch (e: IllegalStateException) {
+            fail("仅有资源不可解析时不应抛异常阻断整批写入，实际=$e")
+        }
+    }
+
     fun testResourceTsValidObjectPasses() {
         val psi = myFixture.configureByText("loc.ts", "export default {\n  greeting: 'hi'\n}\n")
         val result = ProjectPreflightValidator.preflightValidate(

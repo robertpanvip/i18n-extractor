@@ -14,16 +14,22 @@ import java.nio.charset.StandardCharsets
 data class PreflightIssue(
     val code: String,
     val message: String,
+    /** 是否阻断写入。false 表示「警告」：仅该资源回退剪贴板，不中止整批写入。 */
+    val blocking: Boolean = true,
 )
 
 /**
- * 统一 Apply 前校验结果：全部 issue 为空才允许写入任何文件。
+ * 统一 Apply 前校验结果：**没有阻断性 issue** 才允许写入任何文件。
+ *
+ * 部分「资源语义」类 issue（如目标 TS/JS 无可解析导出、merge 冲突）标为 [非阻断][PreflightIssue.blocking]：
+ * 真实写回层（TsResourceWriter / JsonResourceWriter）遇到这类文件本来就会优雅回退到剪贴板、不崩溃，
+ * 因此不应因单个资源写不进就把整批 t() 组件改写一起回滚。
  *
  * `isValid == false` 时必须**零写入**（调用方在写出前 abort），避免留下
  * "部分文件已改、其余未改"的半完成状态（PROJECT_ANALYSIS §16）。
  */
 data class PreflightResult(val issues: List<PreflightIssue>) {
-    val isValid: Boolean get() = issues.isEmpty()
+    val isValid: Boolean get() = issues.none { it.blocking }
 }
 
 /**
@@ -301,14 +307,16 @@ object ProjectPreflightValidator {
                 } catch (_: Throwable) {
                     issues += PreflightIssue(
                         "RESOURCE_NOT_PARSEABLE",
-                        "ResourcePlan[target=${plan.targetPath}] JSON 无法解析"
+                        "ResourcePlan[target=${plan.targetPath}] JSON 无法解析",
+                        blocking = false,
                     )
                     return
                 }
                 if (!root.isJsonObject) {
                     issues += PreflightIssue(
                         "RESOURCE_OBJECT_MISSING",
-                        "ResourcePlan[target=${plan.targetPath}] JSON 顶层不是对象，无法作为翻译资源结构"
+                        "ResourcePlan[target=${plan.targetPath}] JSON 顶层不是对象，无法作为翻译资源结构",
+                        blocking = false,
                     )
                     return
                 }
@@ -319,7 +327,8 @@ object ProjectPreflightValidator {
                 if (info == null) {
                     issues += PreflightIssue(
                         "RESOURCE_OBJECT_MISSING",
-                        "ResourcePlan[target=${plan.targetPath}] 找不到可导出的 TS/JS 对象字面量（需要 export default / export const / module.exports）"
+                        "ResourcePlan[target=${plan.targetPath}] 找不到可导出的 TS/JS 对象字面量（需要 export default / export const / module.exports）",
+                        blocking = false,
                     )
                     return
                 }
@@ -338,7 +347,8 @@ object ProjectPreflightValidator {
             if (k in plan.dropKeys) {
                 issues += PreflightIssue(
                     "RESOURCE_ENTRY_AND_DROP_CONFLICT",
-                    "ResourcePlan[target=${plan.targetPath}]：key \"$k\" 同时出现在 entries 与 dropKeys，合并语义矛盾"
+                    "ResourcePlan[target=${plan.targetPath}]：key \"$k\" 同时出现在 entries 与 dropKeys，合并语义矛盾",
+                    blocking = false,
                 )
             }
         }
@@ -352,7 +362,8 @@ object ProjectPreflightValidator {
                 if (child is Map<*, *>) { cur = child; continue }
                 issues += PreflightIssue(
                     "RESOURCE_NESTED_PATH_CONFLICT",
-                    "ResourcePlan[target=${plan.targetPath}]：嵌套 key \"$k\" 的祖先段 \"$seg\" 现为${if (child is List<*>) "数组" else "标量"}，合并后会退化为字面量点式 key"
+                    "ResourcePlan[target=${plan.targetPath}]：嵌套 key \"$k\" 的祖先段 \"$seg\" 现为${if (child is List<*>) "数组" else "标量"}，合并后会退化为字面量点式 key",
+                    blocking = false,
                 )
                 break
             }
