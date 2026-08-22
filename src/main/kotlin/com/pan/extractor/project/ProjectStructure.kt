@@ -1,5 +1,6 @@
 package com.pan.extractor.project
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.locate.I18nInstanceLocator
 import com.pan.extractor.bootstrap.I18nBootstrapSupport
 import com.intellij.lang.ecmascript6.psi.ES6ExportDefaultAssignment
@@ -169,7 +170,7 @@ object ProjectStructure {
                         hasAngular = deps.contains(NGX_TRANSLATE_KEY_RE) || deps.contains(ANGULAR_CORE_KEY_RE),
                     )
                 } catch (e: Exception) {
-                    LOG.warn("ProjectStructure: 读取 package.json 依赖失败，按未解析处理", e)
+                    PluginLogBuffer.warn(LOG,"ProjectStructure: 读取 package.json 依赖失败，按未解析处理", e)
                     sixFalse
                 }
             }
@@ -551,7 +552,7 @@ object ProjectStructure {
                     val hasVue = deps.contains(VUE_KEY_RE)
                     return hasReact && !hasVue
                 } catch (e: Exception) {
-                    LOG.warn("ProjectStructure: hasReactDependency 读取 package.json 失败，返回 false", e)
+                    PluginLogBuffer.warn(LOG,"ProjectStructure: hasReactDependency 读取 package.json 失败，返回 false", e)
                     return false
                 }
             }
@@ -585,7 +586,7 @@ object ProjectStructure {
         val text = try {
             String(pkg.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("ProjectStructure: 读取 package.json 失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"ProjectStructure: 读取 package.json 失败，返回 null", e)
             return null
         }
         val (hasReact, hasVue, hasSolid, _) = readPackageJsonDependencies(currentPsiFile)
@@ -637,7 +638,7 @@ object ProjectStructure {
                 val children = try {
                     vf.children
                 } catch (e: Exception) {
-                    LOG.warn("ProjectStructure: 读取子目录 children 失败，跳过", e)
+                    PluginLogBuffer.warn(LOG,"ProjectStructure: 读取子目录 children 失败，跳过", e)
                     continue
                 }
                 for (child in children) {

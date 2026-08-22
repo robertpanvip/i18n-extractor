@@ -1,5 +1,6 @@
 package com.pan.extractor.resource
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.Util
 import com.pan.extractor.staticparser.StaticObjectParser
@@ -578,7 +579,7 @@ object TsObjectMerger {
                 val root = try {
                     JsonParser.parseString(targetText)
                 } catch (e: Exception) {
-                    LOG.warn("TsObjectMerger: 解析 target JSON 失败，返回 null", e)
+                    PluginLogBuffer.warn(LOG,"TsObjectMerger: 解析 target JSON 失败，返回 null", e)
                     return null
                 }
                 val existing = JsonWriter.jsonElementToNestedMap(if (root.isJsonObject) root else JsonParser.parseString("{}"))

@@ -1,5 +1,6 @@
 package com.pan.extractor.locate
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
@@ -320,7 +321,7 @@ object EntryFileLocator {
         val text = try {
             String(initFile.contentsToByteArray(), Charsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("EntryFileLocator: 读取 i18n 初始化文件失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"EntryFileLocator: 读取 i18n 初始化文件失败，返回 null", e)
             return null
         }
         return if (text.contains("createI18n(") || text.contains("createI18n (")) {

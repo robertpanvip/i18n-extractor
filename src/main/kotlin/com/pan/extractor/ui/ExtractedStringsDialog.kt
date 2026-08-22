@@ -1,5 +1,6 @@
 package com.pan.extractor.ui
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.strategy.VueI18nStrategy
@@ -172,7 +173,7 @@ class ExtractedStringsDialog(
                 selectedEntryFile = try {
                     EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
                 } catch (e: Throwable) {
-                    LOG.warn("ExtractedStringsDialog: 定位中文入口文件失败，回退为空", e)
+                    PluginLogBuffer.warn(LOG,"ExtractedStringsDialog: 定位中文入口文件失败，回退为空", e)
                     null
                 }
             }
@@ -185,7 +186,7 @@ class ExtractedStringsDialog(
         bootstrapMissing = try {
             ProjectStructure.detectMissingI18nBootstrap(psiFile)
         } catch (e: Throwable) {
-            LOG.warn("ExtractedStringsDialog: 检测 i18n 引导缺失状态失败，回退为 null", e)
+            PluginLogBuffer.warn(LOG,"ExtractedStringsDialog: 检测 i18n 引导缺失状态失败，回退为 null", e)
             null
         }
     }
@@ -283,7 +284,7 @@ class ExtractedStringsDialog(
             candidate = try {
                 EntryFileLocator.findChineseLocaleEntryFile(project, contextPsiFile)
             } catch (e: Throwable) {
-                LOG.warn("ExtractedStringsDialog: 重新定位中文入口文件失败，回退为空", e)
+                PluginLogBuffer.warn(LOG,"ExtractedStringsDialog: 重新定位中文入口文件失败，回退为空", e)
                 null
             }
         }
@@ -356,7 +357,7 @@ class ExtractedStringsDialog(
                 createdEntry = I18nBootstrap.maybeApply(project, psiFile, missing)
             }
         } catch (e: Throwable) {
-            LOG.warn("ExtractedStringsDialog: 执行 i18n 引导失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"ExtractedStringsDialog: 执行 i18n 引导失败，返回 null", e)
             return null
         }
         bootstrapPerformed = true
@@ -383,7 +384,7 @@ class ExtractedStringsDialog(
                     bootstrapEntry = I18nBootstrap.maybeApply(project, contextPsiFile!!, bootstrapMissing!!)
                 }
             } catch (t: Throwable) {
-                LOG.warn("ExtractedStringsDialog: 写入文件前自动初始化失败，回退为 null", t)
+                PluginLogBuffer.warn(LOG,"ExtractedStringsDialog: 写入文件前自动初始化失败，回退为 null", t)
                 bootstrapEntry = null
             }
         }

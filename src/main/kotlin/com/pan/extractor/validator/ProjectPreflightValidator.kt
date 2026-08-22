@@ -1,5 +1,6 @@
 package com.pan.extractor.validator
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.model.ExtractionSite
 import com.pan.extractor.planner.ImportPlan
 import com.pan.extractor.planner.ResourcePlan
@@ -331,7 +332,7 @@ object ProjectPreflightValidator {
                 if (info == null) {
                     // 【诊断】无法导出的入口多半是"还未初始化的空文件/占位/re-export"。
                     // 把准确目标与内容头部打出来，便于定位"为什么写不进 / 是不是没初始化"。
-                    LOG.warn(
+                    PluginLogBuffer.warn(LOG,
                         "RESOURCE_OBJECT_MISSING 诊断: target=${plan.targetPath} len=${text.length} head=${text.take(300).replace('\n', ' ')}"
                     )
                     issues += PreflightIssue(

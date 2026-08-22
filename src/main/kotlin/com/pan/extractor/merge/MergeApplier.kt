@@ -1,5 +1,6 @@
 package com.pan.extractor.merge
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.project.I18nPsiTools
 import com.pan.extractor.core.I18nProcessor
@@ -271,7 +272,7 @@ object MergeApplier {
             try {
                 rootPsi.replace(replacement)
             } catch (e: Throwable) {
-                LOG.warn("MergeApplier: 替换源码片段失败，跳过该站点应用", e)
+                PluginLogBuffer.warn(LOG,"MergeApplier: 替换源码片段失败，跳过该站点应用", e)
                 // P0：替换失败时不再登记 finalExtracted —— 否则源码未改，但资源文件仍为它写入 key，
                 // 造成源码/资源不一致、运行时查不到翻译。失败即视为该站点未应用。
                 return

@@ -1,5 +1,6 @@
 package com.pan.extractor.action
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.project.Util
 import com.pan.extractor.locate.EntryFileLocator
@@ -95,9 +96,9 @@ class AllI18nExtractorAction : AnAction() {
                 }
             }
         } catch (e: JsonParseException) {
-            LOG.warn("tsconfig.json 格式错误: ${e.message}", e)
+            PluginLogBuffer.warn(LOG,"tsconfig.json 格式错误: ${e.message}", e)
         } catch (e: Exception) {
-            LOG.warn("读取或解析 tsconfig.json 失败: ${e.message}", e)
+            PluginLogBuffer.warn(LOG,"读取或解析 tsconfig.json 失败: ${e.message}", e)
         }
 
         return emptyList()
@@ -161,16 +162,16 @@ class AllI18nExtractorAction : AnAction() {
         val text = try {
             String(cfg.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("AllI18nExtractorAction: 读取 tsconfig ${cfg.path} 失败，跳过", e)
+            PluginLogBuffer.warn(LOG,"AllI18nExtractorAction: 读取 tsconfig ${cfg.path} 失败，跳过", e)
             return null
         }
         return try {
             Gson().fromJson(text, JsonObject::class.java)
         } catch (e: JsonParseException) {
-            LOG.warn("AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
+            PluginLogBuffer.warn(LOG,"AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
             null
         } catch (e: Exception) {
-            LOG.warn("AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
+            PluginLogBuffer.warn(LOG,"AllI18nExtractorAction: 解析 tsconfig ${cfg.path} 失败，跳过", e)
             null
         }
     }
@@ -332,7 +333,7 @@ class AllI18nExtractorAction : AnAction() {
             override fun onSuccess() {
                 val t = err
                 if (t != null) {
-                    LOG.error("i18n 全项目扫描/分析阶段异常：${t.message?.take(120)}", t)
+                    PluginLogBuffer.error(LOG,"i18n 全项目扫描/分析阶段异常：${t.message?.take(120)}", t)
                     Orchestrator.notifyNothingExtracted(
                         project,
                         I18nExtractorBundle.message("action.progress.batch.scope")

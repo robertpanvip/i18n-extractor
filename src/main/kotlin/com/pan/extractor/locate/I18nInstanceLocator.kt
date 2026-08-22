@@ -1,5 +1,6 @@
 package com.pan.extractor.locate
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.ui.*
 
@@ -180,7 +181,7 @@ object I18nInstanceLocator {
         val text = try {
             String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("I18nInstanceLocator: 读取文件内容失败，判定无 createI18n 调用", e)
+            PluginLogBuffer.warn(LOG,"I18nInstanceLocator: 读取文件内容失败，判定无 createI18n 调用", e)
             return false
         }
         val code = stripJsComments(text)
@@ -372,7 +373,7 @@ object I18nInstanceLocator {
         val content = try {
             String(i18nVFile.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("I18nInstanceLocator: 读取 i18n 文件内容失败，按非默认导出处理", e)
+            PluginLogBuffer.warn(LOG,"I18nInstanceLocator: 读取 i18n 文件内容失败，按非默认导出处理", e)
             return false
         }
         val code = stripJsComments(content)

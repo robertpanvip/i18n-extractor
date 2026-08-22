@@ -1,5 +1,6 @@
 package com.pan.extractor.resource
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
@@ -65,7 +66,7 @@ object JsonWriter {
         val content = try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("JsonWriter: 读取翻译文件内容失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"JsonWriter: 读取翻译文件内容失败，返回 null", e)
             return null
         }
         val fmt = detectJsonWriteFormat(content)
@@ -73,7 +74,7 @@ object JsonWriter {
         val rootJson: JsonElement = try {
             JsonParser.parseString(body)
         } catch (e: Exception) {
-            LOG.warn("JsonWriter: JSON 解析失败，回退覆盖写回", e)
+            PluginLogBuffer.warn(LOG,"JsonWriter: JSON 解析失败，回退覆盖写回", e)
             // JSON 解析失败 → 兜底：把新 JSON 格式化返回（整个文件被新值覆盖）
             return applyJsonWriteFormat(prettyGson.toJson(newFlatJson), fmt)
         }

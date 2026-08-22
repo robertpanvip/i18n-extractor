@@ -1,5 +1,6 @@
 package com.pan.extractor.strategy
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.core.CollectionState
@@ -173,7 +174,7 @@ object SolidI18nStrategy : I18nFramework {
         val initText = try {
             String(initFile.contentsToByteArray(), Charsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("SolidI18nStrategy: 读取 i18n 初始化文件失败，回退为空字符串", e)
+            PluginLogBuffer.warn(LOG,"SolidI18nStrategy: 读取 i18n 初始化文件失败，回退为空字符串", e)
             ""
         }
         return when {

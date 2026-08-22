@@ -1,5 +1,6 @@
 package com.pan.extractor.bootstrap
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.strategy.I18nFramework
 import com.pan.extractor.strategy.VueI18nStrategy
 import com.pan.extractor.strategy.ReactI18nextStrategy
@@ -119,7 +120,7 @@ object I18nBootstrapSupport {
         val root = try {
             JsonParser.parseString(packageJsonText)
         } catch (e: Exception) {
-            LOG.warn("I18nBootstrapSupport: 解析 package.json 失败，返回原文", e)
+            PluginLogBuffer.warn(LOG,"I18nBootstrapSupport: 解析 package.json 失败，返回原文", e)
             return packageJsonText
         }
         if (!root.isJsonObject) return packageJsonText

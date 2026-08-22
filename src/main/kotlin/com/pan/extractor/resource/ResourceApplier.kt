@@ -1,5 +1,6 @@
 package com.pan.extractor.resource
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -64,7 +65,7 @@ object ResourceApplier {
                 else -> null
             }
         } catch (t: Throwable) {
-            LOG.warn("ResourceApplier: 执行入口资源文件写回失败，返回 null", t)
+            PluginLogBuffer.warn(LOG,"ResourceApplier: 执行入口资源文件写回失败，返回 null", t)
             null
         }
     }

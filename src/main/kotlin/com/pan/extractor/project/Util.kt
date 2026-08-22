@@ -1,5 +1,6 @@
 package com.pan.extractor.project
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.ui.*
 
@@ -173,7 +174,7 @@ object Util {
                 String(vf.contentsToByteArray(), StandardCharsets.UTF_8)
             }
         } catch (e: Exception) {
-            LOG.warn("Util: 读取虚拟文件文本失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"Util: 读取虚拟文件文本失败，返回 null", e)
             null
         }
     }

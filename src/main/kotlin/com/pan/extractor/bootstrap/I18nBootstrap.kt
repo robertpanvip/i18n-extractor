@@ -1,5 +1,6 @@
 package com.pan.extractor.bootstrap
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.ProjectStructure
 import com.pan.extractor.locate.I18nInstanceLocator
@@ -44,7 +45,7 @@ object I18nBootstrap {
             val text = try {
                 String(pkg.contentsToByteArray(), Charsets.UTF_8)
             } catch (t: Throwable) {
-                LOG.warn("I18nBootstrap: 读取 package.json 失败", t)
+                PluginLogBuffer.warn(LOG,"I18nBootstrap: 读取 package.json 失败", t)
                 null
             }
             if (text != null) {
@@ -64,7 +65,7 @@ object I18nBootstrap {
         val localesDir = try {
             VfsUtil.createDirectoryIfMissing(baseDir, "locales")
         } catch (t: Throwable) {
-            LOG.warn("I18nBootstrap: 创建 locales 目录失败", t)
+            PluginLogBuffer.warn(LOG,"I18nBootstrap: 创建 locales 目录失败", t)
             null
         }
         if (localesDir != null) {
@@ -84,7 +85,7 @@ object I18nBootstrap {
                         }
                     }
                 } catch (t: Throwable) {
-                    LOG.warn("I18nBootstrap: 创建语言包入口文件 $entryFileName 失败", t)
+                    PluginLogBuffer.warn(LOG,"I18nBootstrap: 创建语言包入口文件 $entryFileName 失败", t)
                     entryVf = null
                 }
             }
@@ -114,7 +115,7 @@ object I18nBootstrap {
                 }
             } catch (t: Throwable) {
                 // 创建失败不阻断主流程
-                LOG.warn("I18nBootstrap: 创建初始化文件 i18n.ts 失败", t)
+                PluginLogBuffer.warn(LOG,"I18nBootstrap: 创建初始化文件 i18n.ts 失败", t)
             }
         }
         return entryVf
@@ -130,7 +131,7 @@ object I18nBootstrap {
                 val text = try {
                     String(init.contentsToByteArray(), Charsets.UTF_8)
                 } catch (t: Throwable) {
-                    LOG.warn("I18nBootstrap: 读取默认语言所用初始化文件失败", t)
+                    PluginLogBuffer.warn(LOG,"I18nBootstrap: 读取默认语言所用初始化文件失败", t)
                     null
                 }
                 if (text != null) {

@@ -1,5 +1,6 @@
 package com.pan.extractor.orchestrator
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.project.Util
 import com.pan.extractor.core.I18nProcessor
@@ -11,6 +12,7 @@ import com.pan.extractor.*
 import com.pan.extractor.resource.ResourceApplier
 import com.pan.extractor.ui.*
 
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
@@ -217,7 +219,7 @@ object I18nExtractionOrchestrator {
                 preflightPlan.preflightOrThrow()
             }
         } catch (t: Throwable) {
-            LOG.warn("I18nExtractionOrchestrator: Apply 前统一 preflight 失败，已中止（零写入）。${t.message?.take(120)}", t)
+            PluginLogBuffer.warn(LOG, "I18nExtractionOrchestrator: Apply 前统一 preflight 失败，已中止（零写入）。${t.message?.take(120)}", t)
             throw t
         }
 
@@ -316,7 +318,7 @@ object I18nExtractionOrchestrator {
                 indicator.checkCanceled()
             } catch (e: java.util.concurrent.ExecutionException) {
                 val cause = e.cause ?: e
-                LOG.warn(
+                PluginLogBuffer.warn(LOG,
                     "I18nExtractionOrchestrator: 原子写入 (WriteCommandAction) 异常：${cause.message?.take(120)}",
                     cause
                 )
@@ -369,7 +371,7 @@ object I18nExtractionOrchestrator {
                         entryFileName = entryVf.name,
                     )
                 } catch (t: Throwable) {
-                    LOG.warn("I18nExtractionOrchestrator: 写回入口文件失败，回退到剪贴板。${t.message?.take(60)}", t)
+                    PluginLogBuffer.warn(LOG, "I18nExtractionOrchestrator: 写回入口文件失败，回退到剪贴板。${t.message?.take(60)}", t)
                     val content = Util.getJsonContent(jsonPretty)
                     CopyPasteManager.getInstance().setContents(StringSelection(content))
                     return OutputResult(
@@ -452,7 +454,7 @@ object I18nExtractionOrchestrator {
      * 避免出现「点了确定完全没反应」。同时把堆栈写入 LOG 便于后续定位。
      */
     fun notifyInternalError(project: Project, title: String, throwable: Throwable) {
-        LOG.warn("I18n Extractor 内部异常 —— $title", throwable)
+        PluginLogBuffer.warn(LOG, "I18n Extractor 内部异常 —— $title", throwable)
         val notificationGroup = NotificationGroupManager.getInstance()
             .getNotificationGroup("I18nExtractorNotification")
         val msg = buildString {
@@ -461,13 +463,18 @@ object I18nExtractionOrchestrator {
             if (!m.isNullOrBlank()) append(": ").append(m.take(140))
             append(I18nExtractorBundle.message("orchestrator.notify.internal.detail"))
         }
-        Notifications.Bus.notify(
-            notificationGroup.createNotification(
-                I18nExtractorBundle.message("orchestrator.notify.internal.title"),
-                msg,
-                NotificationType.ERROR
-            ),
-            project
+        val notification = notificationGroup.createNotification(
+            I18nExtractorBundle.message("orchestrator.notify.internal.title"),
+            msg,
+            NotificationType.ERROR
         )
+        notification.addAction(NotificationAction.create(
+            I18nExtractorBundle.message("notification.copy.full.log")
+        ) { _, _ ->
+            CopyPasteManager.getInstance().setContents(
+                StringSelection(PluginLogBuffer.dump())
+            )
+        })
+        Notifications.Bus.notify(notification, project)
     }
 }

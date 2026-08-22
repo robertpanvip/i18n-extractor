@@ -1,5 +1,6 @@
 package com.pan.extractor.resource
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -41,7 +42,7 @@ object TsResourceWriter {
         val rawText = if (psiFile != null) psiFile.text else try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {
-            LOG.warn("TsResourceWriter: 读取翻译文件内容失败，返回 null", e)
+            PluginLogBuffer.warn(LOG,"TsResourceWriter: 读取翻译文件内容失败，返回 null", e)
             return null
         }
         // P0：TS 写回需保持原文件的换行风格（LF / CRLF）。先把原始文本归一化为 LF 处理
@@ -177,7 +178,7 @@ object TsResourceWriter {
             entryVf.setBinaryContent(bytes, 0L, entryVf.length, null)
             true
         } catch (e: Exception) {
-            LOG.warn("TsResourceWriter: 写回翻译文件失败", e)
+            PluginLogBuffer.warn(LOG,"TsResourceWriter: 写回翻译文件失败", e)
             false
         }
     }

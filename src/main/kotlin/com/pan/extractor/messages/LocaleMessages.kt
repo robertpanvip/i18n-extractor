@@ -1,5 +1,6 @@
 package com.pan.extractor.messages
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.project.Util
 import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.lang.LanguageRegistry
@@ -242,7 +243,7 @@ object LocaleMessages {
             flattenNested(root.asJsonObject.entrySet().asSequence().map { it.key to it.value }.toMap(), "", out)
             out
         } catch (e: Exception) {
-            LOG.warn("LocaleMessages: 解析 JSON 翻译资源失败，返回空映射", e)
+            PluginLogBuffer.warn(LOG,"LocaleMessages: 解析 JSON 翻译资源失败，返回空映射", e)
             emptyMap()
         }
     }

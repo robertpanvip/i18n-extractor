@@ -1,5 +1,6 @@
 package com.pan.extractor.ui
 
+import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.strategy.I18nFrameworkRegistry
 import com.pan.extractor.messages.LocaleMessages
 import com.pan.extractor.*
@@ -252,7 +253,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         // 避免队列从此永久被跳过、inlay 不再显示。
         val since = busySinceMillis.get()
         if (since != 0L && System.currentTimeMillis() - since > BUSY_WATCHDOG_MS) {
-            LOG.warn("I18nFoldToggleInlay: inlayBusy 超过 ${BUSY_WATCHDOG_MS}ms 未释放，强制复位")
+            PluginLogBuffer.warn(LOG,"I18nFoldToggleInlay: inlayBusy 超过 ${BUSY_WATCHDOG_MS}ms 未释放，强制复位")
             inlayBusy.set(false)
             busySinceMillis.set(0L)
         }
@@ -290,7 +291,7 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
             .submit(AppExecutorUtil.getAppExecutorService())
             .onSuccess { finishInlayTask(project) }
             .onError(java.util.function.Consumer<Throwable> { t ->
-                LOG.warn("Inlay 处理异常: ${task.file.name}", t)
+                PluginLogBuffer.warn(LOG,"Inlay 处理异常: ${task.file.name}", t)
                 finishInlayTask(project)
             })
     }
