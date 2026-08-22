@@ -33,14 +33,27 @@ class I18nBootstrapSupportTest {
     }
 
     @Test
-    fun reactProjectWithI18nextNoBootstrap() {
+    fun reactProjectWithI18nextStillFlagsMissingInitFile() {
+        val missing = I18nBootstrapSupport.detectMissing(
+            packageJsonText = """{ "dependencies": { "react": "^18", "i18next": "^23", "react-i18next": "^13" } }""",
+            hasInitFile = false,
+            hasReactDep = true,
+            hasVueDep = false,
+        )
+        assertNotNull("已装 i18next 但未初始化，仍应命中以提示创建初始化文件", missing)
+        assertTrue("依赖已装则无需再补依赖", missing!!.depsToAdd.isEmpty())
+    }
+
+    @Test
+    fun reactProjectPartiallyInstalledOnlyAddsMissingDep() {
         val missing = I18nBootstrapSupport.detectMissing(
             packageJsonText = """{ "dependencies": { "react": "^18", "i18next": "^23" } }""",
             hasInitFile = false,
             hasReactDep = true,
             hasVueDep = false,
         )
-        assertNull("已装 i18next 不应命中", missing)
+        assertNotNull(missing)
+        assertEquals("只应补缺失的 react-i18next", listOf("react-i18next"), missing!!.depsToAdd)
     }
 
     @Test
@@ -68,14 +81,15 @@ class I18nBootstrapSupportTest {
     }
 
     @Test
-    fun vueProjectWithVueI18nNoBootstrap() {
+    fun vueProjectWithVueI18nStillFlagsMissingInitFile() {
         val missing = I18nBootstrapSupport.detectMissing(
             packageJsonText = """{ "dependencies": { "vue": "^3", "vue-i18n": "^9" } }""",
             hasInitFile = false,
             hasReactDep = false,
             hasVueDep = true,
         )
-        assertNull("已装 vue-i18n 不应命中", missing)
+        assertNotNull("已装 vue-i18n 但未初始化，仍应命中以提示创建初始化文件", missing)
+        assertTrue("依赖已装则无需再补依赖", missing!!.depsToAdd.isEmpty())
     }
 
     @Test
@@ -106,7 +120,7 @@ class I18nBootstrapSupportTest {
     }
 
     @Test
-    fun solidProjectWithI18nDepNoBootstrap() {
+    fun solidProjectWithI18nDepStillFlagsMissingInitFile() {
         val missing = I18nBootstrapSupport.detectMissing(
             packageJsonText = """{ "dependencies": { "solid-js": "^1.8", "@solid-primitives/i18n": "^2.0" } }""",
             hasInitFile = false,
@@ -114,7 +128,8 @@ class I18nBootstrapSupportTest {
             hasVueDep = false,
             hasSolidDep = true,
         )
-        assertNull("已装 @solid-primitives/i18n 不应命中", missing)
+        assertNotNull("已装 @solid-primitives/i18n 但未初始化，仍应命中以提示创建初始化文件", missing)
+        assertTrue("依赖已装则无需再补依赖", missing!!.depsToAdd.isEmpty())
     }
 
     @Test

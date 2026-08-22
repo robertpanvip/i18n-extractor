@@ -11,8 +11,7 @@ import com.intellij.openapi.diagnostic.Logger
 
 /**
  * i18n 引导（Bootstrap）支持：
- * 当项目是 React/Vue 但既没安装对应多语言依赖、又没初始化 i18n 时，
- * 在最后确认阶段弹框提示用户，确认后自动：
+ * 当项目是 React/Vue 且尚未初始化 i18n 时，在最后确认阶段弹框提示用户，确认后自动：
  *   1. 在 package.json 添加依赖（React → i18next + react-i18next；Vue → vue-i18n）
  *   2. 自动创建 i18n 初始化文件（React → src/i18n.ts；Vue → src/i18n.ts）
  *
@@ -28,7 +27,7 @@ object I18nBootstrapSupport {
 
     private val LOG = Logger.getInstance(I18nBootstrapSupport::class.java)
 
-    /** 检测结果：缺 bootstrap 时描述需要补什么。 */
+    /** 检测结果：缺 bootstrap（未初始化）时描述需要补什么。 */
     data class MissingBootstrap(
         val framework: I18nFramework,
         val depsToAdd: List<String>,
@@ -38,7 +37,12 @@ object I18nBootstrapSupport {
     }
 
     /**
-     * 检测项目是否"缺 i18n 依赖且未初始化"。
+     * 检测项目是否"缺 i18n 依赖或未初始化"。
+     *
+     * 「未初始化」（[hasInitFile] 为 false）是触发提示的前提；依赖是否缺失仅决定
+     * [MissingBootstrap.depsToAdd] 是否为空：
+     *   - 依赖已安装 → 仍返回 [MissingBootstrap]（空 [depsToAdd]），仅提示并创建初始化文件；
+     *   - 依赖缺失 → 返回 [MissingBootstrap]，提示补依赖 + 创建初始化文件。
      *
      * 框架判定与依赖列表均来自 [I18nFramework] 策略（Vue 优先，Solid 次之，React 最后）：
      *   - hasVueDep   → [VueI18nStrategy]（bootstrapDeps = vue-i18n）
@@ -52,7 +56,7 @@ object I18nBootstrapSupport {
      * @param hasVueDep       项目是否依赖 vue
      * @param hasSolidDep     项目是否依赖 solid-js
      *
-     * @return 命中框架则返回缺的依赖；否则 null
+     * @return 命中框架且未初始化则返回需补的依赖；已初始化或非 React/Vue/Solid 时返回 null
      */
     fun detectMissing(
         packageJsonText: String?,
@@ -70,11 +74,15 @@ object I18nBootstrapSupport {
         }
         val deps = strategy.bootstrapDeps
         if (deps.isEmpty()) return null
-        // 依赖已安装则无需引导
-        if (packageJsonText != null && deps.any { dep ->
+        // 只计算真正缺失的依赖；依赖已装则 depsToAdd 为空——项目仍需初始化文件，仍应提示。
+        val missingDeps = if (packageJsonText != null) {
+            deps.filterNot { dep ->
                 Regex(""""${Regex.escape(dep)}"\s*:""").containsMatchIn(packageJsonText)
-            }) return null
-        return MissingBootstrap(strategy, deps)
+            }
+        } else {
+            deps
+        }
+        return MissingBootstrap(strategy, missingDeps)
     }
 
     /**

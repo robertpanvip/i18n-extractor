@@ -254,8 +254,10 @@ class ExtractedStringsDialog(
                 else -> missing.framework.id
             }
             val chk = JCheckBox(
-                "<html>项目未安装/初始化多语言依赖（$frameworkLabel）。勾选后自动：<br>" +
-                    "&nbsp;&nbsp;• 在 package.json 添加依赖 ${missing.dependencyLabel}<br>" +
+                "<html>项目尚未初始化多语言（$frameworkLabel）。勾选后自动：<br>" +
+                    (if (missing.depsToAdd.isNotEmpty())
+                        "&nbsp;&nbsp;• 在 package.json 添加依赖 ${missing.dependencyLabel}<br>"
+                    else "") +
                     "&nbsp;&nbsp;• 创建 i18n 初始化文件（src/i18n.ts）与中文语言包入口文件（src/locales/&lt;locale&gt;.ts）</html>"
             )
             chk.isSelected = true
