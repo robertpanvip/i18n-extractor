@@ -4,6 +4,7 @@ import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.strategy.I18nFramework
 import com.pan.extractor.strategy.VueI18nStrategy
 import com.pan.extractor.strategy.ReactI18nextStrategy
+import com.pan.extractor.strategy.ReactIntlStrategy
 import com.pan.extractor.strategy.SolidI18nStrategy
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
@@ -70,7 +71,10 @@ object I18nBootstrapSupport {
         val strategy = when {
             hasVueDep -> VueI18nStrategy
             hasSolidDep -> SolidI18nStrategy
-            hasReactDep -> ReactI18nextStrategy
+            // React：按用户设置选择 react-i18next 或 react-intl（决定初始化文件与补依赖）
+            hasReactDep -> if (com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary()
+                    == com.pan.extractor.ui.ReactLibrary.REACT_INTL
+                ) ReactIntlStrategy else ReactI18nextStrategy
             else -> return null
         }
         val deps = strategy.bootstrapDeps

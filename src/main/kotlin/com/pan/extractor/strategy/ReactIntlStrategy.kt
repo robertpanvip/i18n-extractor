@@ -76,9 +76,24 @@ object ReactIntlStrategy : I18nFramework {
     }
 
     override fun buildInitFile(defaultLocale: String, entryImport: String?): String {
-        // react-intl 需要 IntlProvider；缺依赖引导暂复用入口说明（不做真实 Provider 骨架）。
-        return """// react-intl 项目：请在应用根节点用 <IntlProvider locale="$defaultLocale" messages={zh}> 包裹。
-""".trimIndent()
+        val importLine = if (!entryImport.isNullOrBlank()) {
+            "import zh from './$entryImport';\n"
+        } else ""
+        val messagesLine = if (!entryImport.isNullOrBlank()) "  messages: zh,\n" else ""
+        // react-intl 官方命令式 API：createIntl 返回 intl 实例（含 formatMessage 等方法），
+        // 应用根节点用 <RawIntlProvider value={intl}> 包裹后，组件内 useIntl() 即可取到同一实例。
+        // 文件为 .ts 不含 JSX，故不生成 <IntlProvider> 组件而是导出 intl 实例。
+        return """
+            |import { createIntl, createIntlCache } from 'react-intl';
+            |$importLine
+            |const cache = createIntlCache();
+            |
+            |const intl = createIntl({
+            |  locale: '$defaultLocale',
+            |$messagesLine}, cache);
+            |
+            |export default intl;
+        """.trimMargin() + "\n"
     }
 
     /**
