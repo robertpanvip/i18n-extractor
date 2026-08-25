@@ -291,19 +291,30 @@ object CommonPrefixSuffixFactorizer {
      * 【性能】不命中阈值时全程只用 charAt 比字符、不产生任何 substring 分配；只有确定
      * 总长度达标的配对才物化前缀/后缀字符串。这对桶内大量"只共享 1 个首字符"的无意义配对，
      * 可把 O(k^2) 双重循环的真实开销降低一个数量级（单页转换 20s+ 的热点即在此）。
+     *
+     * 【React 占位符保护】当扫描到 `{{n}}` 模式（React i18n 插值占位符）时，立即停止
+     * 前后缀扫描，使整个 `{{n}}` 保留在差异段中。否则 `{{` 会被计入前缀、`}}` 计入后缀，
+     * 导致骨架包含 `{{{N0}}}`，替换后产生 `{{{{0}}}}` 四重花括号 Bug。
      */
     private fun longestCommonAffix(a: String, b: String, minAffix: Int): Triple<String, String, String>? {
         if (a === b) return null
-        // ① 纯 char 快速扫描：公共前缀长度
+        // ① 纯 char 快速扫描：公共前缀长度（遇到 React 占位符 `{{n}}` 立即停止）
         val maxLen = minOf(a.length, b.length)
         var pLen = 0
-        while (pLen < maxLen && a[pLen] == b[pLen]) pLen++
+        while (pLen < maxLen && a[pLen] == b[pLen]) {
+            if (isReactPlaceholderStart(a, pLen)) break
+            pLen++
+        }
         if (pLen == maxLen) return null   // 其中之一是另一句的前缀/完全重合 → 无差异段
-        // ② 纯 char 快速扫描：公共后缀长度（不得与前述前缀重叠）
+        // ② 纯 char 快速扫描：公共后缀长度（遇到 React 占位符 `}}` 立即停止）
         var sLen = 0
         val aEnd = a.length - 1
         val bEnd = b.length - 1
-        while (pLen + sLen < maxLen && a[aEnd - sLen] == b[bEnd - sLen]) sLen++
+        while (pLen + sLen < maxLen && a[aEnd - sLen] == b[bEnd - sLen]) {
+            val pos = aEnd - sLen
+            if (isReactPlaceholderEnd(a, pos)) break
+            sLen++
+        }
         // ③ 阈值早筛：不满足约定合并长度（≥2 字）直接返回，避免物化字符串
         if (pLen < minAffix && sLen < minAffix) return null
         if (pLen + sLen < minAffix) return null
@@ -334,6 +345,31 @@ object CommonPrefixSuffixFactorizer {
         var i = 0
         while (i < maxLen && a[a.length - 1 - i] == b[b.length - 1 - i]) i++
         return if (i == 0) "" else a.substring(a.length - i)
+    }
+
+    // ── React {{n}} 占位符检测 ─────────────────────────────────
+    // 用于 longestCommonAffix 保护，防止 {{n}} 被拆入前后缀。
+
+    /**
+     * 检查 [pos] 是否为 React 插值占位符 [{{n}}] 的起始位置。
+     * 格式：`{`, `{`, [digit], `}`, `}` 共 5 字符。
+     */
+    private fun isReactPlaceholderStart(s: String, pos: Int): Boolean {
+        return pos + 4 < s.length &&
+                s[pos] == '{' && s[pos + 1] == '{' &&
+                s[pos + 2].isDigit() &&
+                s[pos + 3] == '}' && s[pos + 4] == '}'
+    }
+
+    /**
+     * 检查 [pos] 是否为 React 插值占位符 [{{n}}] 的结束位置（即最后一个 `}`）。
+     * 调用时 [pos] 是后缀扫描中正在比较的字符位置。
+     */
+    private fun isReactPlaceholderEnd(s: String, pos: Int): Boolean {
+        return pos >= 4 &&
+                s[pos] == '}' && s[pos - 1] == '}' &&
+                s[pos - 2].isDigit() &&
+                s[pos - 3] == '{' && s[pos - 4] == '{'
     }
 
     // ── ② 汉字≥2字 + 数字字面量抽取（MVP 单占位 {N0}；多数字同句先忽略，留 digitValues[0] 第一个命中的数字段） ──
