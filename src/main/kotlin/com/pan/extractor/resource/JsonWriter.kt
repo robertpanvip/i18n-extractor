@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.VirtualFile
 import java.nio.charset.StandardCharsets
 
@@ -29,6 +30,21 @@ object JsonWriter {
     private val LOG = Logger.getInstance(JsonWriter::class.java)
 
     private val prettyGson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
+
+    /**
+     * 把入口文件关联的 Document 强制 flush 到 VFS。
+     * 防止 bootstrap/其他最近一次写入还停在 Document 缓冲里，contentsToByteArray 读回旧空文件。
+     */
+    private fun flushDocumentToVfs(entryVf: VirtualFile) {
+        try {
+            val doc = FileDocumentManager.getInstance().getDocument(entryVf)
+            if (doc != null && FileDocumentManager.getInstance().isDocumentUnsaved(doc)) {
+                FileDocumentManager.getInstance().saveDocument(doc)
+            }
+        } catch (t: Throwable) {
+            LOG.debug("JsonWriter: flushDocumentToVfs 失败，忽略", t)
+        }
+    }
 
     /** 把平面 key → value 序列化为 JSON 文本。 */
     fun toJsonText(flatJson: Map<String, String>): String = prettyGson.toJson(flatJson)
@@ -63,6 +79,7 @@ object JsonWriter {
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet(),
     ): String? {
+        flushDocumentToVfs(entryVf)
         val content = try {
             String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
         } catch (e: Exception) {

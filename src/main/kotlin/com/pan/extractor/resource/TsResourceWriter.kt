@@ -25,10 +25,72 @@ object TsResourceWriter {
     private val LOG = Logger.getInstance(TsResourceWriter::class.java)
 
     /**
+     * 把入口文件关联的 Document 强制 flush 到 VFS。
+     *
+     * 典型场景：bootstrap 在弹框的 WriteCommandAction 里通过 Document.setText 写入了
+     * `export default {}`，但后台任务里另一个 WriteCommandAction 读取入口时，
+     * FileDocumentManager 可能还没把脏 Document flush 到 VirtualFile；此时
+     * `contentsToByteArray()` 仍拿到空文件，导致 `parseTsExportedObject` 失败。
+     */
+    private fun flushDocumentToVfs(entryVf: VirtualFile) {
+        try {
+            val doc = FileDocumentManager.getInstance().getDocument(entryVf)
+            if (doc != null && FileDocumentManager.getInstance().isDocumentUnsaved(doc)) {
+                FileDocumentManager.getInstance().saveDocument(doc)
+            }
+        } catch (t: Throwable) {
+            LOG.debug("TsResourceWriter: flushDocumentToVfs 失败，忽略", t)
+        }
+    }
+
+    /**
+     * 判定当前入口是否属于「简入口」：空文件、只含空白/注释、或 bootstrap 刚生成的
+     * `export default {\n};\n` 模板内容。这类文件即便 parse 失败（读到空壳内容/无 export），
+     * 也可直接整文件重建，避免回退剪贴板。
+     */
+    private fun isSimpleStubEntry(rawText: String): Boolean {
+        val head = rawText.trim()
+        if (head.isEmpty()) return true
+        // 仅含注释与空白
+        val stripped = head
+            .replace(Regex("""//[^\n]*"""), "")
+            .replace(Regex("""/\*[\s\S]*?\*/"""), "")
+            .trim()
+        if (stripped.isEmpty()) return true
+        // bootstrap 生成的空模板：`export default {}`（允许尾随分号/换行/空白差异）
+        if (stripped.replace(Regex("""\s+"""), "").let {
+                it == "exportdefault{}" || it == "exportdefault{};"
+            }) return true
+        return false
+    }
+
+    /**
+     * 简入口整文件重建：生成一份最小可用的 TS 语言包文件文本。
+     * 保持 export default 形式（与 bootstrap 模板一致）；缩进默认两空格。
+     */
+    private fun rebuildSimpleTsEntry(newFlatJson: Map<String, String>): String {
+        val pretty = com.google.gson.GsonBuilder().setPrettyPrinting()
+            .disableHtmlEscaping()
+            .create()
+        val jsonPretty = pretty.toJson(LinkedHashMap(newFlatJson))
+        // 把 JSON 对象体「缩进一层」包进 export default
+        val indentedBody = jsonPretty.lineSequence().joinToString("\n") { if (it.isBlank()) "" else "  $it" }
+        val body = indentedBody.trimEnd()
+        return if (body == "{}") {
+            "export default {\n};\n"
+        } else {
+            "export default {\n$body\n};\n"
+        }
+    }
+
+    /**
      * TS 入口文件写回：解析 export default/const 对象字面量 → 合并扁平 JSON → 重新生成对象体。
      * 迁移自 [com.pan.extractor.editor.TsFileEditor.regenerateTsFileWithNewJson]（实现体 1:1）。
      *
-     * @return 新文件文本；无法解析时返回 null（调用方回退剪贴板）。
+     * P0：解析前先强制把 Document 的脏数据 flush 到 VFS，避免读到 bootstrap 刚写入前的空壳。
+     * P0：若解析失败但入口是「简入口」（空文件/空模板/仅注释），则整文件重建，避免回退剪贴板。
+     *
+     * @return 新文件文本；无法解析且非简入口时返回 null（调用方回退剪贴板）。
      */
     fun regenerateTsFile(
         project: Project,
@@ -36,6 +98,7 @@ object TsResourceWriter {
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet(),
     ): String? {
+        flushDocumentToVfs(entryVf)
         val psiFile = ApplicationManager.getApplication().runReadAction<PsiFile?> {
             PsiManager.getInstance(project).findFile(entryVf)
         }
@@ -50,7 +113,17 @@ object TsResourceWriter {
         // 最后再把整个结果统一转回原风格，避免重写后 \r\n 与 \n 混用。
         val isCrlf = rawText.contains("\r\n")
         val text = if (isCrlf) rawText.replace("\r\n", "\n") else rawText
-        val info = StaticObjectParser.parseTsExportedObject(text) ?: return null
+        val info = StaticObjectParser.parseTsExportedObject(text)
+            ?: run {
+                // P0：简入口 parse 失败（典型：bootstrap 写入 Document 未刷新，VFS 仍是空壳）
+                // → 直接整文件重建为 export default <entries>，不再回退剪贴板。
+                if (isSimpleStubEntry(text)) {
+                    PluginLogBuffer.info(LOG, "TsResourceWriter: 入口文件 ${entryVf.name} 未解析到 export 对象，判定为简入口，按整文件重建兜底。")
+                    val rebuilt = rebuildSimpleTsEntry(newFlatJson)
+                    return if (isCrlf) rebuilt.replace("\n", "\r\n") else rebuilt
+                }
+                return null
+            }
         val merged = TsObjectMerger.mergeFlatIntoNested(info.staticKV, newFlatJson, dropExistingKeys)
         // objectRange 是 exclusive 区间 [objStart, objEnd)，endExclusive 指向闭合 } 的后一位。
         // 必须包含闭合 }，regenerateObjectLiteralBody 才能正确去掉外层大括号重写。
@@ -72,8 +145,14 @@ object TsResourceWriter {
         newFlatJson: Map<String, String>,
         dropExistingKeys: Set<String> = emptySet()
     ): List<Pair<VirtualFile, String>>? {
+        flushDocumentToVfs(entryVf)
         val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
-        val entryInfo = StaticObjectParser.parseTsExportedObject(entryText) ?: return null
+        val entryInfo = StaticObjectParser.parseTsExportedObject(entryText)
+            ?: run {
+                // spread 路由不存在或入口是简入口时，由 regenerateTsFile 统一兜底，此处返回 null。
+                if (isSimpleStubEntry(entryText)) return null
+                return null
+            }
         val entryObjBody = entryText.substring(entryInfo.objectRange.first, entryInfo.objectRange.last + 1)
         val spreadRefs = TsObjectMerger.findSpreadRefs(entryObjBody, emptyList())
         if (spreadRefs.isEmpty()) return null
