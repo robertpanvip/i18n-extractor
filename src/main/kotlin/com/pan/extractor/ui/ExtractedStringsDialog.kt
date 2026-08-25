@@ -406,9 +406,14 @@ class ExtractedStringsDialog(
         }
         if (bootstrapEntry != null) {
             bootstrapPerformed = true
-            selectedEntryFile = bootstrapEntry
-            if (::entryPathField.isInitialized) {
-                entryPathField.text = bootstrapEntry!!.path
+            // P0：不要用 bootstrap 创建的入口覆盖用户手动选择的入口。
+            //     用户若已指定「覆盖入口中文多语言文件」，应尊重其选择；仅当未选择时才用
+            //     bootstrap 创建/定位到的入口兜底（① 阶段 readOnce entryPathField 也会兜底）。
+            val hasUserPick = ::entryPathField.isInitialized && entryPathField.text.isNullOrBlank().not()
+            when {
+                hasUserPick -> { /* 保留用户选择，entryFile 由 ① 阶段按 entryPathField 决定 */ }
+                destination == OutputDestination.ASK -> entryPathField.text = bootstrapEntry!!.path
+                else -> selectedEntryFile = bootstrapEntry
             }
         }
 
