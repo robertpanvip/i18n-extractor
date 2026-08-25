@@ -328,6 +328,8 @@ class AllI18nExtractorAction : AnAction() {
                     err = t
                 }
                 indicator.fraction = 1.0
+                indicator.text = I18nExtractorBundle.message("action.progress.batch.complete")
+                indicator.text2 = ""
             }
 
             override fun onSuccess() {

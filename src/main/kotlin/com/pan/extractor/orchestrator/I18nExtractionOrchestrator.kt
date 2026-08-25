@@ -105,17 +105,14 @@ object I18nExtractionOrchestrator {
         val extracted = mutableMapOf<String, String>()
         val total = files.size
         val processors: List<I18nProcessor> = files.mapIndexedNotNull { idx, file ->
-            // 每分析一个文件，推进一次进度（含 cancel 检查），让批量提取的进度条持续更新。
-            if (indicator != null) {
-                indicator.checkCanceled()
-                indicator.text = I18nExtractorBundle.message("action.progress.analyzing.file", file.name, idx + 1, total)
-                indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
-                indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
-            }
+            // P0: 进度更新放在文件处理之后，而非之前。
+            //     旧实现放之前导致「进度条停在 21/456」的假象 —— 用户看到的是「即将处理 21」的文本，
+            //     而文件 21 实际正在处理中（可能耗时较长），用户就误以为卡住了。
+            //     改成 after 后，进度条只反映*已完成*的文件数，用户看到的是「已处理 20/456」。
             // 单文件分析容错：某个文件（如 PSI 未就绪 / IndexNotReady / 偶发解析异常）失败时
             // 记录日志并跳过，而不是中断整批 —— 否则一个大项目里个别坏文件会导致 collect 整体
             // 抛异常，进而被动作层误报成「未发现中文」并让进度条停在失败点。
-            try {
+            val result = try {
                 ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
                     val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
                     if (psiFile == null) {
@@ -138,6 +135,15 @@ object I18nExtractionOrchestrator {
                 )
                 null
             }
+            // 每分析一个文件，推进一次进度（含 cancel 检查），让批量提取的进度条持续更新。
+            // 放在 try-catch 之后，确保只对*已完成*的文件更新进度数值。
+            if (indicator != null) {
+                indicator.checkCanceled()
+                indicator.text = I18nExtractorBundle.message("action.progress.analyzing.file", file.name, idx + 1, total)
+                indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
+                indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
+            }
+            result
         }
         return finalizeCollection(
             project, processors, extracted,

@@ -67,20 +67,24 @@ object TsResourceWriter {
     /**
      * 简入口整文件重建：生成一份最小可用的 TS 语言包文件文本。
      * 保持 export default 形式（与 bootstrap 模板一致）；缩进默认两空格。
+     *
+     * P0：Gson 输出的 JSON 已含外层 `{...}`，必须去掉外层大括号后缩进一层再包进
+     * `export default { ... }`，否则会生成双层大括号 `export default {{"x":"y"}}`。
      */
     private fun rebuildSimpleTsEntry(newFlatJson: Map<String, String>): String {
+        if (newFlatJson.isEmpty()) {
+            return "export default {\n};\n"
+        }
         val pretty = com.google.gson.GsonBuilder().setPrettyPrinting()
             .disableHtmlEscaping()
             .create()
         val jsonPretty = pretty.toJson(LinkedHashMap(newFlatJson))
-        // 把 JSON 对象体「缩进一层」包进 export default
-        val indentedBody = jsonPretty.lineSequence().joinToString("\n") { if (it.isBlank()) "" else "  $it" }
-        val body = indentedBody.trimEnd()
-        return if (body == "{}") {
-            "export default {\n};\n"
-        } else {
-            "export default {\n$body\n};\n"
-        }
+        // 去掉外层 { 和 }，只取对象体内容
+        val trimmed = jsonPretty.trim()
+        val inner = trimmed.removePrefix("{").removeSuffix("}").trim()
+        // 每行缩进 2 空格
+        val indentedBody = inner.lineSequence().joinToString("\n") { if (it.isBlank()) "" else "  $it" }
+        return "export default {\n$indentedBody\n};\n"
     }
 
     /**
