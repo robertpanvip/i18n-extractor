@@ -4,6 +4,7 @@ import com.pan.extractor.log.PluginLogBuffer
 import com.pan.extractor.core.RegexCatalog
 import com.pan.extractor.project.Util
 import com.pan.extractor.project.ProjectStructure
+import com.pan.extractor.staticparser.StaticObjectParser
 import com.pan.extractor.lang.LanguageExtractor
 import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.ui.*
@@ -380,6 +381,38 @@ object EntryFileLocator {
         // 4) 把引用名解析成 import 路径并定位文件
         val importPath = resolveImportPathForIdentifier(text, valueExpr) ?: return null
         return resolveLocalImportFile(initFile, importPath)
+    }
+
+    /**
+     * 写回入口重定位：把「写回目标」重定位到真实语言包入口文件。
+     *
+     * 背景：用户/自动探测有时把写回目标定到 i18n **初始化文件**（如 src/locales/i18n.ts，
+     * 结构为 `i18n.use(initReactI18next).init({ resources: {...} })` + `export default i18n;`，
+     * 顶层不是 export default 对象字面量），而写回解析器只认 export default/const 对象。
+     * 此时应透过该文件的 i18n/vue-i18n config（resources / messages）解析出它引用的真实
+     * 语言包文件（如 src/locales/zh.ts），把提取结果直接写入语言包 —— 满足「直接写入 zh.ts」。
+     *
+     * @return 可写回的语言包入口文件；[entryVf] 本身可解析（就是语言包）则原样返回；
+     *         解析不出语言包时返回 null（由调用方回退剪贴板）。
+     */
+    fun relocateToLocaleEntryFile(project: Project, entryVf: VirtualFile): VirtualFile? {
+        // 1) 入口本身已是语言包（顶层 export 对象可解析）→ 直接用，不重定向。
+        val selfOk = try {
+            StaticObjectParser.parseTsExportedObject(
+                String(entryVf.contentsToByteArray(), Charsets.UTF_8)
+            ) != null
+        } catch (e: Exception) {
+            LOG.debug("EntryFileLocator: 读取入口 ${entryVf.path} 失败", e)
+            false
+        }
+        if (selfOk) return entryVf
+        // 2) 视为初始化文件：透过其 config（resources/messages 引用）定位真实语言包。
+        val parent = entryVf.parent
+        if (parent != null) {
+            val locale = findChineseEntryViaI18nConfig(parent, project)
+            if (locale != null && locale != entryVf) return locale
+        }
+        return null
     }
 
     /** 从引用列表中选出目标：优先 locale 配置对应的语言，其次命中目标语言 locale 命名，再其次语言前缀，最后第一个。 */

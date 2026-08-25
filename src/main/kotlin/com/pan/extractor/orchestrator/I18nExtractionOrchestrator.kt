@@ -10,6 +10,7 @@ import com.pan.extractor.merge.DigitGroupCandidate
 import com.pan.extractor.editor.TsFileEditor
 import com.pan.extractor.*
 import com.pan.extractor.resource.ResourceApplier
+import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.ui.*
 
 import com.intellij.notification.NotificationAction
@@ -111,19 +112,31 @@ object I18nExtractionOrchestrator {
                 indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
                 indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
             }
-            ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
-                val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
-                if (psiFile == null) {
-                    null
-                } else {
-                    val processor = I18nProcessor(project, psiFile)
-                    processor.collect()
-                    // 已翻译的 t()/i18n.t() 调用（existingStrings）也要并入输出 JSON，
-                    // 与单文件/目录提取保持一致，否则已翻译文案会丢失导致 JSON 为空。
-                    extracted.putAll(processor.analyzer.existingStrings)
-                    extracted.putAll(processor.analyzer.extractedStrings)
-                    processor
+            // 单文件分析容错：某个文件（如 PSI 未就绪 / IndexNotReady / 偶发解析异常）失败时
+            // 记录日志并跳过，而不是中断整批 —— 否则一个大项目里个别坏文件会导致 collect 整体
+            // 抛异常，进而被动作层误报成「未发现中文」并让进度条停在失败点。
+            try {
+                ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
+                    val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
+                    if (psiFile == null) {
+                        null
+                    } else {
+                        val processor = I18nProcessor(project, psiFile)
+                        processor.collect()
+                        // 已翻译的 t()/i18n.t() 调用（existingStrings）也要并入输出 JSON，
+                        // 与单文件/目录提取保持一致，否则已翻译文案会丢失导致 JSON 为空。
+                        extracted.putAll(processor.analyzer.existingStrings)
+                        extracted.putAll(processor.analyzer.extractedStrings)
+                        processor
+                    }
                 }
+            } catch (t: Throwable) {
+                PluginLogBuffer.error(
+                    LOG,
+                    "I18nExtractionOrchestrator: 分析文件失败，已跳过（不影响后续）—— ${file.path}",
+                    t
+                )
+                null
             }
         }
         return finalizeCollection(
@@ -359,7 +372,18 @@ object I18nExtractionOrchestrator {
             val ext = entryVf.extension?.lowercase()
             // Resource 层统一写回：组装 ResourcePlan，由 ResourceApplier 按格式分发（json / ts spread / ts）。
             val plan = ResourceApplier.buildPlan(entryVf, finalFlatJson, dropExistingKeys)
-            val writes: List<Pair<VirtualFile, String>>? = ResourceApplier.apply(project, plan)
+            var writes: List<Pair<VirtualFile, String>>? = ResourceApplier.apply(project, plan)
+            // 写回目标解析失败时：很可能是 i18n 初始化文件（顶层非 export 对象）。此时透过
+            // 其 config 重定位到真实语言包文件（如 zh.ts）再写回，避免把结果直接丢进剪贴板。
+            if (writes == null && ext in setOf("ts", "tsx", "js", "jsx")) {
+                val localeVf = EntryFileLocator.relocateToLocaleEntryFile(project, entryVf)
+                if (localeVf != null) {
+                    writes = ResourceApplier.apply(
+                        project,
+                        ResourceApplier.buildPlan(localeVf, finalFlatJson, dropExistingKeys)
+                    )
+                }
+            }
             if (writes != null) {
                 try {
                     for ((vf, newText) in writes) {

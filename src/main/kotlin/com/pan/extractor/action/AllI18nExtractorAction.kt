@@ -334,9 +334,12 @@ class AllI18nExtractorAction : AnAction() {
                 val t = err
                 if (t != null) {
                     PluginLogBuffer.error(LOG,"i18n 全项目扫描/分析阶段异常：${t.message?.take(120)}", t)
-                    Orchestrator.notifyNothingExtracted(
+                    // 扫描/分析阶段异常应上报「内部错误」（含堆栈文案），而不是伪装成
+                    //「未发现中文」—— 两者体验天差地别，后者会让用户误以为没有可提取文案。
+                    Orchestrator.notifyInternalError(
                         project,
-                        I18nExtractorBundle.message("action.progress.batch.scope")
+                        I18nExtractorBundle.message("orchestrator.notify.internal.title"),
+                        t
                     )
                     return
                 }
