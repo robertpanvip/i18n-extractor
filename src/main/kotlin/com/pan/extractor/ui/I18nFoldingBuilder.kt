@@ -86,7 +86,10 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             }
         }
         // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
-        addRawFolds(contextFile, messages, descriptors)
+        // 注意：raw fold 描述符使用 root.node 作为锚点 ASTNode（属于同一文件），
+        // 避免 CompositeFoldingBuilder.assertSameFile 的跨文件断言失败。
+        val anchorNode = root.node ?: contextFile.node
+        addRawFolds(contextFile, messages, descriptors, anchorNode)
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
         if (elapsedMs >= SLOW_FOLD_MS) {
             logger.info("I18nFoldingBuilder[折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")
@@ -154,6 +157,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         contextFile: PsiFile,
         messages: Map<String, String>,
         out: MutableList<FoldingDescriptor>,
+        anchorNode: ASTNode,
     ) {
         val occupiedStarts = out.mapTo(mutableSetOf()) { it.range.startOffset }
         val fw = I18nFrameworkRegistry.detect(contextFile)
@@ -164,7 +168,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             val params = extractParamsFromText(raw.text, messages)
             val value = fw.interpolatePlaceholders(rawValue, params)
             occupiedStarts.add(raw.range.startOffset)
-            out.add(FoldingDescriptor(raw.element.node, raw.range, null, value + TOGGLE_HINT))
+            out.add(FoldingDescriptor(anchorNode, raw.range, null, value + TOGGLE_HINT))
         }
         // Angular `| translate` 管道：非函数调用，与 $t 正则不匹配，需单独搜索。
         // 与 collectRawTCalls 语义对称：仅在翻译资源中存在的 key 才折叠。
@@ -172,7 +176,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             if (raw.range.startOffset in occupiedStarts) continue
             val rawValue = messages[raw.key] ?: continue
             occupiedStarts.add(raw.range.startOffset)
-            out.add(FoldingDescriptor(raw.element.node, raw.range, null, rawValue + TOGGLE_HINT))
+            out.add(FoldingDescriptor(anchorNode, raw.range, null, rawValue + TOGGLE_HINT))
         }
     }
 
