@@ -70,25 +70,29 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             return computeFoldsSync(root, contextFile, messages)
         }
 
-        // ReadAction.nonBlocking 在后台池线程上以「可取消 read action + coroutine Job」语义执行，
-        // 提供 TS resolve 引擎（JSGraphBuildExecutor.runBlockingCancellable）所需的 Job/进度上下文。
-        // 此前用 executeOnPooledThread + runProcess(EmptyProgressIndicator) 只注入进度指示器、
-        // 不安装 coroutine Job；无该 Job 时 runBlockingCancellable 抛
-        // "There is no ProgressIndicator or Job in this thread"，导致折叠与 inlay 全部失效。
-        ReadAction.nonBlocking<Array<FoldingDescriptor>> {
-            computeFolds(root, contextFile, messages)
-        }
-            .inSmartMode(project)
-            .submit(AppExecutorUtil.getAppExecutorService())
-            .onSuccess { descriptors ->
-                if (descriptors.isEmpty()) return@onSuccess
-                ApplicationManager.getApplication().invokeLater {
-                    applyFoldsToEditors(project, document, descriptors.toList())
-                }
+        // 捕获发起请求时的文档版本戳，异步计算完成后注入时校验：
+    // 若文档在此期间被编辑，偏移量已过期，跳过本次应用（等平台下次 PSI 提交后重新算）。
+    val stampAtRequest = document.modificationStamp
+
+    // ReadAction.nonBlocking 在后台池线程上以「可取消 read action + coroutine Job」语义执行，
+    // 提供 TS resolve 引擎（JSGraphBuildExecutor.runBlockingCancellable）所需的 Job/进度上下文。
+    // 此前用 executeOnPooledThread + runProcess(EmptyProgressIndicator) 只注入进度指示器、
+    // 不安装 coroutine Job；无该 Job 时 runBlockingCancellable 抛
+    // "There is no ProgressIndicator or Job in this thread"，导致折叠与 inlay 全部失效。
+    ReadAction.nonBlocking<Array<FoldingDescriptor>> {
+        computeFolds(root, contextFile, messages)
+    }
+        .inSmartMode(project)
+        .submit(AppExecutorUtil.getAppExecutorService())
+        .onSuccess { descriptors ->
+            if (descriptors.isEmpty()) return@onSuccess
+            ApplicationManager.getApplication().invokeLater {
+                applyFoldsToEditors(project, document, descriptors.toList(), stampAtRequest)
             }
-            .onError(java.util.function.Consumer<Throwable> { t ->
-                logger.warn("I18nFoldingBuilder: 计算折叠失败 file=${contextFile.name}", t)
-            })
+        }
+        .onError(java.util.function.Consumer<Throwable> { t ->
+            logger.warn("I18nFoldingBuilder: 计算折叠失败 file=${contextFile.name}", t)
+        })
 
         return FoldingDescriptor.EMPTY_ARRAY
     }
@@ -138,13 +142,18 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         return descs.toTypedArray()
     }
 
-    /** EDT：将计算好的折叠描述符注入到所有打开该文件的编辑器。 */
+    /** EDT：将计算好的折叠描述符注入到所有打开该文件的编辑器。
+     *  @param capturedStamp 发起折叠计算时的文档版本戳；若当前文档版本戳不同（文档已被编辑），
+     *  偏移量已过期，跳过本次应用（等平台下次 PSI 提交后重新计算）。 */
     private fun applyFoldsToEditors(
         project: Project,
         document: Document,
         descriptors: List<FoldingDescriptor>,
+        capturedStamp: Long,
     ) {
         if (project.isDisposed) return
+        // 文档被编辑后偏移量已过期，跳过本次应用，避免旧折叠覆盖编辑区之后的内容。
+        if (document.modificationStamp != capturedStamp) return
         val file = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return
         val vf = file.virtualFile ?: return
         val editors = FileEditorManager.getInstance(project).allEditors
