@@ -208,11 +208,16 @@ class I18nExtractorAction : AnAction() {
 
     /**
      * 递归收集文件夹内所有受支持的文件。
+     *
+     * 目录递归时应用 [I18nSettings.excludeDirs]（默认含 node_modules/.git/dist 等构建产物），
+     * 否则会递归进 node_modules 等目录并把海量 .js 依赖源码纳入提取范围。
      */
     private fun collectSupportedFiles(dir: VirtualFile): List<VirtualFile> {
         val result = mutableListOf<VirtualFile>()
+        val excludeDirs = I18nSettings.getInstance().excludeDirs()
         for (child in dir.children) {
             if (child.isDirectory) {
+                if (child.name in excludeDirs) continue
                 result.addAll(collectSupportedFiles(child))
             } else if (isSupportedFile(child.name) && !isTranslationResource(child)) {
                 result.add(child)
