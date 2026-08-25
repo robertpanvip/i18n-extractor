@@ -160,17 +160,26 @@ object ImportRewriter : SourceRewriter {
         val injector = processor.injector
 
         // 1) imports
+        var lastInjectedImport: PsiElement? = null
         if (plan.imports.isNotEmpty()) {
             val existing = PsiTreeUtil.findChildrenOfType(container, ES6ImportDeclaration::class.java)
             val anchor = existing.firstOrNull() ?: injector.findFirstNonWhitespaceChild(container)
-            injectImports(container, plan.imports, anchor, processor)
+            lastInjectedImport = injectImports(container, plan.imports, anchor, processor)
         }
         // 2) aliases（放最后一个 import 之后）
+        // 注意：新注入的 import 是文本 Leaf（尚未 reparse 成 ES6ImportDeclaration），
+        // findChildrenOfType(ES6ImportDeclaration) 查不到它；此时若无原生 import，直接
+        // addBefore 到「第一个语句」会恰好落到该新 import 之前，导致 `const t = getI18n().t;`
+        // 跑到 import 上方的乱序。故引入 lastInjectedImport 作为兜底锚点。
         for (alias in plan.aliases) {
             val stmt = processor.createStringExpressionNode(alias, container)
             val latestImports = PsiTreeUtil.findChildrenOfType(container, ES6ImportDeclaration::class.java)
-            if (latestImports.isNotEmpty()) {
-                val lastImport = latestImports.last()
+            val lastImport: PsiElement? = when {
+                latestImports.isNotEmpty() -> latestImports.last()
+                lastInjectedImport != null -> lastInjectedImport
+                else -> null
+            }
+            if (lastImport != null) {
                 lastImport.parent.addAfter(stmt, lastImport)
             } else {
                 val firstStatement = injector.findFirstNonWhitespaceChild(container)
@@ -213,14 +222,17 @@ object ImportRewriter : SourceRewriter {
      * 以「不含内嵌换行的独立 Leaf」把 [importTexts] 注入到 [container]，置于首个非空白语句 [anchor]
      * 之前，保持语句顺序。语句正文与 `\n` 分开成两个节点注入，避免单 Leaf 内嵌换行在 undo/redo
      * 重排时被重新归一为空格（镜像旧 ensure* 的逐行 Leaf 空白幂等约定，P0/P1）。
+     *
+     * @return 最后注入的 import 语句节点（不含末尾换行 Leaf），用于 aliases 定位锚点。
      */
     private fun injectImports(
         container: PsiElement,
         importTexts: List<String>,
         anchor: PsiElement?,
         processor: com.pan.extractor.core.I18nProcessor,
-    ) {
+    ): PsiElement? {
         var prev: PsiElement? = null
+        var lastStatement: PsiElement? = null
         for (text in importTexts) {
             val hasLineBreak = text.endsWith("\n")
             val body = if (hasLineBreak) text.removeSuffix("\n") else text
@@ -230,10 +242,12 @@ object ImportRewriter : SourceRewriter {
                 anchor != null -> container.addBefore(leaf, anchor)
                 else -> container.add(leaf)
             }
+            lastStatement = prev
             if (hasLineBreak) {
                 prev = container.addAfter(processor.createStringExpressionNode("\n", container), prev)
             }
         }
+        return lastStatement
     }
 
     /** 依 [hook] 类型定位目标并注入 [HookInjectPlan.statement]。 */

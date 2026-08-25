@@ -1064,6 +1064,13 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "必须追加 const t = getI18n().t; 全局别名, got:\n$resultText",
             resultText.replace("\\s+".toRegex(), "").contains("constt=getI18n().t")
         )
+        // ★ 顺序：const t = getI18n().t 必须在 import { getI18n } 之后（用户报告：别名跑进 import 上方乱序）
+        val importIdx = resultText.replace("\\s+".toRegex(), "").indexOf("import{getI18n}from'react-i18next'")
+        val aliasIdx = resultText.replace("\\s+".toRegex(), "").indexOf("constt=getI18n().t")
+        assertTrue(
+            "别名 const t = getI18n().t（offset=$aliasIdx）必须位于 import { getI18n }（offset=$importIdx）之后, got:\n$resultText",
+            importIdx in 0..aliasIdx
+        )
 
         // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
         val processor2 = I18nProcessor(project, file)
@@ -1495,6 +1502,14 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         assertTrue(
             "老 i18n.t('老调用中文') 仍保留, got:\n$resultText",
             resultText.contains("i18n.t(")
+        )
+        // ⑥ 顺序：const t = getI18n().t 必须位于所有 import（含新 getI18n import）之后
+        val aliasIdx = compact.indexOf("constt=getI18n().t")
+        val getI18nImportIdx = compact.indexOf("import{getI18n}from'react-i18next'")
+        val oldImportIdx = compact.indexOf("importi18nfrom'i18next'")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须位于 import { getI18n }（offset=$getI18nImportIdx）与老 import（offset=$oldImportIdx）之后, got:\n$resultText",
+            aliasIdx >= 0 && aliasIdx >= getI18nImportIdx && aliasIdx >= oldImportIdx
         )
     }
 

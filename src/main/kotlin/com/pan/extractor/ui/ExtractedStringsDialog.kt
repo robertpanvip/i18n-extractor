@@ -255,16 +255,32 @@ class ExtractedStringsDialog(
                 VueI18nStrategy.id -> "Vue（vue-i18n）"
                 else -> missing.framework.id
             }
-            val chk = JCheckBox(
+            // JCheckBox / JRadioButton 在 IntelliJ LAF 下不渲染 HTML，`&nbsp;`/`&lt;` 会按字面显示。
+            // 故勾选框用纯文本短句，完整说明放到只读 JEditorPane（text/html）里展示。
+            val chk = JCheckBox(I18nExtractorBundle.message("bootstrap.checkbox.toggle"))
+            chk.isSelected = true
+            chkI18nBootstrap = chk
+
+            val detail = JEditorPane(
+                "text/html; charset=UTF-8",
                 I18nExtractorBundle.message("bootstrap.checkbox.header", frameworkLabel) +
                     (if (missing.depsToAdd.isNotEmpty())
                         I18nExtractorBundle.message("bootstrap.checkbox.deps", missing.dependencyLabel)
                     else "") +
                     I18nExtractorBundle.message("bootstrap.checkbox.create.files")
-            )
-            chk.isSelected = true
-            chkI18nBootstrap = chk
-            panel.add(chk, gbcBootstrap)
+            ).apply {
+                isEditable = false
+                isOpaque = false
+                border = null
+                preferredSize = java.awt.Dimension(0, 0)
+            }
+
+            val box = JPanel()
+            box.layout = BoxLayout(box, BoxLayout.Y_AXIS)
+            box.alignmentX = java.awt.Component.LEFT_ALIGNMENT
+            box.add(chk)
+            box.add(detail)
+            panel.add(box, gbcBootstrap)
         }
 
         return panel

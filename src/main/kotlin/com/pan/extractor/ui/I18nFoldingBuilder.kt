@@ -10,16 +10,10 @@ import com.intellij.lang.folding.FoldingBuilderEx
 import com.intellij.lang.folding.FoldingDescriptor
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
-import com.intellij.util.concurrency.AppExecutorUtil
-import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 
@@ -52,8 +46,14 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         logger.warn("I18nFoldingBuilder 类已加载（实例化时触发）")
     }
 
-    /** 立即返回空，后台线程计算完成后通过 [applyFoldsToEditors] 注入折叠。
-     *  测试模式下同步计算，便于断言直接检查返回值。 */
+    /**
+     * 同步计算折叠描述符并返回，交由 IntelliJ 平台管理折叠生命周期。
+     *
+     * 历史做法：异步（ReadAction.nonBlocking）+ invokeLater 里手动「删除全部旧折叠 + 按绝对偏移重建」。
+     * 该做法绕过平台对 FoldRegion 的 offset 平移机制，编辑文件后旧折叠不与文本随之平移，
+     * 表现为「编辑区之后（及之后）的预览折叠错乱」。改为同步返回 descriptors 后，平台会用
+     * descriptor 的节点/区间跟着文档编辑自动平移、并按提交重建仅受影响区域，彻底消除错乱。
+     */
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         if (quick) return FoldingDescriptor.EMPTY_ARRAY
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
@@ -66,39 +66,15 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             return FoldingDescriptor.EMPTY_ARRAY
         }
 
-        if (ApplicationManager.getApplication().isUnitTestMode) {
-            return computeFoldsSync(root, contextFile, messages)
-        }
-
-        // 捕获发起请求时的文档版本戳，异步计算完成后注入时校验：
-    // 若文档在此期间被编辑，偏移量已过期，跳过本次应用（等平台下次 PSI 提交后重新算）。
-    val stampAtRequest = document.modificationStamp
-
-    // ReadAction.nonBlocking 在后台池线程上以「可取消 read action + coroutine Job」语义执行，
-    // 提供 TS resolve 引擎（JSGraphBuildExecutor.runBlockingCancellable）所需的 Job/进度上下文。
-    // 此前用 executeOnPooledThread + runProcess(EmptyProgressIndicator) 只注入进度指示器、
-    // 不安装 coroutine Job；无该 Job 时 runBlockingCancellable 抛
-    // "There is no ProgressIndicator or Job in this thread"，导致折叠与 inlay 全部失效。
-    ReadAction.nonBlocking<Array<FoldingDescriptor>> {
-        computeFolds(root, contextFile, messages)
-    }
-        .inSmartMode(project)
-        .submit(AppExecutorUtil.getAppExecutorService())
-        .onSuccess { descriptors ->
-            if (descriptors.isEmpty()) return@onSuccess
-            ApplicationManager.getApplication().invokeLater {
-                applyFoldsToEditors(project, document, descriptors.toList(), stampAtRequest)
-            }
-        }
-        .onError(java.util.function.Consumer<Throwable> { t ->
-            logger.warn("I18nFoldingBuilder: 计算折叠失败 file=${contextFile.name}", t)
-        })
-
-        return FoldingDescriptor.EMPTY_ARRAY
+        return computeFoldsSync(root, contextFile, messages)
     }
 
-    /** 同步计算折叠描述符（仅测试模式使用，生产环境走 [computeFolds] 异步路径）。 */
-    private fun computeFoldsSync(root: PsiElement, contextFile: PsiFile, messages: Map<String, String>): Array<FoldingDescriptor> {
+    /** 同步计算折叠描述符，测试与生产统一使用（生产由平台在 EDT 调用）。 */
+    private fun computeFoldsSync(
+        root: PsiElement,
+        contextFile: PsiFile,
+        messages: Map<String, String>,
+    ): Array<FoldingDescriptor> {
         val t0 = System.nanoTime()
         // 宿主树（== 折叠目标文档）上的 $t/t() 调用：坐标即宿主坐标，可直接折叠。
         // 模板表达式 {{ }} / 指令绑定是注入语言，注入 JSCall 坐标不可靠，统一交由 addRawFolds
@@ -112,84 +88,12 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
         addRawFolds(contextFile, messages, descriptors)
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-        logger.debug("I18nFoldingBuilder[测试/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")
-        return descriptors.toTypedArray()
-    }
-
-    /** 后台(read-action)线程：全量 PSI 遍历 + Symbol 解析，产出折叠描述符。
-     *  由 [ReadAction.nonBlocking] 调用（其已持有可取消 read action + coroutine Job）；
-     *  计算完成后由调用方在 EDT 上 [applyFoldsToEditors] 注入。 */
-    private fun computeFolds(
-        root: PsiElement,
-        contextFile: PsiFile,
-        messages: Map<String, String>,
-    ): Array<FoldingDescriptor> {
-        val t0 = System.nanoTime()
-        val descs = mutableListOf<FoldingDescriptor>()
-        if (root is PsiFile && root.containingFile == contextFile) {
-            for (call in collectJSCallExpressions(root)) {
-                addFoldingDescriptor(call, messages, descs)
-            }
-        }
-        // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
-        addRawFolds(contextFile, messages, descs)
-        val elapsedMs = (System.nanoTime() - t0) / 1_000_000
         if (elapsedMs >= SLOW_FOLD_MS) {
-            logger.info("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
+            logger.info("I18nFoldingBuilder[折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")
         } else {
-            logger.debug("I18nFoldingBuilder[打开/折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descs.size} elapsed=${elapsedMs}ms")
+            logger.debug("I18nFoldingBuilder[折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")
         }
-        return descs.toTypedArray()
-    }
-
-    /** EDT：将计算好的折叠描述符注入到所有打开该文件的编辑器。
-     *  @param capturedStamp 发起折叠计算时的文档版本戳；若当前文档版本戳不同（文档已被编辑），
-     *  偏移量已过期，跳过本次应用（等平台下次 PSI 提交后重新计算）。 */
-    private fun applyFoldsToEditors(
-        project: Project,
-        document: Document,
-        descriptors: List<FoldingDescriptor>,
-        capturedStamp: Long,
-    ) {
-        if (project.isDisposed) return
-        // 文档被编辑后偏移量已过期，跳过本次应用，避免旧折叠覆盖编辑区之后的内容。
-        if (document.modificationStamp != capturedStamp) return
-        val file = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return
-        val vf = file.virtualFile ?: return
-        val editors = FileEditorManager.getInstance(project).allEditors
-            .filterIsInstance<TextEditor>()
-            .filter { it.file == vf }
-        for (textEditor in editors) {
-            val editor = textEditor.editor
-            if (editor.isDisposed) continue
-            val docLen = editor.document.textLength
-            val fm = editor.foldingModel
-            fm.runBatchFoldingOperation {
-                // 记录当前被用户展开的折叠区间（用户手动展开后必须保留，
-                // 否则本构建器异步重建折叠时会把用户展开的折叠重新折叠回去）。
-                val userExpanded = mutableSetOf<Pair<Int, Int>>()
-                for (existing in fm.allFoldRegions) {
-                    if (existing.isExpanded) {
-                        userExpanded.add(existing.startOffset to existing.endOffset)
-                    }
-                }
-                // 清除全部旧折叠区域，避免编辑后残留的旧折叠与新折叠叠加导致显示混乱。
-                // 本构建器异步计算折叠，绕过平台自动管理，必须手动清理。
-                for (existing in fm.allFoldRegions) {
-                    fm.removeFoldRegion(existing)
-                }
-                for (desc in descriptors) {
-                    val range = desc.range
-                    if (range.isEmpty) continue
-                    // 异步计算期间文档可能已被修改（用户编辑保存），偏移量可能已超出新文档长度；
-                    // 校验失败时静默跳过，避免 Invalid offsets 崩溃。
-                    if (range.startOffset < 0 || range.endOffset > docLen || range.startOffset > range.endOffset) continue
-                    val fold = fm.addFoldRegion(range.startOffset, range.endOffset, desc.placeholderText ?: "")
-                    // 若该区间此前被用户展开，则保留展开状态；否则默认折叠。
-                    fold?.isExpanded = (range.startOffset to range.endOffset) in userExpanded
-                }
-            }
-        }
+        return descriptors.toTypedArray()
     }
 
     /** 打开文件时 $t() 调用默认全部折叠，便于直接看到翻译文案。 */
