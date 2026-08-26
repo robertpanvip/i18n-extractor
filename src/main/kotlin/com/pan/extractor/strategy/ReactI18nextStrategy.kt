@@ -139,13 +139,15 @@ object ReactI18nextStrategy : I18nFramework {
                 val dollarTAliasAlreadyPresent =
                     if (injectReactGlobalDollarT) hasReactGlobalAllowedAliased(file) else true
 
-                // 纯工具文件（needInjectGlobalDollarT = true）且无 locale 实例时，
-                // 不生成 getI18n 回退，避免无意义的注入。
+                // 纯工具文件（needInjectGlobalDollarT = true）且无 locale 实例，
+                // 且文件本身没有任何 i18n 导入时，不生成 getI18n 回退，避免无意义的注入。
+                // 但文件已有 `import i18n from 'i18next'` 等旧 i18n 导入时，
+                // 仍应注入 getI18n（因为旧导入不提供 getI18n）。
                 val hasLocaleInstance = reactLocaleImport != null
                 val skipGetI18nFallback = d.needInjectGlobalDollarT &&
                     !hasLocaleInstance &&
                     !d.reactI18nTFallbackToDollarT &&
-                    !requiredImportAlreadyPresent
+                    !alreadyHasGlobalI18nInstance
 
                 val importText: String? = when {
                     requiredImportAlreadyPresent -> null
