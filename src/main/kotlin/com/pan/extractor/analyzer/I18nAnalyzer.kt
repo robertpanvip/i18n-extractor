@@ -312,30 +312,24 @@ class I18nAnalyzer(
         if (I18nPsiTools.isComment(element)) return
 
         val quote = "`"
-        // 遍历子节点，保留非空白节点间的空白（避免空格丢失）
+        // 不能过滤 PsiWhiteSpace：Vue 模板 PSI 会把 `{{ expr }}` 拆成 {字符数, 空格, {{, 空格,
+        // expr, 空格, }}, 空格} 等独立 token。原实现对空白一律过滤，导致文本与插值之间的空格丢失
+        // （<span>字符数 {{ x }}</span> 被生成为 `字符数{N0}`）。这里保留空白 token，最后统一把
+        // 连续空白折叠为单个空格并 trim，既保住词间空格，又清掉模板缩进换行。
+        val children = element.children.filter { it !is PsiComment && !I18nPsiTools.isComment(it) }
+        if (children.isEmpty()) return
+
         val sb = StringBuilder()
-        var childCount = 0
-        var pendingSpace = false
-        for (child in element.children) {
-            when {
-                child is PsiWhiteSpace -> { pendingSpace = true }
-                I18nPsiTools.isComment(child) || child is PsiComment -> { /* skip */ }
-                else -> {
-                    val text = I18nPsiTools.rm(child)
-                    if (childCount == 0) {
-                        sb.append(quote).append(text)
-                    } else {
-                        if (pendingSpace) sb.append(' ')
-                        sb.append(text)
-                    }
-                    childCount++
-                    pendingSpace = false
-                }
+        children.forEachIndexed { index, e ->
+            val text = I18nPsiTools.rm(e)
+            when (index) {
+                0 -> sb.append(quote).append(text)
+                children.lastIndex -> sb.append(text).append(quote)
+                else -> sb.append(text)
             }
         }
-        if (childCount == 0) return
-        sb.append(quote)
-        val raw = sb.toString().trim()
+        if (children.size == 1) sb.append(quote)
+        val raw = sb.toString().replace(Util.WS_COMPACT_RE, " ").trim()
 
         val compactRaw = raw.replace(Util.WS_COMPACT_RE, "")
         if (compactRaw.startsWith("`\${\$t(")) {
@@ -353,6 +347,10 @@ class I18nAnalyzer(
                                 if (!jsCollector.isTransformedCalled(e)) {
                                     val sizeBefore = plan.rewrites.size
                                     jsCollector.collectJSStringChange(e)
+                                    // 仅当字面量真的产出了改写配方才算「命中」，避免
+                                    // {{ index + 1 }} 这类只有数字/无中文的字面量把 foundStrings
+                                    // 误置为 true → 导致整个 mustache 文本（如「分段数 {{ index + 1 }}」）
+                                    // 被提前 return 而漏提取。
                                     if (plan.rewrites.size > sizeBefore) foundStrings = true
                                 }
                             }
