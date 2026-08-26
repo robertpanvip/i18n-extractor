@@ -180,7 +180,14 @@ object ImportRewriter : SourceRewriter {
                 else -> null
             }
             if (lastImport != null) {
-                lastImport.parent.addAfter(stmt, lastImport)
+                // 先插入换行，再插入 alias 语句，确保 alias 在独立行：
+                //   import { getI18n } from 'react-i18next';
+                //   const t = getI18n().t;          ← 正确换行
+                // 不加换行会导致：
+                //   import { getI18n } from 'react-i18next';const t = getI18n().t;
+                val newline = processor.createStringExpressionNode("\n", container)
+                lastImport.parent.addAfter(newline, lastImport)
+                lastImport.parent.addAfter(stmt, newline)
             } else {
                 val firstStatement = injector.findFirstNonWhitespaceChild(container)
                 if (firstStatement != null) container.addBefore(stmt, firstStatement) else container.add(stmt)

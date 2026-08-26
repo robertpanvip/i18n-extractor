@@ -111,8 +111,11 @@ object ReactI18nextStrategy : I18nFramework {
             reactModeNeedsImport || d.reactI18nTFallbackToDollarT
 
         if (needGlobalI18nImport) {
+            // 全局导入条件：文件有提取的字符串、已存在 i18n.t 调用、或需要全局 $t 模式。
+            // 注意：d.hasExtractedStrings 单独列出（而非 && d.needInjectGlobalDollarT），
+            // 确保组件文件也能注入全局 import（第二块再追加 useTranslation hook）。
             if (d.tFunctionName == "i18n.t" || d.reactI18nTFallbackToDollarT ||
-                (d.hasExtractedStrings && d.needInjectGlobalDollarT) || reactModeNeedsImport
+                d.hasExtractedStrings || reactModeNeedsImport
             ) {
                 val i18nAlreadyImported = injector.hasI18nInstanceImported(file)
                 val alreadyUsesGetI18n = injector.hasReactGetI18nImported(file) || hasReactGetI18nAlias(file)
@@ -147,16 +150,13 @@ object ReactI18nextStrategy : I18nFramework {
             }
         }
 
-        // 即使本文件没有待提取文案，只要它是 React 组件 / hook 文件，也应完成接线（注入
-        // useTranslation hook），否则选 react-i18next 后像 app.tsx 这类空文案组件文件不会有任何变化。
-        //
+        // 组件级 useTranslation hook：仅当文件有实际提取的字符串，且尚未导入全局 i18n
+        // 实例时注入。不再因「文件是组件」而无条件注入（避免空文案组件也加 useTranslation）。
         // 例外：文件已显式导入全局 i18n 实例（`import i18n from 'i18next'` 或
         // `import { getI18n } ...`）时，`i18n.t(...)` 视为有效的全局调用，不再注入组件级
         // useTranslation hook（避免把已走全局实例的老代码误切到组件 hook）。
-        val isComponentFile = ProjectStructure.findReactComponentFunctions(file).isNotEmpty() ||
-            ProjectStructure.findHookFunctions(file).isNotEmpty()
         val alreadyHasGlobalI18nInstance = injector.hasI18nInstanceImported(file)
-        if ((d.hasExtractedStrings || isComponentFile) && !alreadyHasGlobalI18nInstance) {
+        if (d.hasExtractedStrings && !alreadyHasGlobalI18nInstance) {
             if (d.tFunctionName != "i18n.t" && !d.needInjectGlobalDollarT) {
                 val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
                 if (importsInFile.none { it.text.contains("useTranslation") }) {
