@@ -7,6 +7,8 @@
 #   2. 用 Gradle 9.4.1（mise 安装）。wrapper 下载很容易超时，直接走本地 gradle 更稳。
 #   3. 本沙箱通过代理访问外网，必须把代理参数传给 Gradle JVM，否则依赖下载/校验会失败。
 #   4. 用 --no-daemon 避免 daemon 复用导致 java.home 不一致。
+#   5. XDG_RUNTIME_DIR 必须设为有效目录，否则 IntelliJ Platform 测试框架会反复打印
+#      "error: XDG_RUNTIME_DIR is invalid or not set in the environment" 并可能触发 OOM。
 #
 # 用法：
 #   scripts/run-tests.sh                          # 跑全部测试
@@ -39,7 +41,7 @@ echo "[run-tests] JAVA_HOME=$JAVA_HOME"
 # 2) 定位 Gradle ----------------------------------------------------------
 GRADLE_BIN=""
 GRADLE_CANDIDATES=(
-  "$MISE_INSTALLS/gradle/9.4.1/gradle-9.4.1/bin/gradle"
+  "$MISE_INSTALLS/gradle/9.4.1/bin/gradle"
   "$(command -v gradle || true)"
 )
 for g in "${GRADLE_CANDIDATES[@]}"; do
@@ -68,7 +70,10 @@ if [ "${#PROXY_ARGS[@]}" -gt 0 ]; then
   echo "[run-tests] 使用代理参数: ${PROXY_ARGS[*]}"
 fi
 
-# 4) 用 --no-daemon 强制单次构建，并把 java.home 显式指到 JDK 21 ----------------
+# 4) 设置 XDG_RUNTIME_DIR（IntelliJ Platform 测试框架要求，否则反复打印错误并可能 OOM）
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+
+# 5) 用 --no-daemon 强制单次构建，并把 java.home 显式指到 JDK 21 ----------------
 #    -PforkTest=true：本地沙箱内存有限（4GiB），按类独立 fork 避免 OOM；
 #    线上 CI 不传此标记，不走 forkEvery，套件跑得更快。
 echo "[run-tests] 开始执行: gradle test $*"

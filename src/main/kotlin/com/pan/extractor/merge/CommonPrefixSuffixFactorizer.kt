@@ -316,8 +316,10 @@ object CommonPrefixSuffixFactorizer {
         var sLen = 0
         val aEnd = a.length - 1
         val bEnd = b.length - 1
-        while (pLen + sLen < maxLen && a[aEnd - sLen] == b[bEnd - sLen]) {
+        while (pLen + sLen < maxLen) {
             val pos = aEnd - sLen
+            // 字符比较移入循环体：先检查占位符边界，再决定是否计入 sLen
+            if (a[pos] != b[bEnd - sLen]) break
             if (isReactPlaceholderEnd(a, pos)) break
             // Vue/Generic 占位符保护：{N0}/{0} 不应被拆分到公共后缀中
             if (isVueOrGenericPlaceholderEnd(a, pos) || isVueOrGenericPlaceholderEnd(b, bEnd - sLen)) break

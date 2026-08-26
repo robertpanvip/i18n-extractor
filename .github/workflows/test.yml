@@ -38,12 +38,16 @@ jobs:
 
 
       - name: Run tests
+        env:
+          XDG_RUNTIME_DIR: /tmp
         run: ./gradlew test --no-daemon --no-configuration-cache --warn
         continue-on-error: true
         id: test_first
 
       - name: Retry tests on failure with warning
         if: steps.test_first.outcome == 'failure'
+        env:
+          XDG_RUNTIME_DIR: /tmp
         run: |
           echo "::warning::First test run failed, retrying. This may indicate flaky tests."
           ./gradlew test --no-daemon --no-configuration-cache --warn

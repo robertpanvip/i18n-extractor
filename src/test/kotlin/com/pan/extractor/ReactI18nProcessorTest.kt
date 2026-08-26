@@ -1012,6 +1012,15 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
      *   替换结果仍是短写法 t('key')，与 React Hook / 组件内部完全一致，
      *   **不再**写冗长 i18n.t('key') 调用。
      */
+    /**
+     * 纯工具 TS 文件（既没有函数组件，也没有 use 开头自定义 hook），
+     * 虽然属于 React 项目、文件中有硬编码中文，但不得注入 `import { useTranslation }`。
+     * 否则会违反 Hooks 规则：Hook 只能在组件/自定义 Hook 里调用。
+     *
+     * 【新规则】：不再使用 getI18n() 回退（因为 getI18n().t 运行时必崩）。
+     * 当项目不存在 locale i18n 实例文件时，全局 t 别名不生成。
+     * 提取的字符串仍替换为 t('key') 调用，使用方需确保 t 在运行时可用。
+     */
     fun testReactTsNoComponentNoHookShouldNotInjectUseTranslation() {
         val file = configureFile(
             "src/utils/format.ts",
@@ -1038,16 +1047,14 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "纯工具 TS 文件不应注入 useTranslation import, got:\n$resultText",
             resultText.contains("useTranslation")
         )
-        // ★ 用户新规则：react-i18next 关键字仍然出现在顶部（因为从它 import { getI18n }）
-        assertTrue(
-            "纯工具 TS 文件必须从 react-i18next import getI18n, got:\n$resultText",
-            resultText.replace("\\s+".toRegex(), "").let {
-                it.contains("import{getI18n}from'react-i18next'")
-            }
-        )
-        // ★ 不能再出现旧导入 i18n from i18next
+        // ★ 不再使用 getI18n 回退（没有 locale i18n 实例文件时不生成）
         assertFalse(
-            "纯工具 TS 文件不应再写旧的 import i18n from 'i18next', got:\n$resultText",
+            "纯工具 TS 文件不应使用 getI18n 回退, got:\n$resultText",
+            resultText.contains("getI18n")
+        )
+        // ★ 不应出现旧导入 i18n from i18next
+        assertFalse(
+            "纯工具 TS 文件不应写旧的 import i18n from 'i18next', got:\n$resultText",
             resultText.contains("from 'i18next'") || resultText.contains("""from "i18next"""")
         )
         // ★ 替换结果必须是短写法 t('总共') 等，**不**是 i18n.t(...)
@@ -1059,17 +1066,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
             "不应再出现冗长 i18n.t(...) 调用, got:\n$resultText",
             resultText.contains("i18n.t(")
         )
-        // ★ 必须追加 const t = getI18n().t;
-        assertTrue(
-            "必须追加 const t = getI18n().t; 全局别名, got:\n$resultText",
-            resultText.replace("\\s+".toRegex(), "").contains("constt=getI18n().t")
-        )
-        // ★ 顺序：const t = getI18n().t 必须在 import { getI18n } 之后（用户报告：别名跑进 import 上方乱序）
-        val importIdx = resultText.replace("\\s+".toRegex(), "").indexOf("import{getI18n}from'react-i18next'")
-        val aliasIdx = resultText.replace("\\s+".toRegex(), "").indexOf("constt=getI18n().t")
-        assertTrue(
-            "别名 const t = getI18n().t（offset=$aliasIdx）必须位于 import { getI18n }（offset=$importIdx）之后, got:\n$resultText",
-            importIdx in 0..aliasIdx
+        // ★ 不再生成 getI18n().t 别名
+        assertFalse(
+            "不应生成 const t = getI18n().t 别名, got:\n$resultText",
+            resultText.contains("getI18n().t")
         )
 
         // —— 连跑两遍不重复注入（问题 4 React 版本回归）——
@@ -1077,15 +1077,10 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
         processor2.collect()
         processor2.runWithUndo()
         val textAfterTwice = file.text.replace("\\s+".toRegex(), "")
-        val getI18nCnt = textAfterTwice.split("import{getI18n}from'react-i18next'").size - 1
-        val constCnt = textAfterTwice.split("constt=getI18n().t").size - 1
-        assertEquals(
-            "React getI18n import 重复出现 $getI18nCnt 次（expect 1）, txt:\n$textAfterTwice",
-            1, getI18nCnt
-        )
-        assertEquals(
-            "React const t 别名重复出现 $constCnt 次（expect 1）, txt:\n$textAfterTwice",
-            1, constCnt
+        // 没有 getI18n 相关内容，确保没有重复提取
+        assertFalse(
+            "第二次运行不应出现 getI18n, got:\n$textAfterTwice",
+            textAfterTwice.contains("getI18n")
         )
     }
 

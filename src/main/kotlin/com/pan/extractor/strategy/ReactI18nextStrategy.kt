@@ -110,32 +110,54 @@ object ReactI18nextStrategy : I18nFramework {
         val needGlobalI18nImport = hasAnyTCallsNeedingGlobalInstance ||
             reactModeNeedsImport || d.reactI18nTFallbackToDollarT
 
-        if (needGlobalI18nImport) {
-            // 全局导入条件：文件有提取的字符串、已存在 i18n.t 调用、或需要全局 $t 模式。
-            // 注意：d.hasExtractedStrings 单独列出（而非 && d.needInjectGlobalDollarT），
-            // 确保组件文件也能注入全局 import（第二块再追加 useTranslation hook）。
+        // 先计算 shouldInjectUseTranslation，用于下面判断是否跳过全局导入
+        val alreadyHasGlobalI18nInstance = injector.hasI18nInstanceImported(file)
+        // 组件文件（无全局 $t 需求）注入 useTranslation；纯工具文件走全局导入。
+        // 注意：不检查 d.tFunctionName != "i18n.t"——组件文件即使有 i18n.t 调用也应注入
+        // useTranslation hook（老 i18n.t 调用保留不走全局导入）。
+        val shouldInjectUseTranslation = !alreadyHasGlobalI18nInstance &&
+            !d.needInjectGlobalDollarT
+
+        // 全局导入：仅对纯工具文件（非组件）注入 locale import 或 getI18n 回退。
+        // 组件文件跳过此块，走下面 useTranslation hook 注入。
+        if (needGlobalI18nImport && !shouldInjectUseTranslation) {
             if (d.tFunctionName == "i18n.t" || d.reactI18nTFallbackToDollarT ||
                 d.hasExtractedStrings || reactModeNeedsImport
             ) {
-                val i18nAlreadyImported = injector.hasI18nInstanceImported(file)
                 val reactLocaleImport = injector.buildReactI18nInstanceImport(file)
                 val injectReactGlobalDollarT = d.needInjectGlobalDollarT || d.reactI18nTFallbackToDollarT
 
-                // 当找不到 locale i18n 实例文件且未导入时，跳过（不再回退 getI18n）
-                val requiredImportAlreadyPresent = i18nAlreadyImported
+                // 当 injectReactGlobalDollarT 为 true 时，必须检查是否已有 getI18n 命名导入，
+                // 不能把 `import i18n from 'i18next'` 视作"已满足"（否则会生成无 import 的
+                // getI18n().t 别名，运行时报 ReferenceError: getI18n is not defined）。
+                val requiredImportAlreadyPresent = if (injectReactGlobalDollarT) {
+                    injector.hasReactGetI18nImported(file)
+                } else {
+                    alreadyHasGlobalI18nInstance
+                }
 
                 val dollarTAliasAlreadyPresent =
                     if (injectReactGlobalDollarT) hasReactGlobalAllowedAliased(file) else true
 
+                // 纯工具文件（needInjectGlobalDollarT = true）且无 locale 实例时，
+                // 不生成 getI18n 回退，避免无意义的注入。
+                val hasLocaleInstance = reactLocaleImport != null
+                val skipGetI18nFallback = d.needInjectGlobalDollarT &&
+                    !hasLocaleInstance &&
+                    !d.reactI18nTFallbackToDollarT &&
+                    !requiredImportAlreadyPresent
+
                 val importText: String? = when {
                     requiredImportAlreadyPresent -> null
                     reactLocaleImport != null -> reactLocaleImport
-                    else -> null // 无 locale i18n 实例 + 未导入 → 跳过，不回退 getI18n
+                    skipGetI18nFallback -> null
+                    injectReactGlobalDollarT -> "import { getI18n } from 'react-i18next';\n"
+                    else -> null
                 }
                 val dollarTText: String? = when {
-                    injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
+                    injectReactGlobalDollarT && !dollarTAliasAlreadyPresent && !skipGetI18nFallback ->
                         if (reactLocaleImport != null) "const $tName = i18n.t;\n"
-                        else null // 无 locale 实例 → 不生成 getI18n().t 别名
+                        else "const $tName = getI18n().t;\n"
                     else -> null
                 }
                 if (importText != null) imports += importText
@@ -143,20 +165,16 @@ object ReactI18nextStrategy : I18nFramework {
             }
         }
 
-        // 组件级 useTranslation hook：仅当文件有实际提取的字符串，且尚未导入全局 i18n
-        // 实例时注入。不再因「文件是组件」而无条件注入（避免空文案组件也加 useTranslation）。
+        // 组件级 useTranslation hook：对非纯工具文件（组件 / hook 文件）注入。
         // 例外：文件已显式导入全局 i18n 实例（`import i18n from 'i18next'` 或
         // `import { getI18n } ...`）时，`i18n.t(...)` 视为有效的全局调用，不再注入组件级
         // useTranslation hook（避免把已走全局实例的老代码误切到组件 hook）。
-        val alreadyHasGlobalI18nInstance = injector.hasI18nInstanceImported(file)
-        if (d.hasExtractedStrings && !alreadyHasGlobalI18nInstance) {
-            if (d.tFunctionName != "i18n.t" && !d.needInjectGlobalDollarT) {
-                val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
-                if (importsInFile.none { it.text.contains("useTranslation") }) {
-                    imports += "import { useTranslation } from 'react-i18next';\n"
-                }
-                hooks += HookInjectPlan(HookTarget.REACT, "const { t } = useTranslation();")
+        if (shouldInjectUseTranslation) {
+            val importsInFile = PsiTreeUtil.findChildrenOfType(file, ES6ImportDeclaration::class.java)
+            if (importsInFile.none { it.text.contains("useTranslation") }) {
+                imports += "import { useTranslation } from 'react-i18next';\n"
             }
+            hooks += HookInjectPlan(HookTarget.REACT, "const { t } = useTranslation();")
         }
 
         return ImportPlan(

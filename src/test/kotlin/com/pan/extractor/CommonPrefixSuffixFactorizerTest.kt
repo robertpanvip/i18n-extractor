@@ -4,6 +4,7 @@ import com.pan.extractor.merge.CommonPrefixSuffixFactorizer
 import com.pan.extractor.merge.SiteRef
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -388,13 +389,16 @@ class CommonPrefixSuffixFactorizerTest {
      */
     @Test
     fun testVuePlaceholderNotSplitInPrefix() {
-        // "超过{N0}%的智能体" 与 "超过{N1}%的智能体" 共享前缀 "超过{" + 后缀 "}%的智能体"，
-        // 但 {N0} 和 {N1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
+        // "超过{N0}%的智能体" 与 "超过{N1}%的智能体" 共享前缀 "超过" + 后缀 "%的智能体"，
+        // {N0} 和 {N1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
         val sites = siteRefs("超过{N0}%的智能体", "超过{N1}%的智能体")
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
-        // 不应产生将 {N0}/{N1} 拆入前缀/后缀的合并组
-        val group = affix.firstOrNull { it.skeleton.contains("超过{") }
-        assertTrue("Vue 占位符 {N0}/{N1} 不应被拆入前缀/后缀，实际: $affix", group == null)
+        // 应该产生一个合并组，但 {N0}/{N1} 不应被拆入前缀/后缀
+        val group = affix.firstOrNull { it.skeleton.startsWith("超过{N0}") }
+        assertNotNull("Vue 占位符 {N0}/{N1} 应产生合并组，实际: $affix", group)
+        // 前缀应为 "超过" 而非 "超过{"（{N0} 整体保留在差异段中）
+        assertEquals("占位符不应被拆入前缀", "超过", group!!.prefix)
+        assertEquals("占位符不应被拆入后缀", "%的智能体", group.suffix)
     }
 
     /**
@@ -404,13 +408,16 @@ class CommonPrefixSuffixFactorizerTest {
      */
     @Test
     fun testGenericPlaceholderNotSplitInPrefix() {
-        // "超过{0}%的智能体" 与 "超过{1}%的智能体" 共享前缀 "超过{" + 后缀 "}%的智能体"，
-        // 但 {0} 和 {1} 是占位符不应被拆分。
+        // "超过{0}%的智能体" 与 "超过{1}%的智能体" 共享前缀 "超过" + 后缀 "%的智能体"，
+        // {0} 和 {1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
         val sites = siteRefs("超过{0}%的智能体", "超过{1}%的智能体")
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
-        // 不应产生将 {0}/{1} 拆入前缀/后缀的合并组
-        val group = affix.firstOrNull { it.skeleton.contains("超过{") }
-        assertTrue("Generic 占位符 {0}/{1} 不应被拆入前缀/后缀，实际: $affix", group == null)
+        // 应该产生一个合并组，但 {0}/{1} 不应被拆入前缀/后缀
+        val group = affix.firstOrNull { it.skeleton.startsWith("超过{N0}") }
+        assertNotNull("Generic 占位符 {0}/{1} 应产生合并组，实际: $affix", group)
+        // 前缀应为 "超过" 而非 "超过{"（{0} 整体保留在差异段中）
+        assertEquals("占位符不应被拆入前缀", "超过", group!!.prefix)
+        assertEquals("占位符不应被拆入后缀", "%的智能体", group.suffix)
     }
 
     /**

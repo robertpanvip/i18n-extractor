@@ -97,7 +97,7 @@ class I18nP0ExtractionDefectTest : BasePlatformTestCase() {
         val element: com.intellij.psi.PsiElement = file
         assertEquals("句末句号应被清除以避免嵌套路径 key", "Hello world", I18nPsiTools.generateKey("Hello world.", element))
         assertEquals("@ 应被替换", "Q A", I18nPsiTools.generateKey("Q@A", element))
-        assertEquals("| 应被替换", "A B", I18nPsiTools.generateKey("A|B", element))
+        assertEquals("| 应保留（不再替换为空格）", "A|B", I18nPsiTools.generateKey("A|B", element))
         // 内部点须保留：编号列表/小数是真实文案内容，不能按路径分隔符整体替换
         // （见 I18nProcessorTest.testObjectPropertyMultilineStringWithEscapedNewline）
         assertEquals("3.14 的内部小数点在 key 中应原样保留（它是文案而非嵌套路径）", "请输入 3.14 以上的值", I18nPsiTools.generateKey("请输入 3.14 以上的值", element))
