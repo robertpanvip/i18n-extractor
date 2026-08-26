@@ -312,19 +312,29 @@ class I18nAnalyzer(
         if (I18nPsiTools.isComment(element)) return
 
         val quote = "`"
-        val children = element.children.filter { it !is PsiWhiteSpace && !I18nPsiTools.isComment(it) && it !is PsiComment }
-        if (children.isEmpty()) return
-
+        // 遍历子节点，保留非空白节点间的空白（避免空格丢失）
         val sb = StringBuilder()
-        children.forEachIndexed { index, e ->
-            val text = I18nPsiTools.rm(e)
-            when (index) {
-                0 -> sb.append(quote).append(text)
-                children.lastIndex -> sb.append(text).append(quote)
-                else -> sb.append(text)
+        var childCount = 0
+        var pendingSpace = false
+        for (child in element.children) {
+            when {
+                child is PsiWhiteSpace -> { pendingSpace = true }
+                I18nPsiTools.isComment(child) || child is PsiComment -> { /* skip */ }
+                else -> {
+                    val text = I18nPsiTools.rm(child)
+                    if (childCount == 0) {
+                        sb.append(quote).append(text)
+                    } else {
+                        if (pendingSpace) sb.append(' ')
+                        sb.append(text)
+                    }
+                    childCount++
+                    pendingSpace = false
+                }
             }
         }
-        if (children.size == 1) sb.append(quote)
+        if (childCount == 0) return
+        sb.append(quote)
         val raw = sb.toString().trim()
 
         val compactRaw = raw.replace(Util.WS_COMPACT_RE, "")
@@ -341,8 +351,9 @@ class I18nAnalyzer(
                         if (e is JSLiteralExpression && !I18nPsiTools.isInComment(e)) {
                             if (PsiTreeUtil.getParentOfType(e, com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression::class.java) == null) {
                                 if (!jsCollector.isTransformedCalled(e)) {
+                                    val sizeBefore = plan.rewrites.size
                                     jsCollector.collectJSStringChange(e)
-                                    foundStrings = true
+                                    if (plan.rewrites.size > sizeBefore) foundStrings = true
                                 }
                             }
                         }
