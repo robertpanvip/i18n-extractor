@@ -127,12 +127,12 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
 
             // 文档变化监听（防抖）：用户修改文本后只重新计算编辑偏移附近的翻译调用
             // 的 inlay，避免扫描整个文件。连续修改只在停止输入 [DEBOUNCE_MS] 后触发一次。
-            @Suppress("DEPRECATION")
+            // 监听器绑定到 project，项目关闭时随之释放，避免类加载器被监听器引用而无法卸载。
             editor.document.addDocumentListener(object : DocumentListener {
                 override fun documentChanged(event: DocumentEvent) {
                     scheduleDebouncedRecompute(editor, project, file, messages, event.offset)
                 }
-            })
+            }, project)
 
             // 立即入队处理（每个文件只处理一次）。此前"先入 waiting 表、等切 tab 再入队"的
             // 延迟交接在后台恢复 tab 时可能因 selectionChanged 未触发而静默丢失，导致 inlay 永不出现。

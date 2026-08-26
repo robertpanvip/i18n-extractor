@@ -735,7 +735,7 @@ object SymbolAnalyzer {
      */
     private fun findSiblingSuffix(project: Project, suffix: String): VirtualFile? {
         val name = suffix.substringAfterLast('/')
-        return FilenameIndex.getVirtualFilesByName(project, name, ProjectScope.getAllScope(project))
+        return FilenameIndex.getVirtualFilesByName(name, ProjectScope.getAllScope(project))
             .asSequence()
             .firstOrNull { it.path.endsWith(suffix) }
     }
