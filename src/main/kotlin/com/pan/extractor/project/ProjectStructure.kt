@@ -367,22 +367,24 @@ object ProjectStructure {
     }
 
     /**
-     * 查找文件中所有 use 开头的顶级 hook 函数（函数声明、箭头函数、函数表达式）。
+     * 查找文件中所有顶级 hook 函数（函数声明、箭头函数、函数表达式）。
      * 用于 Vue/React 项目中纯 .ts/.tsx 文件的自定义 hook：识别后可注入
      * useI18n / useTranslation，使 hook 内部的硬编码中文能被国际化。
-     * 与 [findReactComponentFunctions] 不同，本函数只按函数名前缀匹配，
-     * 不依赖 React 上下文（return JSX / hook 调用等），可安全用于 Vue 项目。
+     *
+     * 判定条件（满足任一即可）：
+     * 1. 函数名 useXxx 格式（X 大写），避免误判 userChangePwd 等普通函数；
+     * 2. 函数体顶层作用域包含 React/Vue hooks 调用（useState / useI18n / useRouter 等），
+     *    或包含自定义 hooks 调用（其他 useXxx 调用），且会递归检查嵌套函数。
      */
     fun findHookFunctions(file: PsiFile): List<PsiElement> {
         val result = mutableListOf<PsiElement>()
         val seen = mutableSetOf<PsiElement>()
         // 1. 通过 JSFunction 查找（函数声明、箭头函数、函数表达式）
-        //    要求 useXxx 格式（X 大写），避免误判 userChangePwd 等普通函数
         PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java).forEach { func ->
             if (!isTopLevelFunction(func, file)) return@forEach
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
             val name = getFunctionName(func)
-            if (name != null && name.startsWith("use") && name.length > 3 && name[3].isUpperCase() && func !in seen) {
+            if (isHookCandidate(func, body, name) && func !in seen) {
                 result.add(func)
                 seen.add(func)
             }
@@ -391,14 +393,32 @@ object ProjectStructure {
         PsiTreeUtil.findChildrenOfType(file, JSVarStatement::class.java).forEach { varStmt ->
             if (!isTopLevelFunction(varStmt, file)) return@forEach
             val func = PsiTreeUtil.findChildOfType(varStmt, JSFunction::class.java) ?: return@forEach
-            PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
+            val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
             val name = getFunctionName(func)
-            if (name != null && name.startsWith("use") && name.length > 3 && name[3].isUpperCase() && func !in seen) {
+            if (isHookCandidate(func, body, name) && func !in seen) {
                 result.add(func)
                 seen.add(func)
             }
         }
         return result
+    }
+
+    /**
+     * 判断一个顶级函数是否是 hook 候选。
+     *
+     * 判定条件（满足任一即可）：
+     * 1. 函数名 useXxx 格式（X 大写），属自定义 hook 命名约定；
+     * 2. 函数体顶层作用域包含 React/Vue 标准 hooks 或自定义 hooks 的调用
+     *    （如 useState / useEffect / useI18n / useRouter 等 use* 调用），
+     *    且会递归检查嵌套函数——因为函数内调用了 hook，它本身也需要
+     *    useTranslation / useI18n 注入。
+     */
+    private fun isHookCandidate(func: JSFunction, body: JSBlockStatement, name: String?): Boolean {
+        // 条件1：函数名 useXxx（X 大写），避免误判 userChangePwd 等普通函数
+        if (name != null && name.startsWith("use") && name.length > 3 && name[3].isUpperCase()) return true
+        // 条件2：函数体顶层作用域包含 use* 调用（React/Vue hooks 或自定义 hooks）
+        if (hasTopLevelHookCall(body)) return true
+        return false
     }
 
     /**
