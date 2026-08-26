@@ -356,6 +356,8 @@ object ImportRewriter : SourceRewriter {
     private fun findDirectBlockIn(ancestor: PsiElement): JSBlockStatement? {
         for (child in ancestor.children) {
             if (child is JSBlockStatement) return child
+            // 不深入嵌套函数，避免 setup 内箭头函数被误注入 useI18n
+            if (child is JSFunction) continue
             val found = findDirectBlockIn(child)
             if (found != null) return found
         }

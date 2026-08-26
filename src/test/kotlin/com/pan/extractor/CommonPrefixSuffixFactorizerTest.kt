@@ -268,13 +268,34 @@ class CommonPrefixSuffixFactorizerTest {
     fun testMeaningfulAffixGroupStillGenerated() {
         val sites = siteRefs("测试职务仅能选择60人", "测试职务仅能选择30人")
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val group = affix.firstOrNull { it.skeleton.startsWith("测试职务仅能选择{N0}") }
         assertTrue(
             "共享片段占比足够时应照常生成 affix 组，实际: $affix",
-            // 贪心算法取「最大公共后缀」会把数字末位并入后缀，得到
-            // 测试职务仅能选择{N0}0人（diff=6/3）或 测试职务仅能选择{N0}人（diff=60/30）；
-            // 二者都是合法骨架，只要前缀+占位被保留即说明未过度过滤。
-            affix.any { it.skeleton.startsWith("测试职务仅能选择{N0}") }
+            group != null
         )
+        // 数字边界保护：60 和 30 是不同的完整数字，不应被拆分为 diff=6/3 + 后缀 "0人"，
+        // 应正确生成骨架 "测试职务仅能选择{N0}人" 且 diff 为 "60"/"30"
+        assertEquals("测试职务仅能选择{N0}人", group!!.skeleton)
+        assertEquals(setOf("60", "30"), group.variants.map { it.diff }.toSet())
+    }
+
+    /**
+     * 用户反馈 Bug 3 回归：限制30字符 / 限制200字符 应提炼为 "限制{N0}字符"，
+     * 而不是 "限制{N0}0字符"。
+     *
+     * 根因：后缀扫描时，'0' 在两句中分别属于 "30" 和 "200" 两个不同的数字 token，
+     * 但算法只按 char 匹配，把 '0' 计入了公共后缀，导致后缀 = "0字符"。
+     * 修复：后缀扫描时若遇到数字字符，检查完整数字 token 是否相同，不同则停止扫描。
+     */
+    @Test
+    fun testDigitBoundaryInSuffix() {
+        val sites = siteRefs("限制30字符", "限制200字符")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val group = affix.firstOrNull { it.skeleton.startsWith("限制{N0}") }
+        assertTrue("应生成 affix 组，实际: $affix", group != null)
+        // 骨架应为 "限制{N0}字符"，不是 "限制{N0}0字符"
+        assertEquals("限制{N0}字符", group!!.skeleton)
+        assertEquals(setOf("30", "200"), group.variants.map { it.diff }.toSet())
     }
 
     /**
@@ -336,5 +357,73 @@ class CommonPrefixSuffixFactorizerTest {
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
         // 真实页面量级（近 5000 条）应在亚秒内完成；宽松阈值避免 CI 抖动。
         assertTrue("真实页面量级近 5000 条耗时 ${elapsedMs}ms，疑似退化", elapsedMs < 3_000)
+    }
+
+    /**
+     * Bug 回归（问题 2/4）：Vue/Generic 占位符 {N0}/{0} 不应被合并算法拆分到前后缀中。
+     *
+     * 模板字符串提取后 originalMessage 已包含这些占位符（如 `最大值{0}` 来自 `最大值${num}`），
+     * 合并算法不应将 `{0}` 拆分到前缀或后缀中，否则会产生 "最{N0}{N0}" 或 "超过{N{N0}}%的智能体"
+     * 等错误骨架。
+     *
+     * 本用例验证：两条包含相同 Generic 占位符 {0} 的字符串，因占位符保护，
+     * 后缀扫描应停在 {0} 边界处，不产生骨架合并。
+     */
+    @Test
+    fun testGenericPlaceholderNotSplitInSuffix() {
+        // "最大值{0}" 与 "大值{0}" 共享后缀 {0}，但 {0} 是占位符不应被拆分入后缀，
+        // 因此后缀扫描应停在 {0} 边界，使 sLen=0，不满足合并阈值。
+        val sites = siteRefs("最大值{0}", "大值{0}")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        // 不应产生将 {0} 拆入后缀的合并组
+        val group = affix.firstOrNull { it.skeleton.contains("最大值{N0}") || it.skeleton.contains("大值{N0}") }
+        assertTrue("Vue/Generic 占位符 {0} 不应被拆入后缀，实际: $affix", group == null)
+    }
+
+    /**
+     * Bug 回归（问题 2/4）：Vue 占位符 {N0} 不应被合并算法拆分到前缀中。
+     *
+     * 本用例验证：两条字符串共享前缀 "超过{" 但 {N0} 是占位符不应被拆分入前缀，
+     * 前缀扫描应停在 { 边界处。
+     */
+    @Test
+    fun testVuePlaceholderNotSplitInPrefix() {
+        // "超过{N0}%的智能体" 与 "超过{N1}%的智能体" 共享前缀 "超过{" + 后缀 "}%的智能体"，
+        // 但 {N0} 和 {N1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
+        val sites = siteRefs("超过{N0}%的智能体", "超过{N1}%的智能体")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        // 不应产生将 {N0}/{N1} 拆入前缀/后缀的合并组
+        val group = affix.firstOrNull { it.skeleton.contains("超过{") }
+        assertTrue("Vue 占位符 {N0}/{N1} 不应被拆入前缀/后缀，实际: $affix", group == null)
+    }
+
+    /**
+     * Bug 回归（问题 2/4）：Generic 占位符 {0} 不应被拆分到前缀中。
+     *
+     * 本用例验证：两条包含 Generic 占位符 {0}/{1} 的字符串，前缀扫描应停在 { 边界处。
+     */
+    @Test
+    fun testGenericPlaceholderNotSplitInPrefix() {
+        // "超过{0}%的智能体" 与 "超过{1}%的智能体" 共享前缀 "超过{" + 后缀 "}%的智能体"，
+        // 但 {0} 和 {1} 是占位符不应被拆分。
+        val sites = siteRefs("超过{0}%的智能体", "超过{1}%的智能体")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        // 不应产生将 {0}/{1} 拆入前缀/后缀的合并组
+        val group = affix.firstOrNull { it.skeleton.contains("超过{") }
+        assertTrue("Generic 占位符 {0}/{1} 不应被拆入前缀/后缀，实际: $affix", group == null)
+    }
+
+    /**
+     * 对照：不含占位符的字符串，正常共享前后缀时仍应产生合并组（防止保护过度）。
+     * "超过A%的智能体" 与 "超过B%的智能体" 共享前缀 "超过" 和后缀 "%的智能体"，
+     * 应正常合并为骨架 "超过{N0}%的智能体"。
+     */
+    @Test
+    fun testNonPlaceholderStringsStillMerge() {
+        val sites = siteRefs("超过A%的智能体", "超过B%的智能体")
+        val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
+        val group = affix.firstOrNull { it.skeleton == "超过{N0}%的智能体" }
+        assertTrue("不含占位符的正常字符串应照常合并，实际: $affix", group != null)
+        assertEquals(setOf("A", "B"), group!!.variants.map { it.diff }.toSet())
     }
 }

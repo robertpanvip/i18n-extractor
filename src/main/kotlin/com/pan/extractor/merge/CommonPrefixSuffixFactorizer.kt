@@ -303,16 +303,30 @@ object CommonPrefixSuffixFactorizer {
         var pLen = 0
         while (pLen < maxLen && a[pLen] == b[pLen]) {
             if (isReactPlaceholderStart(a, pLen)) break
+            // Vue/Generic 占位符保护：{N0}/{0} 不应被拆分到公共前缀中
+            if (isVueOrGenericPlaceholderStart(a, pLen)) break
             pLen++
         }
         if (pLen == maxLen) return null   // 其中之一是另一句的前缀/完全重合 → 无差异段
         // ② 纯 char 快速扫描：公共后缀长度（遇到 React 占位符 `}}` 立即停止）
+        // 【数字边界保护】当扫描到数字字符时，检查它们是否属于不同的完整数字 token。
+        // 例如 "限制30字符" 与 "限制200字符"：末尾 '符'/'字' 匹配后，'0' 也匹配，
+        // 但 '0' 在各自字符串中属于 "30" 和 "200" 两个不同的数字，不应计入公共后缀，
+        // 否则会生成 "限制{N0}0字符" 的错误骨架。
         var sLen = 0
         val aEnd = a.length - 1
         val bEnd = b.length - 1
         while (pLen + sLen < maxLen && a[aEnd - sLen] == b[bEnd - sLen]) {
             val pos = aEnd - sLen
             if (isReactPlaceholderEnd(a, pos)) break
+            // Vue/Generic 占位符保护：{N0}/{0} 不应被拆分到公共后缀中
+            if (isVueOrGenericPlaceholderEnd(a, pos) || isVueOrGenericPlaceholderEnd(b, bEnd - sLen)) break
+            // 数字边界保护：匹配的字符是数字时，检查是否属于不同完整数字段
+            if (a[pos].isDigit() && b[bEnd - sLen].isDigit()) {
+                val aNum = extractFullNumberAt(a, pos)
+                val bNum = extractFullNumberAt(b, bEnd - sLen)
+                if (aNum != bNum) break
+            }
             sLen++
         }
         // ③ 阈值早筛：不满足约定合并长度（≥2 字）直接返回，避免物化字符串
@@ -370,6 +384,50 @@ object CommonPrefixSuffixFactorizer {
                 s[pos] == '}' && s[pos - 1] == '}' &&
                 s[pos - 2].isDigit() &&
                 s[pos - 3] == '{' && s[pos - 4] == '{'
+    }
+
+    // ── Vue / Generic 占位符保护 ────────────────────────────────
+    // 防止消息文本中的 {N0} / {0} / {N1} 等内部占位符被合并算法拆散。
+    // 模板字符串提取后 originalMessage 已包含这些占位符，合并算法不应将其拆分到前后缀中，
+    // 否则会产生 "最{N0}{N0}" 或 "超过{N{N0}}%的智能体" 等错误骨架。
+
+    /**
+     * 检查 [pos] 是否为 Vue / Generic 占位符的起始位置（即 `{`）。
+     * Vue 格式：`{N0}`, `{N1}`, ...（`{` + `N` + digit + `}`）
+     * Generic 格式：`{0}`, `{1}`, ...（`{` + digit + `}`）
+     */
+    private fun isVueOrGenericPlaceholderStart(s: String, pos: Int): Boolean {
+        if (pos < 0 || s[pos] != '{') return false
+        // Vue 格式 {N0}：至少 4 字符 {, N, digit, }
+        if (pos + 3 < s.length && s[pos + 1] == 'N' && s[pos + 2].isDigit() && s[pos + 3] == '}') return true
+        // Generic 格式 {0}：至少 3 字符 {, digit, }
+        if (pos + 2 < s.length && s[pos + 1].isDigit() && s[pos + 2] == '}') return true
+        return false
+    }
+
+    /**
+     * 检查 [pos] 是否为 Vue / Generic 占位符的结束位置（即 `}`）。
+     * Vue 格式：`{N0}`, `{N1}`, ...（`{` + `N` + digit + `}`）
+     * Generic 格式：`{0}`, `{1}`, ...（`{` + digit + `}`）
+     */
+    private fun isVueOrGenericPlaceholderEnd(s: String, pos: Int): Boolean {
+        if (pos < 0 || s[pos] != '}') return false
+        // Vue 格式 {N0}：至少 4 字符 {, N, digit, }
+        if (pos >= 3 && s[pos - 1].isDigit() && s[pos - 2] == 'N' && s[pos - 3] == '{') return true
+        // Generic 格式 {0}：至少 3 字符 {, digit, }
+        if (pos >= 2 && s[pos - 1].isDigit() && s[pos - 2] == '{') return true
+        return false
+    }
+
+    /**
+     * 从字符串 [s] 的 [pos] 位置提取完整的数字 token（匹配 DIGIT_TOKEN_RE 模式 `\d+(?:\.\d+)?`）。
+     * 用于后缀扫描的数字边界保护：当两个字符串在相同位置都遇到数字字符时，
+     * 判断它们是否属于同一个完整数字（如 "30" == "30"），否则不应计入公共后缀。
+     */
+    private fun extractFullNumberAt(s: String, pos: Int): String {
+        if (pos < 0 || pos >= s.length || !s[pos].isDigit()) return ""
+        val m = DIGIT_TOKEN_RE.findAll(s).firstOrNull { it.range.contains(pos) }
+        return m?.value ?: s[pos].toString()
     }
 
     // ── ② 汉字≥2字 + 数字字面量抽取（MVP 单占位 {N0}；多数字同句先忽略，留 digitValues[0] 第一个命中的数字段） ──
