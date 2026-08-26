@@ -622,7 +622,6 @@ object I18nPsiTools {
     internal fun generateKey(value: String, element: PsiElement): String {
         return value.trim()
             .replace("@", " ")
-            .replace("|", " ")
             .trim()
             .trimStart('.')
             .trimEnd('.')

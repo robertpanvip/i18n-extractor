@@ -377,11 +377,12 @@ object ProjectStructure {
         val result = mutableListOf<PsiElement>()
         val seen = mutableSetOf<PsiElement>()
         // 1. 通过 JSFunction 查找（函数声明、箭头函数、函数表达式）
+        //    要求 useXxx 格式（X 大写），避免误判 userChangePwd 等普通函数
         PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java).forEach { func ->
             if (!isTopLevelFunction(func, file)) return@forEach
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
             val name = getFunctionName(func)
-            if (name != null && name.startsWith("use") && func !in seen) {
+            if (name != null && name.startsWith("use") && name.length > 3 && name[3].isUpperCase() && func !in seen) {
                 result.add(func)
                 seen.add(func)
             }
@@ -392,7 +393,7 @@ object ProjectStructure {
             val func = PsiTreeUtil.findChildOfType(varStmt, JSFunction::class.java) ?: return@forEach
             PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: return@forEach
             val name = getFunctionName(func)
-            if (name != null && name.startsWith("use") && func !in seen) {
+            if (name != null && name.startsWith("use") && name.length > 3 && name[3].isUpperCase() && func !in seen) {
                 result.add(func)
                 seen.add(func)
             }
@@ -508,12 +509,12 @@ object ProjectStructure {
 
     /** 判断是否为 React 组件/hook 函数 */
     private fun isReactFunction(func: JSFunction, body: JSBlockStatement): Boolean {
-        // 条件1：函数名 PascalCase 或 use 开头
+        // 条件1：函数名 PascalCase 或 useXxx 开头（X 大写，避免误判 userChangePwd 等普通函数）
         val name = getFunctionName(func)
         if (name == null || name.isEmpty()) {
             return false
         }
-        if (name.startsWith("use")) return true
+        if (name.startsWith("use") && name.length > 3 && name[3].isUpperCase()) return true
 
         if (name[0].isUpperCase()){
             // 条件2：函数体里有 return <JSX>

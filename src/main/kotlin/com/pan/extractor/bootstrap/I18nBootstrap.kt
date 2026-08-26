@@ -7,11 +7,15 @@ import com.pan.extractor.locate.I18nInstanceLocator
 import com.pan.extractor.editor.TsFileEditor
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.PsiWhiteSpace
+import com.intellij.psi.PsiElement
 
 /**
  * i18n bootstrap 的实际执行器：
@@ -118,7 +122,70 @@ object I18nBootstrap {
                 PluginLogBuffer.warn(LOG,"I18nBootstrap: 创建初始化文件 i18n.ts 失败", t)
             }
         }
+        // ── 4) 在项目入口文件（index.tsx / main.tsx / App.tsx）首行添加 import "@/locales/i18n" ──
+        if (initVf == null && localesDir != null) {
+            // 只在本次新建了初始化文件时才注入入口 import（避免重复）
+            val entryImport = "import \"@/locales/i18n\";\n"
+            val entryFile = findEntryFile(root)
+            if (entryFile != null && !hasEntryI18nImport(entryFile, entryImport)) {
+                try {
+                    val psiEntry = PsiManager.getInstance(project).findFile(entryFile)
+                    if (psiEntry != null) {
+                        injectImportAtTop(psiEntry, entryImport)
+                    }
+                } catch (t: Throwable) {
+                    PluginLogBuffer.warn(LOG, "I18nBootstrap: 注入入口 import 失败", t)
+                }
+            }
+        }
         return entryVf
+    }
+
+    /**
+     * 在项目根下查找 React/Vue 入口文件（main.tsx / index.tsx / App.tsx / main.ts / index.ts）。
+     * 优先 src/ 目录，再回退根目录。
+     */
+    private fun findEntryFile(root: VirtualFile): VirtualFile? {
+        val srcDir = root.findChild("src") ?: root
+        val candidates = listOf("main.tsx", "index.tsx", "App.tsx", "main.ts", "index.ts", "app.tsx", "app.ts")
+        for (name in candidates) {
+            srcDir.findChild(name)?.let { return it }
+        }
+        // 回退根目录
+        for (name in candidates) {
+            root.findChild(name)?.let { return it }
+        }
+        return null
+    }
+
+    /** 检查入口文件是否已包含 i18n 初始化文件的 import。 */
+    private fun hasEntryI18nImport(entryVf: VirtualFile, importText: String): Boolean {
+        return try {
+            val text = String(entryVf.contentsToByteArray(), Charsets.UTF_8)
+            text.contains("@/locales/i18n") || text.contains("./locales/i18n") || text.contains("../locales/i18n")
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    /** 在 PsiFile 顶部注入 import 语句。 */
+    private fun injectImportAtTop(psiFile: PsiFile, importText: String) {
+        val imports = PsiTreeUtil.findChildrenOfType(psiFile, ES6ImportDeclaration::class.java)
+        val stmt = com.pan.extractor.project.I18nPsiTools.createJSStatementFromText(importText, psiFile)
+        if (imports.isNotEmpty()) {
+            val firstImport = imports.first()
+            firstImport.parent.addBefore(stmt, firstImport)
+        } else {
+            var firstChild = psiFile.firstChild
+            while (firstChild != null && firstChild is PsiWhiteSpace) {
+                firstChild = firstChild.nextSibling
+            }
+            if (firstChild != null) {
+                psiFile.addBefore(stmt, firstChild)
+            } else {
+                psiFile.add(stmt)
+            }
+        }
     }
 
     /** 默认语言：优先取当前文件所在中文入口的 locale，否则回退 zh。 */

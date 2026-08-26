@@ -118,31 +118,24 @@ object ReactI18nextStrategy : I18nFramework {
                 d.hasExtractedStrings || reactModeNeedsImport
             ) {
                 val i18nAlreadyImported = injector.hasI18nInstanceImported(file)
-                val alreadyUsesGetI18n = injector.hasReactGetI18nImported(file) || hasReactGetI18nAlias(file)
-                val reactLocaleImport =
-                    if (alreadyUsesGetI18n) null else injector.buildReactI18nInstanceImport(file)
+                val reactLocaleImport = injector.buildReactI18nInstanceImport(file)
                 val injectReactGlobalDollarT = d.needInjectGlobalDollarT || d.reactI18nTFallbackToDollarT
-                val reactDollarTImportSatisfied =
-                    if (reactLocaleImport != null) i18nAlreadyImported else injector.hasReactGetI18nImported(file)
-                val requiredImportAlreadyPresent =
-                    if (injectReactGlobalDollarT) reactDollarTImportSatisfied else i18nAlreadyImported
+
+                // 当找不到 locale i18n 实例文件且未导入时，跳过（不再回退 getI18n）
+                val requiredImportAlreadyPresent = i18nAlreadyImported
 
                 val dollarTAliasAlreadyPresent =
                     if (injectReactGlobalDollarT) hasReactGlobalAllowedAliased(file) else true
-                val reactI18nAliasAlreadyPresent = hasReactI18nGlobalAliased(file)
-                val reactNeedsI18nAlias = !injectReactGlobalDollarT &&
-                    reactLocaleImport == null && !requiredImportAlreadyPresent
 
                 val importText: String? = when {
                     requiredImportAlreadyPresent -> null
                     reactLocaleImport != null -> reactLocaleImport
-                    else -> "import { getI18n } from 'react-i18next';\n"
+                    else -> null // 无 locale i18n 实例 + 未导入 → 跳过，不回退 getI18n
                 }
                 val dollarTText: String? = when {
                     injectReactGlobalDollarT && !dollarTAliasAlreadyPresent ->
                         if (reactLocaleImport != null) "const $tName = i18n.t;\n"
-                        else "const $tName = getI18n().t;\n"
-                    reactNeedsI18nAlias && !reactI18nAliasAlreadyPresent -> "const i18n = getI18n();\n"
+                        else null // 无 locale 实例 → 不生成 getI18n().t 别名
                     else -> null
                 }
                 if (importText != null) imports += importText
@@ -187,16 +180,4 @@ object ReactI18nextStrategy : I18nFramework {
                 compact.contains(Util.SIGNATURE_REACT_I18N_T)
         }
     }
-
-    /** React `const i18n = getI18n()` 别名是否已存在。 */
-    private fun hasReactI18nGlobalAliased(root: PsiElement): Boolean {
-        val vars = PsiTreeUtil.findChildrenOfType(root, JSVarStatement::class.java)
-        return vars.any {
-            it.text.replace(Util.WS_COMPACT_RE, "").contains(Util.SIGNATURE_REACT_GET_I18N_ALIAS)
-        }
-    }
-
-    /** React 是否已在用 getI18n（import 或 const 别名）。 */
-    private fun hasReactGetI18nAlias(root: PsiElement): Boolean =
-        hasReactGlobalAllowedAliased(root) || hasReactI18nGlobalAliased(root)
 }
