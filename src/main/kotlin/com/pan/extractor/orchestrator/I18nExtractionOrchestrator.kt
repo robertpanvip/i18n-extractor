@@ -21,9 +21,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
-import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -105,13 +103,19 @@ object I18nExtractionOrchestrator {
         val extracted = mutableMapOf<String, String>()
         val total = files.size
         val processors: List<I18nProcessor> = files.mapIndexedNotNull { idx, file ->
-            // P0: 进度更新放在文件处理之后，而非之前。
-            //     旧实现放之前导致「进度条停在 21/456」的假象 —— 用户看到的是「即将处理 21」的文本，
-            //     而文件 21 实际正在处理中（可能耗时较长），用户就误以为卡住了。
-            //     改成 after 后，进度条只反映*已完成*的文件数，用户看到的是「已处理 20/456」。
+            // 【进度卡在 20/477 修复】进度更新放在文件处理**之前**。
+            // 旧实现放之后导致：用户看到的是「已处理 20/477」，但文件 21 正在处理中（可能耗时较长），
+            // 用户就误以为进度条「卡在 20 不动了」。换成 before 后，用户看到的是「正在处理 21/477」，
+            // 知道哪个文件正在被分析，不会再误以为卡住。
             // 单文件分析容错：某个文件（如 PSI 未就绪 / IndexNotReady / 偶发解析异常）失败时
             // 记录日志并跳过，而不是中断整批 —— 否则一个大项目里个别坏文件会导致 collect 整体
             // 抛异常，进而被动作层误报成「未发现中文」并让进度条停在失败点。
+            if (indicator != null) {
+                indicator.checkCanceled()
+                indicator.text = I18nExtractorBundle.message("action.progress.analyzing.file", file.name, idx + 1, total)
+                indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
+                indicator.fraction = 0.2 + 0.8 * (idx).toDouble() / total.toDouble()
+            }
             val result = try {
                 ApplicationManager.getApplication().runReadAction<I18nProcessor?> {
                     val psiFile: PsiFile? = PsiManager.getInstance(project).findFile(file)
@@ -134,14 +138,6 @@ object I18nExtractionOrchestrator {
                     t
                 )
                 null
-            }
-            // 每分析一个文件，推进一次进度（含 cancel 检查），让批量提取的进度条持续更新。
-            // 放在 try-catch 之后，确保只对*已完成*的文件更新进度数值。
-            if (indicator != null) {
-                indicator.checkCanceled()
-                indicator.text = I18nExtractorBundle.message("action.progress.analyzing.file", file.name, idx + 1, total)
-                indicator.text2 = I18nExtractorBundle.message("action.progress.extracted.keys", extracted.size)
-                indicator.fraction = 0.2 + 0.8 * (idx + 1).toDouble() / total.toDouble()
             }
             result
         }
@@ -266,12 +262,7 @@ object I18nExtractionOrchestrator {
         // ══════════════════════════════════════════════════════════════════════════════
         val edtRunner: ((() -> Unit) -> Unit) = { r ->
             ApplicationManager.getApplication().invokeAndWait {
-                ProgressManager.getInstance().runProcess(
-                    {
-                        WriteCommandAction.runWriteCommandAction(project) { r() }
-                    },
-                    EmptyProgressIndicator()
-                )
+                WriteCommandAction.runWriteCommandAction(project) { r() }
             }
         }
 
@@ -287,17 +278,14 @@ object I18nExtractionOrchestrator {
         collection.extracted.putAll(merged)
 
         // 最终输出（资源写回）：同样走 invokeAndWait + WCA，确保 EDT 处理进度
+        // 注意：不再包 EmptyProgressIndicator()—— 我们已在后台 Task 内，ProgressManager
+        // 已有 indicator 实例；runProcess 会创建新的可见进度上下文，导致弹出额外进度条。
         ApplicationManager.getApplication().invokeAndWait {
-            ProgressManager.getInstance().runProcess(
-                {
-                    WriteCommandAction.runWriteCommandAction(project) {
-                        output = applyFinalOutput(
-                            project, options, LinkedHashMap(merged), dropExistingKeys
-                        )
-                    }
-                },
-                EmptyProgressIndicator()
-            )
+            WriteCommandAction.runWriteCommandAction(project) {
+                output = applyFinalOutput(
+                    project, options, LinkedHashMap(merged), dropExistingKeys
+                )
+            }
         }
         indicator.fraction = 1.0
         indicator.text = I18nExtractorBundle.message("orchestrator.complete")
