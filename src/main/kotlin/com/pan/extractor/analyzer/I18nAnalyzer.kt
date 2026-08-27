@@ -20,6 +20,7 @@ import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
+import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -300,6 +301,21 @@ class I18nAnalyzer(
                 is XmlAttributeValue -> collectXmlAttributeValueChange(element)
                 is JSLiteralExpression -> jsCollector.collectJSStringChange(element)
                 is JSBinaryExpression -> jsCollector.collectJSBinaryExpressionChange(element)
+                is JSStringTemplateExpression -> {
+                    // 跳过已翻译的 $t() 调用参数，避免重复提取
+                    val parent = element.parent
+                    if (parent is JSCallExpression && parent.arguments.firstOrNull() === element &&
+                        TranslationAnalyzer.analyzeCall(parent).status == TranslationCallStatus.TRANSLATION
+                    ) {
+                        return@handle
+                    }
+                    // 检查文本是否包含中文，不含则跳过
+                    val raw = element.text
+                    if (raw.isEmpty() || !contract.containsTargetLanguage(raw, SiteKind.JS_TEMPLATE)) {
+                        return@handle
+                    }
+                    jsCollector.collectJSStringTemplate(raw, element) { value -> value }
+                }
             }
         }
 

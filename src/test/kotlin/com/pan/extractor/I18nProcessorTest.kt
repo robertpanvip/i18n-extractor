@@ -463,6 +463,83 @@ class I18nProcessorTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * 测试函数调用中模板字面量变量插值应提取，且占位符不应出现四重花括号。
+     * 例：message.warning(`只能上传${types}文件！`)
+     * 预期提取："只能上传{0}文件！"（Generic 框架，单花括号）
+     * 不应出现："只能上传{{{{0}}}}文件！"（四重花括号 Bug）
+     */
+    fun testTemplateLiteralInFunctionCallWithVariable() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            message.warning(`只能上传${'$'}{types}文件！`)
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertEquals(
+            "message.warning() 中模板字面量的变量插值应被提取出 1 条，got: ${processor.analyzer.extractedStrings}",
+            1,
+            processor.analyzer.extractedStrings.size
+        )
+        val extracted = processor.analyzer.extractedStrings.values.first()
+        assertTrue(
+            "提取结果应包含中文\"只能上传\"，但 got: $extracted",
+            extracted.contains("只能上传")
+        )
+        assertTrue(
+            "提取结果应包含中文\"文件！\"，但 got: $extracted",
+            extracted.contains("文件！")
+        )
+        // 占位符应为 {0}（Generic 框架单花括号），不应出现 {{{{0}}}} 四重花括号
+        assertFalse(
+            "提取结果不应出现四重花括号 {{{{0}}}}, but got: $extracted",
+            extracted.contains("{{{{")
+        )
+        // 占位符应为 {0} 格式（Generic 框架）
+        assertEquals(
+            "提取结果应为\"只能上传{0}文件！\", but got: $extracted",
+            "只能上传{0}文件！",
+            extracted
+        )
+    }
+
+    /**
+     * 测试函数调用中模板字面量多个变量插值，验证占位符顺序正确
+     * 例：message.warning(`只能上传${types}文件，大小${size}MB`)
+     */
+    fun testTemplateLiteralInFunctionCallMultipleVariables() {
+        val file = myFixture.configureByText(
+            "test.ts",
+            """
+            message.warning(`只能上传${'$'}{types}文件，大小${'$'}{size}MB`)
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+
+        assertEquals(
+            "多变量模板字面量应提取出 1 条，got: ${processor.analyzer.extractedStrings}",
+            1,
+            processor.analyzer.extractedStrings.size
+        )
+        val extracted = processor.analyzer.extractedStrings.values.first()
+        // 验证占位符顺序正确，且没有四重花括号
+        assertFalse(
+            "提取结果不应出现四重花括号, but got: $extracted",
+            extracted.contains("{{{{")
+        )
+        assertEquals(
+            "提取结果应为\"只能上传{0}文件，大小{1}MB\", but got: $extracted",
+            "只能上传{0}文件，大小{1}MB",
+            extracted
+        )
+    }
+
     // ============================================================
     // 4. 字符串拼接 (+)
     // ============================================================

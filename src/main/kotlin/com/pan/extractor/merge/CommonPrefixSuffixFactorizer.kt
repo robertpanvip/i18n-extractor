@@ -368,24 +368,28 @@ object CommonPrefixSuffixFactorizer {
 
     /**
      * 检查 [pos] 是否为 React 插值占位符 [{{n}}] 的起始位置。
-     * 格式：`{`, `{`, [digit], `}`, `}` 共 5 字符。
+     * 只要遇到 `{{` 开头且下一个字符是数字，就判定为占位符开始，
+     * 避免 `{{` 被拆分计入公共前缀导致最终生成四重花括号。
      */
     private fun isReactPlaceholderStart(s: String, pos: Int): Boolean {
-        return pos + 4 < s.length &&
+        // 只要位置足够且以 {{ 开头，下一个字符是数字，就判定为占位符开始
+        // 不需要等到能看到完整的 }}（因为前缀扫描只到第一个 { 位置）
+        return pos + 2 < s.length &&
                 s[pos] == '{' && s[pos + 1] == '{' &&
-                s[pos + 2].isDigit() &&
-                s[pos + 3] == '}' && s[pos + 4] == '}'
+                s[pos + 2].isDigit()
     }
 
     /**
-     * 检查 [pos] 是否为 React 插值占位符 [{{n}}] 的结束位置（即最后一个 `}`）。
-     * 调用时 [pos] 是后缀扫描中正在比较的字符位置。
+     * 检查 [pos] 是否为 React 插值占位符 [{{n}}] 的结束位置。
+     * 只要遇到 `}}` 结尾且前一个字符是数字，就判定为占位符结束，
+     * 避免 `}}` 被拆分计入公共后缀导致最终生成四重花括号。
      */
     private fun isReactPlaceholderEnd(s: String, pos: Int): Boolean {
-        return pos >= 4 &&
+        // 只要位置足够且以 }} 结尾，前一个字符是数字，就判定为占位符结束
+        // 不需要回溯到完整的 {{（因为后缀扫描只从末尾开始）
+        return pos >= 1 &&
                 s[pos] == '}' && s[pos - 1] == '}' &&
-                s[pos - 2].isDigit() &&
-                s[pos - 3] == '{' && s[pos - 4] == '{'
+                pos >= 2 && s[pos - 2].isDigit()
     }
 
     // ── Vue / Generic 占位符保护 ────────────────────────────────

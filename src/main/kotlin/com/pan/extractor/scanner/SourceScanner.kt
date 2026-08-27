@@ -2,6 +2,7 @@ package com.pan.extractor.scanner
 
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.xml.XmlAttributeValue
@@ -48,6 +49,7 @@ abstract class NodeScanner : SourceScanner {
                     is XmlAttributeValue -> if (!I18nPsiTools.isInStyleOrComment(element)) sink(element)
                     is JSLiteralExpression -> if (!I18nPsiTools.isInComment(element)) sink(element)
                     is JSBinaryExpression -> if (!I18nPsiTools.isInComment(element)) sink(element)
+                    is JSStringTemplateExpression -> if (!I18nPsiTools.isInComment(element)) sink(element)
                 }
                 super.visitElement(element)
             }
