@@ -142,6 +142,10 @@ object I18nExtractionOrchestrator {
                 null
             }
             result
+        }.filter { processor ->
+            // 目录/全项目提取时，没有中文的文件直接跳过，不加入 processors 列表，
+            // 避免 processors 列表包含无效条目，导致 onSuccess 误判为"有处理器"。
+            processor.analyzer.extractedStrings.isNotEmpty() || processor.analyzer.existingStrings.isNotEmpty()
         }
         return finalizeCollection(
             project, processors, extracted,
@@ -160,7 +164,10 @@ object I18nExtractionOrchestrator {
         val extracted = mutableMapOf<String, String>()
         extracted.putAll(p.analyzer.existingStrings)
         extracted.putAll(p.analyzer.extractedStrings)
-        return finalizeCollection(project, listOf(p), extracted, psiFile, fileCount = 1)
+        // 单文件提取时，没有中文也返回空 processors 列表，避免 onSuccess 误判
+        val procs = if (p.analyzer.extractedStrings.isNotEmpty() || p.analyzer.existingStrings.isNotEmpty())
+            listOf(p) else emptyList()
+        return finalizeCollection(project, procs, extracted, psiFile, fileCount = 1)
     }
 
     /** 收敛出 [Collection]：跑 Analyzer（factorizeSites）填充合并候选。 */
