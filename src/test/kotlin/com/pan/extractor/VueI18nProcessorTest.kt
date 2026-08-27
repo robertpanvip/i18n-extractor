@@ -1326,6 +1326,131 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
     }
 
     /**
+     * 【Vue 混合文件】.ts 文件同时含模块顶层中文与自定义 hook 内中文 →
+     * 同时注入全局别名与 hook（与 React 混合文件同逻辑）：
+     *   - 顶部：i18n 实例 import + `const $t = i18n.global.t;`（模块顶层站点用全局 $t）
+     *   - hook 内：`import { useI18n }` + `const { t: $t } = useI18n()`
+     *     （hook 的 $t 在函数作用域遮蔽全局 $t，同名不同作用域互不冲突）
+     *   - 模块顶层站点改写 `$t('等于')`，hook 内站点改写 `$t('权限名称')`
+     */
+    fun testVueMixedModuleLevelAndHookChineseInjectsAliasAndHook() {
+        val file = configureFile(
+            "src/AddEditAuthModal.ts",
+            """
+            const conditionList = [
+                { label: "等于", value: "=" },
+            ];
+
+            /** 权限的新增/编辑 */
+            export function useAuthModal() {
+                const v = "权限名称"
+                return v;
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // 模块顶层：i18n 实例 import + 全局别名（hook 存在也不能省——顶层站点没有 hook 的 $t）
+        assertTrue(
+            "混合文件应注入 i18n 实例 import, got:\n$resultText",
+            compact.contains("import{i18n}from")
+        )
+        assertTrue(
+            "混合文件应注入 const \$t = i18n.global.t 全局别名, got:\n$resultText",
+            compact.contains("const\$t=i18n.global.t")
+        )
+        // hook：useI18n import + hook 调用
+        assertTrue(
+            "混合文件应注入 useI18n import, got:\n$resultText",
+            resultText.containsIgnoringWs("import { useI18n } from 'vue-i18n'")
+        )
+        assertTrue(
+            "hook 内应注入 const { t: \$t } = useI18n(), got:\n$resultText",
+            resultText.containsIgnoringWs("const { t: \$t } = useI18n()")
+        )
+        // 两类站点都改写为 $t（作用域各自解析：顶层→别名，hook 内→useI18n 解构）
+        assertTrue(
+            "模块顶层站点应改写为 \$t('等于'), got:\n$resultText",
+            resultText.contains("\$t('等于')")
+        )
+        assertTrue(
+            "hook 内站点应改写为 \$t('权限名称'), got:\n$resultText",
+            resultText.contains("\$t('权限名称')")
+        )
+        // 别名位置：在最后一个 import 之后、第一个顶层语句之前（不跑到文件末尾）
+        val aliasIdx = compact.indexOf("const\$t=i18n.global.t")
+        val useI18nImportIdx = compact.indexOf("import{useI18n}from'vue-i18n'")
+        val conditionListIdx = compact.indexOf("constconditionList")
+        assertTrue(
+            "别名（offset=$aliasIdx）应位于 useI18n import（offset=$useI18nImportIdx）之后, got:\n$resultText",
+            aliasIdx > useI18nImportIdx && useI18nImportIdx >= 0
+        )
+        assertTrue(
+            "别名（offset=$aliasIdx）应位于 conditionList（offset=$conditionListIdx）之前, got:\n$resultText",
+            aliasIdx in 0 until conditionListIdx
+        )
+    }
+
+    /**
+     * 【别名位置回归】Vue 纯 TS 工具文件，顶部已有其他 import →
+     * `const $t = i18n.global.t;` 必须紧跟在最后一个 import 之后（文件顶部），
+     * **不允许**被追加到文件末尾。
+     *
+     * 前一版 bug：别名插入用游离 dummy 节点作锚点，addAfter 把语句落到容器末尾
+     * （`const $t = i18n.global.t;` 写到文件最后去了）。
+     */
+    fun testVueGlobalDollarTAliasPositionAfterImports() {
+        val file = configureFile(
+            "src/format.ts",
+            """
+            import { ref } from 'vue'
+            import dayjs from 'dayjs'
+
+            export function formatDate() {
+                const label = "日期"
+                return label
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val resultText = file.text
+        val compact = resultText.replace("\\s+".toRegex(), "")
+        // 别名恰好一次
+        assertEquals(
+            "const \$t = i18n.global.t 别名应恰好一次, got:\n$resultText",
+            1, compact.split("const\$t=i18n.global.t").size - 1
+        )
+        // 位置：别名在最后一个既有 import（dayjs）之后…
+        val aliasIdx = compact.indexOf("const\$t=i18n.global.t")
+        val dayjsImportIdx = compact.indexOf("importdayjsfrom'dayjs'")
+        val i18nImportIdx = compact.indexOf("import{i18n}from")
+        assertTrue(
+            "别名（offset=$aliasIdx）应在 dayjs import（offset=$dayjsImportIdx）之后, got:\n$resultText",
+            aliasIdx > dayjsImportIdx && dayjsImportIdx >= 0
+        )
+        // …且在注入的 i18n 实例 import 之后…
+        assertTrue(
+            "别名（offset=$aliasIdx）应在 i18n 实例 import（offset=$i18nImportIdx）之后, got:\n$resultText",
+            aliasIdx > i18nImportIdx && i18nImportIdx >= 0
+        )
+        // …且在第一个函数声明之前（绝不跑到文件末尾）
+        val funcIdx = compact.indexOf("exportfunctionformatDate")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须在 formatDate（offset=$funcIdx）之前，不允许写到文件最后, got:\n$resultText",
+            aliasIdx < funcIdx && funcIdx > 0
+        )
+    }
+
+    /**
      * 【问题 1 对称回归】Vue 纯工具 TS 文件，**完全没有中文 / 没有任何 i18n 调用** →
      * 绝不应该注入任何全局 import + const \$t 别名。
      *

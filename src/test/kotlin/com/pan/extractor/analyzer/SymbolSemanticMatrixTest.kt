@@ -481,4 +481,44 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
         )
         assertEquals(TranslationCallStatus.TRANSLATION, statusOfCallWithArg(file, "'等于'"))
     }
+
+    /**
+     * 【混合文件终态形态】顶层 `const t = i18n.t`（i18n 默认导入自 locale barrel，
+     * 内部 `export default i18n`）+ 组件内 `const { t } = useTranslation()`：
+     *  - 顶层 `t('等于')` → 模块级别名作用域可见 → TRANSLATION；
+     *  - 组件内 `t('权限名称')` → 最近作用域声明优先（hook 解构遮蔽模块别名）→ TRANSLATION。
+     */
+    fun testTopLevelIAliasAndComponentHookBothTranslation() {
+        configureFile(
+            "src/locales/i18n.ts",
+            """
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+            i18n.use(initReactI18next).init({ resources: {}, lng: 'zh' })
+            export default i18n
+            """.trimIndent()
+        )
+        val file = configureFile(
+            "src/AddEditAuthModal.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+            import i18n from '@/locales/i18n.ts'
+            const t = i18n.t
+            const conditionList = [
+              { label: t('等于'), value: "=" },
+            ];
+
+            /** 权限的新增/编辑 */
+            const AddEditAuthModal = () => {
+              const { t } = useTranslation();
+              const v = t('权限名称')
+              return v;
+            }
+
+            export default AddEditAuthModal
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOfCallWithArg(file, "'等于'"))
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOfCallWithArg(file, "'权限名称'"))
+    }
 }

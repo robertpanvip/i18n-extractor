@@ -135,6 +135,10 @@ data class CollectedResult(
     val needInjectGlobalDollarT: Boolean,
     /** React i18n.t 回退 getI18n 的 t 别名标记。 */
     val reactI18nTFallbackToDollarT: Boolean,
+    /** React 混合文件：存在模块顶层（非组件/hook 函数内）站点 → 需要全局别名（const t = i18n.t）。 */
+    val hasModuleLevelSites: Boolean = false,
+    /** React 混合文件：存在组件/hook 函数内站点 → 需要 useTranslation hook。 */
+    val hasHookScopeSites: Boolean = false,
 )
 
 /** 函数体注入目标类型（对应各框架的组件 / hook 定位方式）。 */
@@ -238,6 +242,12 @@ class CollectedPlan : com.pan.extractor.core.CollectionState {
     /** React i18n.t 回退 getI18n 的 t 别名标记。 */
     var reactI18nTFallbackToDollarT: Boolean = false
 
+    /** React 混合文件：模块顶层（非组件/hook 函数内）站点存在 → 需要全局别名（const t = i18n.t）。 */
+    var hasModuleLevelSites: Boolean = false
+
+    /** React 混合文件：组件/hook 函数内站点存在 → 需要 useTranslation hook。 */
+    var hasHookScopeSites: Boolean = false
+
     /** React 是否回退 getI18n 的结果缓存（同一 collect 只算一次；null = 尚未计算）。 */
     var reactFallback: Boolean? = null
 
@@ -256,6 +266,8 @@ class CollectedPlan : com.pan.extractor.core.CollectionState {
         tFunctionName = tFunctionName,
         needInjectGlobalDollarT = needInjectGlobalDollarT,
         reactI18nTFallbackToDollarT = reactI18nTFallbackToDollarT,
+        hasModuleLevelSites = hasModuleLevelSites,
+        hasHookScopeSites = hasHookScopeSites,
     )
 
     /**
@@ -273,6 +285,8 @@ class CollectedPlan : com.pan.extractor.core.CollectionState {
         tFunctionName = "\$t"
         needInjectGlobalDollarT = false
         reactI18nTFallbackToDollarT = false
+        hasModuleLevelSites = false
+        hasHookScopeSites = false
         reactFallback = null
     }
 }

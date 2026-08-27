@@ -506,4 +506,138 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         // 老 i18n 实例导入保留
         assertTrue("老 import i18n from 'i18next' 应保留", c.contains("importi18nfrom'i18next'"))
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 5. 混合文件：模块顶层中文 + 组件内中文（顶层 t 与组件 t 作用域分层）
+    // ─────────────────────────────────────────────────────────────
+
+    private fun addLocaleIndexExportingI18n() {
+        myFixture.addFileToProject(
+            "src/locales/index.ts",
+            """
+            import i18n from 'i18next'
+            import { initReactI18next } from 'react-i18next'
+
+            i18n.use(initReactI18next).init({ resources: {}, lng: 'zh' })
+
+            export default i18n
+            """.trimIndent()
+        )
+    }
+
+    /**
+     * 混合文件（模块顶层中文 + 组件内中文）→ 同时注入全局别名与组件 hook：
+     *   - 顶部：locale import + `const t = i18n.t`（模块顶层站点用全局 t）
+     *   - 组件内：`import { useTranslation }` + `const { t } = useTranslation()`
+     *     （hook 的 t 在组件作用域遮蔽全局 t，同名不同作用域互不冲突）
+     *   - 模块顶层站点改写 `t('等于')`，组件内站点改写 `t('权限名称')`
+     */
+    fun testMixedModuleLevelAndComponentChineseInjectsAliasAndHook() {
+        addLocaleIndexExportingI18n()
+
+        val file = configureFile(
+            "src/AddEditAuthModal.tsx",
+            """
+            const conditionList = [
+                { label: "等于", value: "=" },
+            ];
+
+            /** 权限的新增/编辑 */
+            const AddEditAuthModal = () => {
+                const v = "权限名称"
+                return v;
+            }
+
+            export default AddEditAuthModal
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        // 模块顶层：locale import + 全局别名（组件存在也不能省——顶层站点没有 hook 的 t）
+        assertTrue(
+            "混合文件应注入 locale import, got:\n${file.text}",
+            c.contains("importi18nfrom'@/locales'")
+        )
+        assertTrue(
+            "混合文件应注入 const t = i18n.t 全局别名, got:\n${file.text}",
+            c.contains("constt=i18n.t")
+        )
+        // 组件：useTranslation import + hook
+        assertTrue(
+            "混合文件应注入 useTranslation import, got:\n${file.text}",
+            c.contains("import{useTranslation}from'react-i18next'")
+        )
+        assertTrue(
+            "组件内应注入 const { t } = useTranslation(), got:\n${file.text}",
+            c.contains("const{t}=useTranslation()")
+        )
+        // 两类站点都改写为短 t（作用域各自解析：顶层→别名，组件内→hook）
+        assertTrue("模块顶层站点应改写为 t('等于')", c.contains("t('等于')"))
+        assertTrue("组件内站点应改写为 t('权限名称')", c.contains("t('权限名称')"))
+        // 顺序：别名必须位于所有 import（含 useTranslation import）之后
+        val aliasIdx = c.indexOf("constt=i18n.t")
+        val useTransImportIdx = c.indexOf("import{useTranslation}from'react-i18next'")
+        val localeImportIdx = c.indexOf("importi18nfrom'@/locales'")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须位于 locale import（offset=$localeImportIdx）与 useTranslation import（offset=$useTransImportIdx）之后, got:\n${file.text}",
+            aliasIdx >= 0 && aliasIdx >= localeImportIdx && aliasIdx >= useTransImportIdx
+        )
+    }
+
+    /**
+     * 混合文件且顶部已有全局别名（import i18n + const t = i18n.t + 顶层 t('等于')）→
+     * 组件内新中文仍注入 useTranslation hook（已有 i18n 实例不阻断组件 hook），
+     * 且不重复注入 locale import / 全局别名。
+     */
+    fun testMixedWithExistingGlobalAliasInjectsHookWithoutDuplicate() {
+        addLocaleIndexExportingI18n()
+
+        val file = configureFile(
+            "src/AddEditAuthModal.tsx",
+            """
+            import i18n from '@/locales'
+            const t = i18n.t
+            const conditionList = [
+                { label: t('等于'), value: "=" },
+            ];
+
+            /** 权限的新增/编辑 */
+            const AddEditAuthModal = () => {
+                const v = "权限名称"
+                return v;
+            }
+
+            export default AddEditAuthModal
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        // 不重复：locale import 与全局别名各恰好一次
+        assertEquals(
+            "locale import 应恰好一次, got:\n${file.text}",
+            1, c.split("importi18nfrom'@/locales'").size - 1
+        )
+        assertEquals(
+            "const t = i18n.t 应恰好一次, got:\n${file.text}",
+            1, c.split("constt=i18n.t").size - 1
+        )
+        // 组件内新中文 → 注入 useTranslation（hook 的 t 遮蔽全局 t）
+        assertTrue(
+            "混合文件应注入 useTranslation import, got:\n${file.text}",
+            c.contains("import{useTranslation}from'react-i18next'")
+        )
+        assertTrue(
+            "组件内应注入 const { t } = useTranslation(), got:\n${file.text}",
+            c.contains("const{t}=useTranslation()")
+        )
+        assertTrue("组件内站点应改写为 t('权限名称')", c.contains("t('权限名称')"))
+    }
 }

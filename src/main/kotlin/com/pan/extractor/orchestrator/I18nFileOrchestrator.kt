@@ -83,6 +83,8 @@ open class I18nFileOrchestrator {
                 tFunctionName = result.tFunctionName,
                 hasExtractedStrings = result.extractedStrings.isNotEmpty(),
                 hasExistingStrings = result.existingStrings.isNotEmpty(),
+                hasModuleLevelSites = result.hasModuleLevelSites,
+                hasHookScopeSites = result.hasHookScopeSites,
             ),
         )
     }

@@ -99,6 +99,16 @@ class I18nAnalyzer(
     var reactI18nTFallbackToDollarT: Boolean
         get() = plan.reactI18nTFallbackToDollarT
         set(value) { plan.reactI18nTFallbackToDollarT = value }
+
+    /** React 混合文件：模块顶层站点存在（组件/hook 函数之外）→ 需要全局别名。 */
+    var hasModuleLevelSites: Boolean
+        get() = plan.hasModuleLevelSites
+        set(value) { plan.hasModuleLevelSites = value }
+
+    /** React 混合文件：组件/hook 函数内站点存在 → 需要 useTranslation hook。 */
+    var hasHookScopeSites: Boolean
+        get() = plan.hasHookScopeSites
+        set(value) { plan.hasHookScopeSites = value }
     private var reactFallback: Boolean?
         get() = plan.reactFallback
         set(value) { plan.reactFallback = value }
@@ -108,9 +118,17 @@ class I18nAnalyzer(
         set(value) { plan.siteCounter = value }
     private fun nextSiteId(): String = "S${++siteCounter}"
 
+    /** React 混合文件作用域分类：组件/hook 函数集合缓存（同一 collect 只扫一次；null = 未计算）。 */
+    private var reactHookScopeFuncs: List<PsiElement>? = null
+
+    /** Vue 混合文件作用域分类：组件/hook 函数集合缓存（同一 collect 只扫一次；null = 未计算）。 */
+    private var vueHookScopeFuncs: List<PsiElement>? = null
+
     /** 重置所有收集期状态（共享 [plan] 原位 [clear]，保证 collect() 幂等可重复执行（BUG_ANALYSIS 4.1））。 */
     fun resetState() {
         plan.clear()
+        reactHookScopeFuncs = null
+        vueHookScopeFuncs = null
         // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
         // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
         jsCollector.clearProcessedEnums()
@@ -138,6 +156,7 @@ class I18nAnalyzer(
         xmlTextPointers: List<SmartPsiElementPointer<XmlText>> = emptyList(),
         attributeForm: AttributeRenderForm = AttributeRenderForm.VUE_BINDING,
     ): RewritePlan {
+        classifySiteScope(anchor)
         val id = nextSiteId()
         val ptr = SmartPointerManager.getInstance(project).createSmartPsiElementPointer(replaceRoot)
         val f = (anchor.containingFile ?: (anchor as? PsiFile))
@@ -183,6 +202,70 @@ class I18nAnalyzer(
         if (range.startOffset < 0 || range.startOffset > doc.textLength) return@runCatching 1
         doc.getLineNumber(range.startOffset) + 1
     }.getOrDefault(1)
+
+    // ─────────────────────────────────────────────────────────────
+    // React 混合文件：站点作用域分类（模块顶层 vs 组件/hook 函数内）
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 按站点所在作用域分类（react-i18next / vue-i18n 非 SFC 文件）：
+     *  - 站点位于组件/hook 函数内 → [hasHookScopeSites]（函数内将注入 hook 解构：
+     *    React `const { t } = useTranslation()` / Vue `const { t: $t } = useI18n()`，
+     *    hook 的 t 在函数作用域遮蔽全局别名，同名不同作用域互不冲突）；
+     *  - 站点位于模块顶层（或非组件/hook 的普通函数内）→ [hasModuleLevelSites]，同时置
+     *    [needInjectGlobalDollarT]（顶层站点无法使用函数内 hook 的 t，需要全局别名
+     *    React `const t = i18n.t` / Vue `const $t = i18n.global.t` —— 混合文件两者同时注入）。
+     *
+     * 分类使用的组件/hook 函数集合与 hook 注入目标（findXxxComponentFunctions +
+     * findHookFunctions）完全一致，保证「被判为 hook 作用域的站点必然有可用的注入目标」。
+     *
+     * Vue **SFC**（.vue）不参与分类：VUE_SFC_SCRIPT 的 `const { t: $t } = useI18n()`
+     * 注入在 script 顶层，script 内任意作用域（含顶层）均可见，无需全局别名。
+     */
+    private fun classifySiteScope(anchor: PsiElement) {
+        when (framework) {
+            is ReactI18nextStrategy -> if (isInsideReactHookScope(anchor)) {
+                hasHookScopeSites = true
+            } else {
+                hasModuleLevelSites = true
+                needInjectGlobalDollarT = true
+            }
+            is VueI18nStrategy -> {
+                val file = anchor.containingFile as? PsiFile ?: return
+                if (file.name.endsWith(".vue", ignoreCase = true)) return
+                if (isInsideVueHookScope(file, anchor)) {
+                    hasHookScopeSites = true
+                } else {
+                    hasModuleLevelSites = true
+                    needInjectGlobalDollarT = true
+                }
+            }
+            else -> return
+        }
+    }
+
+    /** [element] 是否位于某个 React 组件/hook 函数（hook 注入目标）内部。 */
+    private fun isInsideReactHookScope(element: PsiElement): Boolean {
+        val file = element.containingFile ?: return false
+        val funcs = reactHookScopeFuncs ?: (
+            (ProjectStructure.findReactComponentFunctions(file).asSequence() +
+                ProjectStructure.findHookFunctions(file).asSequence())
+                .distinct().toList()
+                .also { reactHookScopeFuncs = it }
+            )
+        return funcs.any { PsiTreeUtil.isAncestor(it, element, false) }
+    }
+
+    /** [element] 是否位于某个 Vue 组件/hook 函数（useI18n 注入目标）内部。 */
+    private fun isInsideVueHookScope(file: PsiFile, element: PsiElement): Boolean {
+        val funcs = vueHookScopeFuncs ?: (
+            (ProjectStructure.findVueComponentFunctions(file).asSequence() +
+                ProjectStructure.findHookFunctions(file).asSequence())
+                .distinct().toList()
+                .also { vueHookScopeFuncs = it }
+            )
+        return funcs.any { PsiTreeUtil.isAncestor(it, element, false) }
+    }
 
     // ─────────────────────────────────────────────────────────────
     // Scanner/Analyzer 段：现有翻译 key + 候选发现

@@ -348,12 +348,17 @@ object ProjectStructure {
      */
     fun findReactComponentFunctions(file: PsiFile): List<PsiElement> {
         val result = mutableListOf<PsiElement>()
+        // .tsx/.jsx：按 React 命名约定，PascalCase 顶级函数即组件候选——即使函数体没有
+        // return <JSX>（如 const AddEditAuthModal = () => { ... }），也应作为
+        // useTranslation hook 的注入目标（混合文件：顶层中文走全局别名，组件内中文走 hook）。
+        val isJsxFile = file.name.endsWith(".tsx", ignoreCase = true) ||
+            file.name.endsWith(".jsx", ignoreCase = true)
         // 1. 通过 JSFunction 查找（函数声明、箭头函数、函数表达式）
         val functions = PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java)
         for (func in functions) {
             if (!isTopLevelFunction(func, file)) continue
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
-            if (isReactFunction(func, body)) result.add(func)
+            if (isReactFunction(func, body, isJsxFile)) result.add(func)
         }
         // 2. 回退：通过 JSVarStatement 查找（const App = () => {} 可能不匹配 JSFunction）
         val varStatements = PsiTreeUtil.findChildrenOfType(file, JSVarStatement::class.java)
@@ -361,7 +366,7 @@ object ProjectStructure {
             if (!isTopLevelFunction(varStmt, file)) continue
             val func = PsiTreeUtil.findChildOfType(varStmt, JSFunction::class.java) ?: continue
             val body = PsiTreeUtil.findChildOfType(func, JSBlockStatement::class.java) ?: continue
-            if (isReactFunction(func, body) && func !in result) result.add(func)
+            if (isReactFunction(func, body, isJsxFile) && func !in result) result.add(func)
         }
         return result
     }
@@ -528,7 +533,7 @@ object ProjectStructure {
     }
 
     /** 判断是否为 React 组件/hook 函数 */
-    private fun isReactFunction(func: JSFunction, body: JSBlockStatement): Boolean {
+    private fun isReactFunction(func: JSFunction, body: JSBlockStatement, isJsxFile: Boolean = false): Boolean {
         // 条件1：函数名 PascalCase 或 useXxx 开头（X 大写，避免误判 userChangePwd 等普通函数）
         val name = getFunctionName(func)
         if (name == null || name.isEmpty()) {
@@ -537,6 +542,9 @@ object ProjectStructure {
         if (name.startsWith("use") && name.length > 3 && name[3].isUpperCase()) return true
 
         if (name[0].isUpperCase()){
+            // .tsx/.jsx 文件：PascalCase 顶级函数按 React 命名约定即组件
+            //（无需 return <JSX> / hook 调用佐证；.ts/.js 保持严格判定）
+            if (isJsxFile) return true
             // 条件2：函数体里有 return <JSX>
             if (hasReturnJSX(body)) return true
             // 条件3：最外层作用域有 use 开头的函数调用

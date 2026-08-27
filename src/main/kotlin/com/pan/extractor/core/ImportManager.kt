@@ -736,6 +736,10 @@ class ImportManager(
         val tFunctionName: String,
         val hasExtractedStrings: Boolean,
         val hasExistingStrings: Boolean,
+        /** React 混合文件：模块顶层站点存在 → 注入全局别名（const t = i18n.t）+ locale import。 */
+        val hasModuleLevelSites: Boolean = false,
+        /** React 混合文件：组件/hook 函数内站点存在 → 注入 useTranslation hook（与全局别名可共存）。 */
+        val hasHookScopeSites: Boolean = false,
     )
 
     /**

@@ -10,6 +10,8 @@ import com.intellij.lang.javascript.psi.JSVariable
 import com.intellij.lang.javascript.psi.JSVarStatement
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -149,6 +151,11 @@ object SymbolAnalyzer {
 
         /** #3 同一 call 在 detect / collect 阶段被重复 analyze → 键 = call offset，值 = 完整分析结果 */
         val calleeAnalysis = java.util.concurrent.ConcurrentHashMap<Int, CalleeAnalysis>()
+
+        /** 【TS 服务超时熔断】本文件此前 resolve 因平台超时抛 PCE → 后续引用不再尝试
+         *  resolve（直接走文件级结构证明），避免同文件 N 个引用各等一次 20s 超时。 */
+        @Volatile
+        var resolveDegraded: Boolean = false
     }
 
     private val fileScanMemo = java.util.concurrent.ConcurrentHashMap<String, FileScanMemo>()
@@ -226,9 +233,9 @@ object SymbolAnalyzer {
      */
     private fun isVisibleFrom(declared: PsiElement, ref: JSReferenceExpression?): Boolean {
         if (ref == null) return true
-        // strict = true（默认）：从父级开始找 —— 否则函数声明（function t）自身就是 JSFunction，
+        // strict = true：从父级开始找 —— 否则函数声明（function t）自身就是 JSFunction，
         // 会被误当作「声明所在作用域」，导致顶层 function t 的真实作用域被误判。
-        val scope = PsiTreeUtil.getParentOfType(declared, JSFunction::class.java)
+        val scope = PsiTreeUtil.getParentOfType(declared, JSFunction::class.java, true)
             ?: return true // 模块级声明，文件内任意位置可见
         return PsiTreeUtil.isAncestor(scope, ref, false)
     }
@@ -237,7 +244,11 @@ object SymbolAnalyzer {
      *  项目仍在索引（dumb）时**跳过 resolve()**：让 IDE 自己完成后台索引与
      *  TypeScript Config Graph / import graph 的构建，插件绝不主动承担这些初始化成本
      *  （否则会在无 Job/进度上下文的线程上触发 runBlockingCancellable 而抛 IllegalStateException）。
-     *  跳过时仅走文件级结构证明（第二层证据），零成本、零崩溃；等 IDE 分析就绪后再恢复精确 resolve。 */
+     *  跳过时仅走文件级结构证明（第二层证据），零成本、零崩溃；等 IDE 分析就绪后再恢复精确 resolve。
+     *  【TS 服务超时熔断】resolve 可能因 TypeScript 服务内部超时（20s TimeoutCancellationException
+     *  包装成 CeProcessCanceledException）抛 PCE：用户主动取消（indicator.isCanceled）必须向上传播；
+     *  平台内部超时则熔断为 resolve 失败（null），走文件级结构证明回退——单次 resolve 超时
+     *  不再中断整文件分析（与 I18nExtractionOrchestrator 的 PCE 策略一致）。 */
     private fun resolvedOf(ref: JSReferenceExpression?): PsiElement? {
         if (ref == null) return null
         // dumb 模式下不触发 resolve（单元测试保留 resolve 以维持示例/断言完整语义）
@@ -246,12 +257,24 @@ object SymbolAnalyzer {
             !ApplicationManager.getApplication().isUnitTestMode &&
             DumbService.isDumb(containingFile.project)
         ) return null
+        val memo = if (containingFile != null) fileScanGen(containingFile) else null
+        // 本文件此前已发生 resolve 超时熔断 → 不再尝试 resolve（避免 N 个引用各等 20s 超时）
+        if (memo?.resolveDegraded == true) return null
         // 用 ReadAction.compute 包裹 resolve()，确保 IntelliJ 线程上下文中有 ProgressIndicator/Job，
         // 避免 TypeScript resolve 引擎中的 runBlockingCancellable 因缺少进度上下文而抛
         // "There is no ProgressIndicator or Job in this thread" 异常。
-        fun resolveInReadAction(): PsiElement? = ReadAction.compute<PsiElement?, Throwable> { ref.resolve() }
-        val memo = fileScanGen(containingFile ?: return resolveInReadAction())
-            ?: return resolveInReadAction()
+        fun resolveInReadAction(): PsiElement? = try {
+            ReadAction.compute<PsiElement?, Throwable> { ref.resolve() }
+        } catch (pce: ProcessCanceledException) {
+            // 单元测试保持严格语义：PCE 一律上抛（测试环境无 TS 服务 20s 超时，出现即异常）
+            if (ApplicationManager.getApplication().isUnitTestMode) throw pce
+            // 用户主动取消（进度指示器已取消）→ 控制流异常必须传播，不得吞掉
+            if (ProgressManager.getInstance().progressIndicator?.isCanceled == true) throw pce
+            // 平台内部超时 → 熔断：本文件后续引用跳过 resolve，走文件级结构证明
+            memo?.resolveDegraded = true
+            null
+        }
+        if (memo == null) return resolveInReadAction()
         return when (val v = memo.resolveResult.computeIfAbsent(ref.textRange.startOffset) { resolveInReadAction() ?: NO_RESOLVE }) {
             NO_RESOLVE -> null
             else -> v as PsiElement
@@ -262,7 +285,22 @@ object SymbolAnalyzer {
     private fun findLocalVariableNamedCached(file: PsiFile, name: String, ref: JSReferenceExpression?): JSVariable? {
         val memo = fileScanGen(file)
             ?: return findLocalVariableNamed(file, name)?.takeIf { isVisibleFrom(it, ref) }
-        return memo.scanData.localVariables[name]?.firstOrNull { isVisibleFrom(it, ref) }
+        // 最近作用域优先：同名声明多处可见时（如模块顶层别名 + 函数内 hook 解构），
+        // 嵌套最深的声明才是引用的真实解析目标（JS 作用域遮蔽规则）。
+        return memo.scanData.localVariables[name]
+            ?.filter { isVisibleFrom(it, ref) }
+            ?.maxByOrNull { scopeDepth(it) }
+    }
+
+    /** 声明的函数作用域嵌套深度（0 = 模块顶层）；越深作用域越近。 */
+    private fun scopeDepth(element: PsiElement): Int {
+        var depth = 0
+        var p: PsiElement? = PsiTreeUtil.getParentOfType(element, JSFunction::class.java, true)
+        while (p != null) {
+            depth++
+            p = PsiTreeUtil.getParentOfType(p, JSFunction::class.java, true)
+        }
+        return depth
     }
 
     private fun findLocalFunctionNamedCached(file: PsiFile, name: String, ref: JSReferenceExpression?): Boolean {
@@ -527,6 +565,19 @@ object SymbolAnalyzer {
                     }
                 }
                 q = receiver as? JSReferenceExpression
+            }
+            // 别名链尾（最深接收者）按链式调用的实例信任规则判定：
+            //   `const t = i18n.t`（React locale 实例别名）/ `const $t = i18n.global.t`（vue-i18n
+            //   全局别名）的链尾 i18n 经 resolve / 框架 barrel / 约定实例名证明 → 翻译函数别名。
+            // 本地 shadow（`const i18n = { t }` → LOCAL_SHADOW / UNKNOWN）不在此列。
+            val baseRef = deepestBaseReference(initializer)
+            if (baseRef != null) {
+                val baseOrigin = resolveOrigin(baseRef, instanceTrust = true)
+                if (baseOrigin == SymbolOrigin.I18N_HOOK_OR_FACTORY ||
+                    baseOrigin == SymbolOrigin.I18N_FRAMEWORK_IMPORT
+                ) {
+                    return SymbolOrigin.I18N_HOOK_OR_FACTORY
+                }
             }
             // `const t = someObj.t` / `const i18n = otherI18n` 等 → 无法证明 → UNKNOWN
             return SymbolOrigin.UNKNOWN
@@ -836,11 +887,14 @@ object SymbolAnalyzer {
             }
         }
 
-        // 形态 4：本地导出 i18n 实例（`export const i18n = createI18n(...)`）——
-        // 名字为惯例实例名时视为 i18n 实例（跨文件 instance resolve，P1）。
+        // 形态 4：本地导出 i18n 实例（`export const i18n = createI18n(...)`，vue-i18n 惯例；
+        // 或 React locale 的 `export default i18n`）—— 名字为惯例实例名时视为 i18n 实例
+        // （跨文件 instance resolve，P1）。
         if (!result && localName in CONVENTIONAL_INSTANCE_NAMES &&
-            Regex("""\bexport\s+const\s+\Q$localName\E\b\s*=\s*[^;\n]*?""")
-                .containsMatchIn(text)
+            (
+                Regex("""\bexport\s+const\s+\Q$localName\E\b\s*=""").containsMatchIn(text) ||
+                    Regex("""\bexport\s+default\s+\Q$localName\E\b""").containsMatchIn(text)
+                )
         ) {
             result = true
         }

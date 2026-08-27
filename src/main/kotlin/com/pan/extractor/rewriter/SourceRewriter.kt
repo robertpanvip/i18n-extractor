@@ -185,9 +185,12 @@ object ImportRewriter : SourceRewriter {
                 //   const t = getI18n().t;          ← 正确换行
                 // 不加换行会导致：
                 //   import { getI18n } from 'react-i18next';const t = getI18n().t;
+                // 注意：addAfter 返回的才是**树内**节点；入参 newline 来自 createStringExpressionNode
+                // 的游离 dummy 树（parent 不是 container），拿它当锚点再 addAfter 会把语句追加到
+                // 容器末尾（别名跑到文件最后的根因），必须用返回值做第二个 addAfter 的锚点。
                 val newline = processor.createStringExpressionNode("\n", container)
-                lastImport.parent.addAfter(newline, lastImport)
-                lastImport.parent.addAfter(stmt, newline)
+                val addedNewline = lastImport.parent.addAfter(newline, lastImport)
+                lastImport.parent.addAfter(stmt, addedNewline ?: newline)
             } else {
                 val firstStatement = injector.findFirstNonWhitespaceChild(container)
                 if (firstStatement != null) container.addBefore(stmt, firstStatement) else container.add(stmt)
