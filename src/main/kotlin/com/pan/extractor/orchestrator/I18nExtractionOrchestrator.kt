@@ -21,7 +21,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -243,48 +245,90 @@ object I18nExtractionOrchestrator {
         indicator.fraction = 0.05
 
         // ══════════════════════════════════════════════════════════════════════════════
-        // 【Progress 卡死的核心修复 v2】
-        // 旧实现（v1）：invokeLater + CompletableFuture + 后台线程每隔 150ms 推"假进度"。
-        // 问题：EDT 被整个 WCA 占住数秒，后台线程推的 indicator 更新全积压在 EDT 队列，
-        // 积压的 repaint 也要等 WCA 完成后才处理，用户看到的就是"进度条一直 0% 不动"，
-        // 然后 WebStorm 弹出"卡死"警告。
+        // 【Progress 处理：恢复 v1.7.8 单 WCA 方案】
+        // 当前代码（v2）用 edtRunner + invokeAndWait 把每个 rewrite 拆成独立 WCA，
+        // 意图是让后台线程在两次 invokeAndWait 之间有机会更新 indicator。但实测：
+        //   · 每个 invokeAndWait 都会触发 WCA 内置的进度上下文 → 底部不停弹出"Edit"进度条；
+        //   · 多个 invokeAndWait + 最终输出叠加 → 进度条弹出/消失反复出现，最终报错；
+        //   · 实际写入耗时远小于嵌套 WCA 的开销，对进度条"实时性"的提升微乎其微。
         //
-        // 修复（v2）：不用 invokeLater，改用 invokeAndWait + edtRunner。
-        //   · MergeApplier.apply 在后台线程上直接调用（不 dispatch 到 EDT）；
-        //   · edtRunner 把每个 processor.run() 独立包装为 invokeAndWait + WCA，让
-        //     后台线程在两次 invokeAndWait 之间「有机会」更新 indicator；
-        //   · 后台线程的 indicator.fraction/text 更新在后台线程上执行，被 ProgressManager
-        //     自动 dispatch 到 EDT 队列，在两次 invokeAndWait 之间的 EDT 空闲期被处理，
-        //     进度条因此能实时推进。
-        //   · 保留原子性：每个 processor.run() 和 applyFinalOutput 各自在 WCA 内执行，
-        //     但整体不再是单 command 原子——多文件写入任一步失败，已完成的文件已生效。
-        //     这比「进度条卡死+用户强制退出IDE」更可接受。
+        // 恢复 v1.7.8 方案：invokeLater + CompletableFuture + 单一 WCA + 后台等待循环。
+        //   · 所有 PSI 写入 + 资源写回在【一个】WCA 内原子完成，失败整体回滚；
+        //   · 后台线程在等待循环中每 150ms 更新一次 indicator，EDT 空闲时积压的
+        //     repaint 会被处理，进度条不会卡死；
+        //   · 用 runProcess(EmptyProgressIndicator()) 注入 EDT 进度上下文，避免 WCA
+        //     内置的"Edit"弹窗，但只调用一次 → 不产生额外可见进度条。
+        //   · 重新引入 EmptyProgressIndicator import，因为 v1.7.8 方案需要它。
         // ══════════════════════════════════════════════════════════════════════════════
-        val edtRunner: ((() -> Unit) -> Unit) = { r ->
-            ApplicationManager.getApplication().invokeAndWait {
-                WriteCommandAction.runWriteCommandAction(project) { r() }
-            }
+        val future = CompletableFuture<Pair<Map<String, String>, OutputResult>>()
+        ApplicationManager.getApplication().invokeLater {
+            // WCA 在 EDT 上执行，EDT 默认没有 Job/ProgressIndicator 线程上下文。
+            // 用 EmptyProgressIndicator + runProcess 给这段 EDT 写入注入进度上下文，
+            // 避免 JSGraphBuildExecutor.runBlockingCancellable 抛 IllegalStateException，
+            // 也保留 WCA 的可取消语义。
+            ProgressManager.getInstance().runProcess(
+                {
+                    WriteCommandAction.runWriteCommandAction(project) {
+                        try {
+                            val merged = MergeApplier.apply(
+                                processors = collection.processors,
+                                extracted = collection.extracted,
+                                mergePlan = mergePlan,
+                                indicator = indicator,
+                                // 当前 command 就是原子边界，所有 site 的 onRewrite 无需额外
+                                // invokeAndWait（保持单 command，避免嵌套）。
+                                edtRunner = null,
+                                dropExistingKeysOut = dropExistingKeys,
+                            )
+                            collection.extracted.clear()
+                            collection.extracted.putAll(merged)
+                            val result = applyFinalOutput(
+                                project, options, LinkedHashMap(merged), dropExistingKeys
+                            )
+                            future.complete(merged to result)
+                        } catch (t: Throwable) {
+                            future.completeExceptionally(t)
+                        }
+                    }
+                },
+                EmptyProgressIndicator()
+            )
         }
 
-        val merged = MergeApplier.apply(
-            processors = collection.processors,
-            extracted = collection.extracted,
-            mergePlan = mergePlan,
-            indicator = indicator,
-            edtRunner = edtRunner,
-            dropExistingKeysOut = dropExistingKeys,
-        )
-        collection.extracted.clear()
-        collection.extracted.putAll(merged)
-
-        // 最终输出（资源写回）：同样走 invokeAndWait + WCA，确保 EDT 处理进度
-        // 注意：不再包 EmptyProgressIndicator()—— 我们已在后台 Task 内，ProgressManager
-        // 已有 indicator 实例；runProcess 会创建新的可见进度上下文，导致弹出额外进度条。
-        ApplicationManager.getApplication().invokeAndWait {
-            WriteCommandAction.runWriteCommandAction(project) {
-                output = applyFinalOutput(
-                    project, options, LinkedHashMap(merged), dropExistingKeys
+        // 后台线程：等待 WCA 完成的同时，周期性更新 indicator，避免进度条显示"0% 不动"。
+        val startNs = System.nanoTime()
+        while (true) {
+            try {
+                val (merged, resultOut) = future.get(150, TimeUnit.MILLISECONDS)
+                collection.extracted.clear()
+                collection.extracted.putAll(merged)
+                output = resultOut
+                break
+            } catch (e: java.util.concurrent.TimeoutException) {
+                val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                val waitFraction = when {
+                    elapsedMs <= 0 -> 0.06
+                    else -> {
+                        val k = elapsedMs.toDouble() / 1000.0
+                        0.06 + 0.84 * (1.0 - Math.exp(-k / 4.5))
+                    }
+                }
+                indicator.fraction = max(indicator.fraction, waitFraction.coerceAtMost(0.9))
+                indicator.text = I18nExtractorBundle.message("orchestrator.edt.writing", collection.processors.size)
+                indicator.text2 = I18nExtractorBundle.message("orchestrator.edt.waiting", elapsedMs / 1000)
+                indicator.checkCanceled()
+            } catch (e: java.util.concurrent.ExecutionException) {
+                val cause = e.cause ?: e
+                PluginLogBuffer.warn(LOG,
+                    "I18nExtractionOrchestrator: 原子写入 (WriteCommandAction) 异常：${cause.message?.take(120)}",
+                    cause
                 )
+                if (cause is RuntimeException) throw cause
+                if (cause is Error) throw cause
+                throw RuntimeException(cause)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw RuntimeException("等待 EDT 写入被中断", e)
             }
         }
         indicator.fraction = 1.0
