@@ -24,6 +24,7 @@ import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
@@ -133,6 +134,19 @@ object I18nExtractionOrchestrator {
                         processor
                     }
                 }
+            } catch (pce: ProcessCanceledException) {
+                // ProcessCanceledException 必须区分处理（平台规范：PCE 不可静默吞掉）：
+                //  - 用户主动取消（indicator 已置 canceled）→ 必须向上传播终止任务；
+                //  - 平台内部取消（如 WebStorm JS/TS 解析引擎 20s 超时抛出的
+                //    TimeoutCancellationException 包装 PCE）→ indicator 并未被用户取消，
+                //    跳过该文件继续分析后续文件，避免整个批量提取卡死在某个慢文件上。
+                if (indicator != null && indicator.isCanceled) throw pce
+                PluginLogBuffer.warn(
+                    LOG,
+                    "I18nExtractionOrchestrator: 分析文件被平台取消（非用户操作，可能为解析超时），已跳过—— ${file.path}",
+                    pce
+                )
+                null
             } catch (t: Throwable) {
                 PluginLogBuffer.error(
                     LOG,

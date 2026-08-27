@@ -426,4 +426,59 @@ class SymbolSemanticMatrixTest : BasePlatformTestCase() {
         )
         assertNotEquals(TranslationCallStatus.TRANSLATION, statusOf(file, "i18n.t"))
     }
+
+    // ── 8. 作用域可见性（Scope）───────────────────────────────────
+
+    /** 按第一个字符串实参定位调用并判定三态（同名 t 多处调用时用参数区分）。 */
+    private fun statusOfCallWithArg(file: PsiFile, argText: String): TranslationCallStatus {
+        val call = PsiTreeUtil.findChildrenOfType(file, JSCallExpression::class.java)
+            .first { c -> c.arguments.firstOrNull()?.text == argText }
+        return TranslationAnalyzer.statusOf(call)
+    }
+
+    /**
+     * 【作用域污染回归】模块顶层 `t('等于')`（t 未定义）不得被组件内
+     * `const { t } = useTranslation()` 证明为翻译 —— hook 解构是**函数作用域内**的
+     * 绑定，对顶层调用不可见。顶层 t 按无证据处理 → UNKNOWN（保守跳过，零误改）。
+     * 组件内 `t('权限名称')` 仍应正常判 TRANSLATION。
+     */
+    fun testTopLevelTNotProvenByComponentHookDestructure() {
+        val file = configureFile(
+            "src/AddEditAuthModal.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+            const conditionList = [
+              { label: t('等于'), value: "=" },
+            ];
+            const AddEditAuthModal = () => {
+              const {t} = useTranslation();
+              const v = t('权限名称')
+              return v;
+            }
+            export default AddEditAuthModal
+            """.trimIndent()
+        )
+        // 顶层 t('等于')：t 未定义，组件内 hook 的 t 对顶层不可见 → UNKNOWN
+        assertEquals(TranslationCallStatus.UNKNOWN, statusOfCallWithArg(file, "'等于'"))
+        // 组件内 t('权限名称')：hook 解构同作用域可见 → TRANSLATION
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOfCallWithArg(file, "'权限名称'"))
+    }
+
+    /**
+     * 【作用域正向】模块顶层的 `const { t } = useTranslation()`（hook 解构本身在顶层）
+     * 对文件内任意位置的 t 调用均可见 → TRANSLATION（保留既有行为，防回归）。
+     */
+    fun testModuleLevelHookDestructureVisibleEverywhere() {
+        val file = configureFile(
+            "src/TopHook.ts",
+            """
+            import { useTranslation } from 'react-i18next';
+            const { t } = useTranslation();
+            const conditionList = [
+              { label: t('等于'), value: "=" },
+            ];
+            """.trimIndent()
+        )
+        assertEquals(TranslationCallStatus.TRANSLATION, statusOfCallWithArg(file, "'等于'"))
+    }
 }

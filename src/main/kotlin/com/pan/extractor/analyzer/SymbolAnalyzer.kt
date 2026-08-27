@@ -125,10 +125,10 @@ object SymbolAnalyzer {
      * 预计算数据结构（Map/Set），无需再次遍历 PSI 树。
      */
     private class FileScanData(
-        /** 本地变量（排除 import 绑定）：name → JSVariable */
-        val localVariables: Map<String, JSVariable>,
-        /** 本地函数名集合 */
-        val localFunctionNames: Set<String>,
+        /** 本地变量（排除 import 绑定）：name → 同名声明列表（不同函数作用域可同名） */
+        val localVariables: Map<String, List<JSVariable>>,
+        /** 本地函数声明：name → 同名声明列表（不同函数作用域可同名） */
+        val localFunctions: Map<String, List<JSFunction>>,
         /** 所有 import 声明 */
         val importDeclarations: List<ES6ImportDeclaration>,
         /** 所有 var 语句 */
@@ -143,9 +143,6 @@ object SymbolAnalyzer {
 
         /** #2 任意模块 import 检测缓存 */
         val anyModuleImport = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
-        /** #2 hook 解构检测缓存 */
-        val hookDestructure = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
         /** #4 `resolve()` 去重：键 = 引用表达式 offset（PSI 元素），值 = PsiElement | NO_RESOLVE */
         val resolveResult = java.util.concurrent.ConcurrentHashMap<Int, Any>()
@@ -180,8 +177,8 @@ object SymbolAnalyzer {
      * 该函数在文件修改时（modificationStamp 变化）重新执行，缓存命中后不再调用。
      */
     private fun buildFileScanData(file: PsiFile): FileScanData {
-        val localVariables = mutableMapOf<String, JSVariable>()
-        val localFunctionNames = mutableSetOf<String>()
+        val localVariables = mutableMapOf<String, MutableList<JSVariable>>()
+        val localFunctions = mutableMapOf<String, MutableList<JSFunction>>()
         val importDeclarations = mutableListOf<ES6ImportDeclaration>()
         val varStatements = mutableListOf<JSVarStatement>()
         val shadowNames = buildShadowNames(file)
@@ -192,12 +189,12 @@ object SymbolAnalyzer {
                     if (element.name != null &&
                         PsiTreeUtil.getParentOfType(element, ES6ImportDeclaration::class.java) == null
                     ) {
-                        localVariables[element.name!!] = element
+                        localVariables.getOrPut(element.name!!) { mutableListOf() }.add(element)
                     }
                 }
                 is JSFunction -> {
                     if (element.name != null && element.containingFile == file) {
-                        localFunctionNames.add(element.name!!)
+                        localFunctions.getOrPut(element.name!!) { mutableListOf() }.add(element)
                     }
                 }
                 is ES6ImportDeclaration -> importDeclarations.add(element)
@@ -213,11 +210,27 @@ object SymbolAnalyzer {
 
         return FileScanData(
             localVariables = localVariables,
-            localFunctionNames = localFunctionNames,
+            localFunctions = localFunctions,
             importDeclarations = importDeclarations,
             varStatements = varStatements,
             shadowNames = shadowNames,
         )
+    }
+
+    /**
+     * 【作用域可见性】声明 [declared] 对引用 [ref] 是否可见：
+     * 取声明所在的最内层函数作用域（null = 模块顶层，全文件可见），
+     * 引用必须位于该作用域内才可见。否则属于跨作用域污染 ——
+     * 典型 bug：组件内 `const { t } = useTranslation()` 的 t 不能证明
+     * **模块顶层** `t('等于')`（t 根本未定义）是翻译调用。
+     */
+    private fun isVisibleFrom(declared: PsiElement, ref: JSReferenceExpression?): Boolean {
+        if (ref == null) return true
+        // strict = true（默认）：从父级开始找 —— 否则函数声明（function t）自身就是 JSFunction，
+        // 会被误当作「声明所在作用域」，导致顶层 function t 的真实作用域被误判。
+        val scope = PsiTreeUtil.getParentOfType(declared, JSFunction::class.java)
+            ?: return true // 模块级声明，文件内任意位置可见
+        return PsiTreeUtil.isAncestor(scope, ref, false)
     }
 
     /** #4 按引用表达式 offset 缓存 resolve() 结果；同一引用在 detect/collect/祖先链里只解析一次。
@@ -245,15 +258,17 @@ object SymbolAnalyzer {
         }
     }
 
-    /** 找文件中名为 [name] 的本地变量声明（排除 import 绑定），带全文件级缓存。 */
-    private fun findLocalVariableNamedCached(file: PsiFile, name: String): JSVariable? {
-        val memo = fileScanGen(file) ?: return findLocalVariableNamed(file, name)
-        return memo.scanData.localVariables[name]
+    /** 找文件中名为 [name] 的本地变量声明（排除 import 绑定），且对 [ref] 作用域可见。 */
+    private fun findLocalVariableNamedCached(file: PsiFile, name: String, ref: JSReferenceExpression?): JSVariable? {
+        val memo = fileScanGen(file)
+            ?: return findLocalVariableNamed(file, name)?.takeIf { isVisibleFrom(it, ref) }
+        return memo.scanData.localVariables[name]?.firstOrNull { isVisibleFrom(it, ref) }
     }
 
-    private fun findLocalFunctionNamedCached(file: PsiFile, name: String): Boolean {
-        val memo = fileScanGen(file) ?: return findLocalFunctionNamed(file, name)
-        return name in memo.scanData.localFunctionNames
+    private fun findLocalFunctionNamedCached(file: PsiFile, name: String, ref: JSReferenceExpression?): Boolean {
+        val memo = fileScanGen(file)
+            ?: return findLocalFunctionNamed(file, name) // 无缓存路径：resolve 已优先，回退语义保持
+        return memo.scanData.localFunctions[name]?.any { isVisibleFrom(it, ref) } == true
     }
 
     private fun hasLocalShadowDeclarationTextCached(file: PsiFile, name: String): Boolean {
@@ -277,15 +292,17 @@ object SymbolAnalyzer {
         }
     }
 
-    private fun destructuredFromKnownHookInCached(file: PsiFile, name: String): Boolean {
+    private fun destructuredFromKnownHookInCached(file: PsiFile, name: String, ref: JSReferenceExpression?): Boolean {
         val memo = fileScanGen(file)
         if (memo == null) return destructuredFromKnownHookIn(file, name)
-        return memo.hookDestructure.computeIfAbsent(name) {
-            memo.scanData.varStatements.any { stmt ->
-                val declaresName = stmt.text.contains("{") && stmt.text.contains(it)
+        // 作用域可见性过滤：hook 解构（const { t } = useTranslation()）不能跨函数作用域
+        // 证明别处的 t 调用（如模块顶层的 t(...)）—— 否则属于作用域污染误判。
+        return memo.scanData.varStatements
+            .filter { stmt -> isVisibleFrom(stmt, ref) }
+            .any { stmt ->
+                val declaresName = stmt.text.contains("{") && stmt.text.contains(name)
                 declaresName && varStatementHasKnownHook(stmt)
             }
-        }
     }
 
     /**
@@ -393,19 +410,30 @@ object SymbolAnalyzer {
         val name = ref.referenceName ?: return SymbolOrigin.UNKNOWN
 
         // ── 第一层证据：Reference Resolution ──
+        // ⚠️ JS 解析器对「未定义引用」可能宽松命中文件内同名声明（顶层 t → 组件内
+        // hook 解构的 t），故本地声明类 resolve 结果同样要做作用域可见性过滤，
+        // 不可见的命中视为无效证据，继续走文件级回退。
         if (resolved != null) {
-            classifyResolved(resolved, name)?.let { return it }
+            val origin = classifyResolved(resolved, name)
+            if (origin != null) {
+                val scopeViolation = (resolved is JSVariable || resolved is JSFunction) &&
+                    !isVisibleFrom(resolved, ref)
+                if (!scopeViolation) return origin
+            }
         }
 
         // ── 第二层证据：文件级结构扫描（resolve 失败 / 无真实模块时）──
+        // ⚠️ 本层所有「本地声明」证据均带作用域可见性过滤（isVisibleFrom）：
+        // 组件内 `const { t } = useTranslation()` 只能证明**同组件内**的 t(...) 调用，
+        // 不能证明模块顶层 t(...)（t 未定义，运行时本就会崩）—— 否则属作用域污染。
         val file = ref.containingFile ?: return SymbolOrigin.UNKNOWN
 
         // 1) 本地同名变量声明（const/let/var 名为 name，排除 import 绑定）→ 按 initializer 形状分类
-        val localVar = findLocalVariableNamedCached(file, name)
+        val localVar = findLocalVariableNamedCached(file, name, ref)
         if (localVar != null) return classifyLocalDeclaration(localVar)
 
         // 2) 本地同名函数声明（function t() {}）→ 本地 shadow
-        if (findLocalFunctionNamedCached(file, name)) return SymbolOrigin.LOCAL_SHADOW
+        if (findLocalFunctionNamedCached(file, name, ref)) return SymbolOrigin.LOCAL_SHADOW
 
         // 3) 本地声明文本证明（namespace/class/module/interface/type/const 开头声明）→ 本地 shadow。
         //    覆盖 TS namespace（`namespace ns { export function t }`）等 PSI 类型不易枚举的场景。
@@ -425,7 +453,7 @@ object SymbolAnalyzer {
         if (importedFromAnyModuleInCached(file, name)) return SymbolOrigin.NON_I18N
 
         // 7) 文件级解构扫描：`const { name } = <knownHook>()` → hook 产物
-        if (destructuredFromKnownHookInCached(file, name)) return SymbolOrigin.I18N_HOOK_OR_FACTORY
+        if (destructuredFromKnownHookInCached(file, name, ref)) return SymbolOrigin.I18N_HOOK_OR_FACTORY
 
         // 无任何证据 → 三态 UNKNOWN（既不提取也不改写）
         return SymbolOrigin.UNKNOWN
@@ -572,10 +600,20 @@ object SymbolAnalyzer {
         }
     }
 
-    /** 判断 var 语句中是否存在已知 i18n hook / 工厂调用。 */
+    /**
+     * 判断 var 语句中是否存在已知 i18n hook / 工厂调用。
+     *
+     * 【作用域约束】hook 调用必须与本 var 语句处于**同一函数作用域**：
+     * `getParentOfType(call, JSFunction) == getParentOfType(varStmt, JSFunction)`。
+     * 否则 `const Comp = () => { const {t} = useTranslation() }` 这条**顶层**语句里的
+     * 组件内部 hook 调用，会"证明"顶层任意 `t(...)`（t 实际未定义）来自 hook ——
+     * 属作用域污染（issue：模块顶层 t('等于') 被组件内 useTranslation 误证）。
+     */
     private fun varStatementHasKnownHook(varStmt: JSVarStatement): Boolean {
+        val stmtScope = PsiTreeUtil.getParentOfType(varStmt, JSFunction::class.java)
         return PsiTreeUtil.findChildrenOfType(varStmt, JSCallExpression::class.java).any { call ->
-            (call.methodExpression as? JSReferenceExpression)?.referenceName in I18N_HOOK_OR_FACTORY_NAMES
+            (call.methodExpression as? JSReferenceExpression)?.referenceName in I18N_HOOK_OR_FACTORY_NAMES &&
+                PsiTreeUtil.getParentOfType(call, JSFunction::class.java) == stmtScope
         }
     }
 
