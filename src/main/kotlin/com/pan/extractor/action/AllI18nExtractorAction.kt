@@ -350,10 +350,8 @@ class AllI18nExtractorAction : AnAction() {
                     return
                 }
                 val c = collection ?: return
-                if (c.processors.isEmpty()) {
-                    if (c.extracted.isEmpty()) {
-                        Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
-                    }
+                if (c.processors.isEmpty() || c.extracted.isEmpty()) {
+                    Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
                     return
                 }
                 // 收集成功，进入对话框 → 后台写入

@@ -121,13 +121,14 @@ object MergeApplier {
         }
 
         // ② 逐文件常规写入：import 注入 + 未被阻塞句替换为 $t
-        indicator?.text = "写入 \$t：import 注入 + 硬编码替换（跳过被合并句）"
+        indicator?.text = I18nExtractorBundle.message("merge.applier.writing.regular")
         val writeTotal = processors.size
         processors.forEachIndexed { idx, processor ->
             val pf = (processor.rootElement as? PsiFile)
             indicator?.text2 = pf?.name
                 ?: (processor.rootElement.containingFile?.name ?: "文件 ${idx + 1}")
-            indicator?.fraction = 0.02 + (idx.toDouble() / writeTotal.coerceAtLeast(1)) * 0.58
+            // fraction 从 0.05 开始（与 Orchestrator.apply 的 preflight 后值一致），避免回退
+            indicator?.fraction = 0.05 + (idx.toDouble() / writeTotal.coerceAtLeast(1)) * 0.65
             indicator?.checkCanceled()
             val r = { processor.run() }
             if (edtRunner != null) edtRunner.invoke(r) else r()
@@ -145,7 +146,7 @@ object MergeApplier {
         // ④ 用统一解释器执行骨架重写计划（每次改写经 edtRunner 走 EDT，写入间更新进度）。
         //    Apply 阶段唯一的数据源是计划本身 —— 与 ② 逐文件 processor.run()（同样走解释器）共用
         //    同一执行入口，不再存在「计划 + 闭包」两条并行流。
-        indicator?.text = "应用骨架合并重写（生成带 {N0} 的 \$t 调用）"
+        indicator?.text = I18nExtractorBundle.message("merge.applier.writing.skeleton")
         com.pan.extractor.rewriter.RewriteInterpreter.applyPlan(
             processors = processors,
             plan = com.pan.extractor.planner.ExtractionPlan(
@@ -163,7 +164,7 @@ object MergeApplier {
         // ⑤ 清理：删除被合并承载的原句 key，回填 extracted
         //    以「站点」粒度判定，而不是按文本值：只有某个原句的所有 site 都被合并承载（blocked）时，
         //    才删除该句对应的 key；若仍存在未被合并的独立站点（同名文本），其 key 必须保留。
-        indicator?.text = "整理最终翻译资源（移除被合并承载的冗余句子）"
+        indicator?.text = I18nExtractorBundle.message("merge.applier.cleaning")
         // 被合并承载的 siteId 集合由 Planner 层已算出（见 ①，同一份 blockedByMerge）。
         // 「某原句的所有命中站点全部被合并」这一整句冗余判定也由 Planner 纯函数完成：
         // 整理 finalExtracted / 写回入口文件时，删除被完全承载的整句 key。

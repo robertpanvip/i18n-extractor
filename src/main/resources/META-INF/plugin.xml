@@ -79,7 +79,7 @@ This plugin helps developers quickly internationalize hard-coded strings in Java
         <!-- Refactor 菜单下的批量转换 -->
         <action id="com.pan.extractor.AllI18nExtractorAction"
                 class="com.pan.extractor.action.AllI18nExtractorAction"
-                text="项目中文国际提取"
+                text="项目国际化提取"
                 description="提取 vue react文件中的中文，替换为 $t()"
                 icon="/icon.svg">
             <add-to-group group-id="RefactoringMenu" anchor="last"/>
@@ -87,7 +87,7 @@ This plugin helps developers quickly internationalize hard-coded strings in Java
         <action
                 id="I18nExtractorAction"
                 class="com.pan.extractor.action.I18nExtractorAction"
-                text="中文国际化提取"
+                text="国际化提取"
                 description="提取 Vue React文件中的中文，替换为 $t() 并生成 JSON"
                 icon="/icon.svg"
         >

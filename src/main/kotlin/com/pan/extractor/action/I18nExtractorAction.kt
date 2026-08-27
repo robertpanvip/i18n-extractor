@@ -197,8 +197,8 @@ class I18nExtractorAction : AnAction() {
                     return
                 }
                 val c = collection ?: return
-                if (c.processors.isEmpty()) {
-                    if (c.extracted.isEmpty()) Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.single.scope"))
+                if (c.processors.isEmpty() || c.extracted.isEmpty()) {
+                    Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.single.scope"))
                     return
                 }
                 launchSingleWrite(project, c)
@@ -238,7 +238,10 @@ class I18nExtractorAction : AnAction() {
      */
     private fun processDirectory(project: Project, dir: VirtualFile) {
         val files = collectSupportedFiles(dir)
-        if (files.isEmpty()) return
+        if (files.isEmpty()) {
+            Orchestrator.notifyNothingExtracted(project, "${dir.presentableUrl}")
+            return
+        }
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             project,

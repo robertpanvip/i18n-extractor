@@ -43,7 +43,9 @@ object RewriteInterpreter {
         plan.rewrites.forEachIndexed { idx, rw ->
             if (rw.kind != RewriteKind.SKELETON && rw.siteId in plan.blockedSiteIds) return@forEachIndexed
             indicator?.let {
-                it.text = "应用站点改写 ${idx + 1}/$total"
+                it.text = com.pan.extractor.messages.I18nExtractorBundle.message("merge.applier.progress.skeleton", idx + 1, total)
+                // fraction 从 0.70 到 0.95（与 MergeApplier.apply 的 ② 阶段衔接）
+                it.fraction = 0.70 + (idx.toDouble() / total.coerceAtLeast(1)) * 0.25
                 it.checkCanceled()
             }
             val run: () -> Unit = { dispatch(rw, processors, plan.blockedSiteIds, finalExtracted) }
