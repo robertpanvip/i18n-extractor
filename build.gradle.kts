@@ -41,6 +41,9 @@ dependencies {
         )
     }
 
+    // kotlin-stdlib 由 IDE 提供，标记为 compileOnly 避免打包进发行 ZIP
+    compileOnly(kotlin("stdlib"))
+
     testImplementation(
         "junit:junit:4.13.2"
     )
