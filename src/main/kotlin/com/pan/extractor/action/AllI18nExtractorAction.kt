@@ -17,6 +17,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
@@ -354,8 +355,13 @@ class AllI18nExtractorAction : AnAction() {
                     Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.batch.scope"))
                     return
                 }
-                // 收集成功，进入对话框 → 后台写入
-                launchWriteAfterDialog(project, c)
+                // 收集成功，进入对话框 → 后台写入。
+                // 推迟一拍再弹模态对话框：onSuccess 时本 Task 的进度窗口关闭事件还排在
+                // EDT 队列里，同步 showAndGet() 会把泵切到 dialog 级别 → 扫描进度条挂住，
+                // 之后写入 Task 又弹一个 → 同屏 2 个进度条（用户反馈"进度条显示 2 次"）。
+                ApplicationManager.getApplication().invokeLater {
+                    launchWriteAfterDialog(project, c)
+                }
             }
         })
     }

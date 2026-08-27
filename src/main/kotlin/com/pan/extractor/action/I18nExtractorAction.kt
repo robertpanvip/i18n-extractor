@@ -10,6 +10,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -190,9 +191,11 @@ class I18nExtractorAction : AnAction() {
             override fun onSuccess() {
                 val t = err
                 if (t != null) {
-                    Orchestrator.notifyNothingExtracted(
+                    // 分析异常应上报「内部错误」（含堆栈文案），不能伪装成「未发现中文」
+                    Orchestrator.notifyInternalError(
                         project,
-                        I18nExtractorBundle.message("action.progress.single.scope")
+                        I18nExtractorBundle.message("orchestrator.notify.internal.title"),
+                        t
                     )
                     return
                 }
@@ -201,7 +204,14 @@ class I18nExtractorAction : AnAction() {
                     Orchestrator.notifyNothingExtracted(project, I18nExtractorBundle.message("action.progress.single.scope"))
                     return
                 }
-                launchSingleWrite(project, c)
+                // 【进度条显示 2 次修复】onSuccess 时本 Task 的进度窗口（ProgressWindow）
+                // 的关闭事件还排在 EDT 队列里；若在这里同步 showAndGet() 模态对话框，
+                // 事件泵切到 dialog 级别，进度窗口的关闭被延迟 → 扫描进度条挂住，
+                // 之后写入 Task 又弹一个进度条 → 用户看到 2 个进度条。
+                // 用 invokeLater 把弹窗推迟一拍，让进度窗口先正常关闭。
+                ApplicationManager.getApplication().invokeLater {
+                    launchSingleWrite(project, c)
+                }
             }
         })
     }
@@ -235,19 +245,20 @@ class I18nExtractorAction : AnAction() {
      * 「进度条一直 0%、点取消无效」。
      *
      * 修复：统一改为 Task.Backgroundable（非模态后台）→ onSuccess 里弹 Dialog → 再后台写入。
+     * Bug 修复（目录无中文仍卡住 + EDT 卡顿）：
+     *  1. `collectSupportedFiles(dir)` 旧实现在 actionPerformed（EDT）里**同步递归目录**，
+     *     目录稍大时 EDT 被占住，进度条根本出不来 —— 现移入后台 run() 内执行；
+     *  2. onSuccess 旧实现只检查 `processors.isEmpty()`，没检查 `extracted.isEmpty()`：
+     *     目录下文件都没有中文时仍会弹空内容的模态对话框（表现为"卡住"）——
+     *     现与单文件入口一致：无任何可提取文案时直接通知并返回，不弹对话框。
      */
     private fun processDirectory(project: Project, dir: VirtualFile) {
-        val files = collectSupportedFiles(dir)
-        if (files.isEmpty()) {
-            Orchestrator.notifyNothingExtracted(project, "${dir.presentableUrl}")
-            return
-        }
-
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             project,
-            I18nExtractorBundle.message("action.progress.dir.scan", files.size),
+            I18nExtractorBundle.message("action.progress.dir.scan.pending"),
             true
         ) {
+            private var files: List<VirtualFile> = emptyList()
             private var collection: Orchestrator.Collection? = null
             private var err: Throwable? = null
 
@@ -256,6 +267,16 @@ class I18nExtractorAction : AnAction() {
                 indicator.text = I18nExtractorBundle.message("action.progress.dir.scanning", dir)
                 indicator.fraction = 0.05
                 indicator.checkCanceled()
+                try {
+                    // 目录递归（含 excludeDirs 过滤）放后台线程，避免 EDT 同步递归大目录卡 UI；
+                    // VFS children 访问需在 read action 内执行。
+                    files = ApplicationManager.getApplication().runReadAction<List<VirtualFile>> {
+                        collectSupportedFiles(dir)
+                    }
+                } catch (t: Throwable) {
+                    err = t; return
+                }
+                if (files.isEmpty()) return
                 try {
                     indicator.text = I18nExtractorBundle.message("action.progress.dir.analyzing", files.size)
                     indicator.fraction = 0.2
@@ -269,18 +290,28 @@ class I18nExtractorAction : AnAction() {
             override fun onSuccess() {
                 val t = err
                 if (t != null) {
-                    Orchestrator.notifyNothingExtracted(
+                    // 扫描/分析异常应上报「内部错误」（含堆栈文案），不能伪装成「未发现中文」
+                    Orchestrator.notifyInternalError(
                         project,
-                        "${dir.presentableUrl}"
+                        I18nExtractorBundle.message("orchestrator.notify.internal.title"),
+                        t
                     )
                     return
                 }
-                val c = collection ?: return
-                if (c.processors.isEmpty()) {
+                if (files.isEmpty()) {
                     Orchestrator.notifyNothingExtracted(project, "${dir.presentableUrl}")
                     return
                 }
-                launchDirWrite(project, c, dir)
+                val c = collection ?: return
+                if (c.processors.isEmpty() || c.extracted.isEmpty()) {
+                    Orchestrator.notifyNothingExtracted(project, "${dir.presentableUrl}")
+                    return
+                }
+                // 同单文件入口：推迟一拍再弹模态对话框，让本 Task 的进度窗口先关闭
+                //（否则扫描进度条挂住 + 写入 Task 进度条 → 同屏 2 个进度条）
+                ApplicationManager.getApplication().invokeLater {
+                    launchDirWrite(project, c, dir)
+                }
             }
         })
     }

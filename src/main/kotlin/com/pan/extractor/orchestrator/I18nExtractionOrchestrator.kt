@@ -343,6 +343,16 @@ object I18nExtractionOrchestrator {
             if (writes != null) {
                 try {
                     for ((vf, newText) in writes) {
+                        // 【写入 2 遍修复】spread 路由的返回值总是包含入口文件——即使入口对象
+                        // 本次没有任何新增/修改 key，也会整体 setText + saveDocument 重写一遍，
+                        // 用户表现为"最终写入写了 2 遍"（入口一遍 + spread 目标一遍）。
+                        // 内容与磁盘一致的文件直接跳过，只写真正发生变化的文件。
+                        val current = try {
+                            String(vf.contentsToByteArray(), Charsets.UTF_8)
+                        } catch (_: Throwable) {
+                            null
+                        }
+                        if (current != null && current == newText) continue
                         TsFileEditor.writeVirtualFileText(vf, newText)
                     }
                     return OutputResult(
