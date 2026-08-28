@@ -1,0 +1,192 @@
+<idea-plugin url="https://github.com/JetBrains/intellij-plugins/tree/master/Astro" package="org.jetbrains.astro">
+  <!--suppress PluginXmlCapitalization -->
+  <name>Astro</name>
+  <id>org.jetbrains.plugins.astro</id>
+  <description><![CDATA[
+    <p>Provides support for <a href="https://astro.build/">Astro</a>
+      to all JetBrains IDEs that <a href="https://www.jetbrains.com/products/#lang=js&type=ide">support JavaScript</a>.
+    <h2>Features</h2>
+    <ul>
+      <li>Syntax & semantic highlighting
+      <li>Code completion (with auto-imports)
+      <li>Refactorings
+      <li>Navigation
+      <li>Intentions
+      <li>Code folding
+      <li>Emmet support
+      <li>Formatting
+    </ul>
+    ]]></description>
+  <vendor>JetBrains</vendor>
+  <category>JavaScript Frameworks and Tools</category>
+
+  <dependencies>
+    <!-- region Generated dependencies - run `Generate Product Layouts` to regenerate -->
+    <plugin id="JavaScript"/>
+    <plugin id="org.intellij.plugins.postcss"/>
+    <plugin id="com.intellij.modules.ultimate"/>
+    <module name="intellij.css.common"/>
+    <module name="intellij.css.common.psi"/>
+    <module name="intellij.javascript.analysis.impl"/>
+    <module name="intellij.javascript.backend"/>
+    <module name="intellij.javascript.codeinsight"/>
+    <module name="intellij.javascript.common"/>
+    <module name="intellij.javascript.parser"/>
+    <module name="intellij.javascript.psi.impl"/>
+    <module name="intellij.javascript.ultimate"/>
+    <module name="intellij.javascript.web"/>
+    <module name="intellij.json"/>
+    <module name="intellij.libraries.eclipse.lsp4j"/>
+    <module name="intellij.libraries.fastutil"/>
+    <module name="intellij.libraries.gson"/>
+    <module name="intellij.platform.analysis"/>
+    <module name="intellij.platform.analysis.impl"/>
+    <module name="intellij.platform.codeStyle"/>
+    <module name="intellij.platform.codeStyle.impl"/>
+    <module name="intellij.platform.core"/>
+    <module name="intellij.platform.core.impl"/>
+    <module name="intellij.platform.core.ui"/>
+    <module name="intellij.platform.editor.ui"/>
+    <module name="intellij.platform.ide"/>
+    <module name="intellij.platform.ide.core"/>
+    <module name="intellij.platform.ide.core.impl"/>
+    <module name="intellij.platform.ide.impl"/>
+    <module name="intellij.platform.indexing"/>
+    <module name="intellij.platform.lang"/>
+    <module name="intellij.platform.lang.impl"/>
+    <module name="intellij.platform.polySymbols"/>
+    <module name="intellij.platform.polySymbols.backend"/>
+    <module name="intellij.platform.projectModel"/>
+    <module name="intellij.platform.refactoring"/>
+    <module name="intellij.platform.util.ui"/>
+    <module name="intellij.postcss.paid"/>
+    <module name="intellij.xml.emmet"/>
+    <module name="intellij.xml.impl"/>
+    <module name="intellij.xml.parser"/>
+    <module name="intellij.xml.psi"/>
+    <module name="intellij.xml.psi.impl"/>
+    <!-- endregion -->
+  </dependencies>
+
+  <!--suppress PluginXmlValidity -->
+  <content namespace="jetbrains">
+    <!-- The implicit main module of the plugin depends on internal module (intellij.javascript.codeinsight), so it's required to set the namespace for it
+         todo: extract elements and dependencies to an explicit content module (see IJPL-212351) -->
+  </content>
+
+  <extensionPoints>
+  </extensionPoints>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <registryKey defaultValue="false" description="Use bundled Astro service" key="astro.language.server.bundled.enabled"/>
+    <registryKey defaultValue="" description="Astro TypeScript plugin version for downloading" key="astro.ts.plugin.default.version"/>
+    <registryKey defaultValue="" description="Astro service version for downloading" key="astro.language.server.default.version"/>
+    <registryKey description="Limit of Astro LS completion items" key="astro.language.server.completion.serviceItemsLimit" defaultValue="2000"/>
+    <registryKey defaultValue="false" description="Enable find usages via TypeScript service in astro" key="astro.ts.find.usages.enabled"/>
+    <dependencySupport kind="javascript" coordinate="npm:astro" displayName="Astro"/>
+
+    <internalFileTemplate name="Astro Component"/>
+    <createFromTemplateHandler implementation="org.jetbrains.astro.AstroCreateFromTemplateHandler"/>
+
+    <!-- Astro -->
+    <fileType name="Astro" extensions="astro" language="Astro" implementationClass="org.jetbrains.astro.lang.AstroFileType"
+              fieldName="INSTANCE"/>
+    <lang.parserDefinition language="Astro" implementationClass="org.jetbrains.astro.lang.parser.AstroParserDefinition"/>
+    <lang.parserDefinition language="AstroFrontmatter" implementationClass="org.jetbrains.astro.lang.frontmatter.AstroFrontmatterParserDefinition"/>
+    <stubElementRegistryExtension implementation="org.jetbrains.astro.lang.AstroStubRegistryExtension"/>
+
+    <lang.syntaxHighlighterFactory language="Astro"
+                                   implementationClass="org.jetbrains.astro.lang.highlighting.AstroHighlighterFactory"/>
+    <colorSettingsPage implementation="org.jetbrains.astro.lang.highlighting.AstroColorsAndFontsPage"/>
+    <braceMatcher filetype="Astro" implementationClass="org.jetbrains.astro.lang.AstroBraceMatcher"/>
+    <quoteHandler fileType="Astro" className="com.intellij.javascript.JSQuoteHandler"/>
+    <lang.commenter language="Astro" implementationClass="com.intellij.lang.xml.XmlCommenter" />
+    <multiLangCommenter implementation="org.jetbrains.astro.editor.AstroCommentProvider"/>
+
+    <stubElementTypeHolder class="org.jetbrains.astro.lang.parser.AstroStubElementTypes" externalIdPrefix="ASTRO:"/>
+    <implicitUsageProvider implementation="org.jetbrains.astro.codeInsight.refs.AstroImplicitUsageProvider"/>
+    <implicitUsageProvider implementation="org.jetbrains.astro.codeInsight.refs.AstroConfigImplicitUsageProvider"/>
+
+    <html.compatibleLanguage language="Astro"/>
+    <xml.xmlExtension implementation="org.jetbrains.astro.codeInsight.AstroHtmlExtension" order="before html, before poly-symbols-react"
+                      id="astro"/>
+    <xml.zenCodingGenerator implementation="org.jetbrains.astro.editor.AstroHtmlZenCodingGenerator" />
+    <xml.fileNSInfoProvider implementation="org.jetbrains.astro.codeInsight.AstroNSInfoProvider"/>
+    <lang.documentationProvider language="Astro" implementationClass="org.jetbrains.astro.lang.AstroDocumentationProvider"/>
+    <lang.documentationProvider language="AstroFrontmatter" implementationClass="org.jetbrains.astro.lang.frontmatter.AstroFrontmatterDocumentationProvider"/>
+    <completion.contributor language="AstroFrontmatter"
+                            order="before TypeScriptServiceCompletionContributor"
+                            implementationClass="org.jetbrains.astro.codeInsight.completion.AstroServiceCompletionContributor"/>
+    <completion.contributor language="Astro"
+                            order="before HtmlSymbolsCompletionContributor, before TypeScriptServiceCompletionContributor"
+                            implementationClass="org.jetbrains.astro.codeInsight.completion.AstroServiceCompletionContributor"/>
+
+    <lang.formatter language="Astro" implementationClass="org.jetbrains.astro.lang.formatter.AstroFormattingModelBuilder"/>
+    <lang.refactoringSupport language="Astro" implementationClass="org.jetbrains.astro.refactoring.AstroRefactoringSupportProvider"/>
+    <lang.refactoringSupport language="AstroFrontmatter" implementationClass="org.jetbrains.astro.refactoring.AstroRefactoringSupportProvider"/>
+    <copyPastePostProcessor implementation="org.jetbrains.astro.codeInsight.imports.AstroComponentCopyPasteProcessor"/>
+
+    <referencesSearch implementation="org.jetbrains.astro.lang.psi.AstroReferencesSearch" order="first" />
+    <psi.referenceContributor language="Astro" implementation="org.jetbrains.astro.codeInsight.refs.AstroPathReferenceContributor"/>
+
+    <polySymbols.framework id="astro" implementation="org.jetbrains.astro.AstroFramework"/>
+    <polySymbols.webTypes enableByDefault="true" source="web-types/astro.web-types.json"/>
+    <polySymbols.queryScopeContributor implementation="org.jetbrains.astro.polySymbols.AstroSymbolQueryScopeContributor"/>
+    <polySymbols.queryResultsCustomizerFactory implementation="org.jetbrains.astro.polySymbols.AstroSymbolQueryResultsCustomizer$Factory"/>
+    <polySymbols.codeCompletionItemCustomizer implementation="org.jetbrains.astro.polySymbols.AstroCodeCompletionItemCustomizer" />
+
+    <html.embeddedContentSupport implementation="org.jetbrains.astro.lang.parser.AstroEmbeddedContentSupport" />
+
+    <lang.fileViewProviderFactory language="Astro" implementationClass="org.jetbrains.astro.lang.AstroFileViewProviderFactory" />
+
+    <localInspection language="Astro" groupKey="astro.inspection.group.name" shortName="AstroMissingComponentImportInspection"
+                     enabledByDefault="true" level="ERROR"
+                     implementationClass="org.jetbrains.astro.inspections.AstroMissingComponentImportInspection"
+                     key="astro.inspection.display.name.missing.component.import" bundle="messages.AstroBundle"/>
+
+    <platform.lsp.integrationProvider implementation="org.jetbrains.astro.service.AstroLspIntegrationProvider" />
+    <gotoDeclarationHandler implementation="org.jetbrains.astro.editor.AstroGotoDeclarationHandler" order="first"/>
+    <projectConfigurable parentId="settings.typescriptcompiler"
+                         instance="org.jetbrains.astro.service.settings.AstroServiceConfigurable"
+                         id="settings.astroservice"
+                         bundle="messages.AstroBundle"
+                         key="astro.service.configurable.title"
+                         nonDefaultProject="true"
+    />
+
+    <include.provider implementation="org.jetbrains.astro.AstroFileIncludeProvider"/>
+    <codeInsight.codeVisionSettingsPreviewLanguage language="Astro" modelId="component.usage"/>
+
+    <css.inclusionContext implementation="org.jetbrains.astro.lang.css.AstroCssInclusionContext"/>
+    <css.embeddedCssProvider implementation="org.jetbrains.astro.lang.css.AstroEmbeddedCssProvider"/>
+    <projectSettings service="org.jetbrains.astro.service.settings.AstroServiceSettings"/>
+  </extensions>
+
+  <extensions defaultExtensionNs="JavaScript">
+    <languageServiceProvider implementation="org.jetbrains.astro.service.AstroLanguageServiceProvider" order="first"/>
+
+    <indexedFileTypeProvider implementation="org.jetbrains.astro.lang.AstroIndexedFileTypeProvider"/>
+    <dialectSpecificHandlersFactory language="Astro" implementationClass="org.jetbrains.astro.codeInsight.AstroSpecificHandlersFactory"/>
+    <dialectSpecificHandlersFactory language="AstroFrontmatter" implementationClass="org.jetbrains.astro.codeInsight.AstroSpecificHandlersFactory"/>
+    <handlersFactory language="Astro" implementationClass="org.jetbrains.astro.codeInsight.AstroHandlersFactory"/>
+    <inheritedLanguagesConfigurableProvider language="Astro"
+                                            implementationClass="org.jetbrains.astro.lang.AstroLanguageConfigurableProvider"/>
+    <inheritedLanguagesConfigurableProvider language="AstroFrontmatter"
+                                            implementationClass="org.jetbrains.astro.lang.frontmatter.AstroFrontmatterConfigurableProvider"/>
+    <analysisHandlersFactory language="AstroFrontmatter" implementationClass="org.jetbrains.astro.inspections.AstroFrontmatterAnalysisHandlersFactory" />
+    <highlightingHandlersFactory language="Astro" implementationClass="org.jetbrains.astro.inspections.AstroHighlightingHandlersFactory"/>
+    <elementScopeProvider implementation="org.jetbrains.astro.AstroElementResolveScopeProvider"/>
+    <componentUsageProvider language="Astro" implementationClass="org.jetbrains.astro.codeInsight.AstroComponentUsageProvider"/>
+    <tsImportResolver implementation="org.jetbrains.astro.lang.typescript.AstroTypeScriptImportsResolverProvider"/>
+    <importModulePathStrategy order="after TypeScript"
+                             implementation="org.jetbrains.astro.lang.AstroImportModulePathStrategy"/>
+    <moduleExportsProvider id="astro" implementation="org.jetbrains.astro.codeInsight.AstroModuleExportsProvider"/>
+  </extensions>
+  <actions resource-bundle="messages.AstroBundle">
+    <action class="org.jetbrains.astro.CreateAstroComponentAction" id="CreateAstroComponent"
+            icon="org.jetbrains.astro.AstroIcons.Astro">
+      <add-to-group group-id="NewWebDevelopment" anchor="before" relative-to-action="NewJavaScriptFile"/>
+    </action>
+  </actions>
+
+</idea-plugin>

@@ -132,12 +132,17 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         val value = I18nFrameworkRegistry.detect(call).interpolatePlaceholders(rawValue, params) + TOGGLE_HINT
         val range = call.textRange
         if (!range.isEmpty()) {
+            // collapsedByDefault=true 硬编码在 descriptor 上：Vue 宿主语言的复合 builder
+            // （VueHostFoldingBuilder）会把 isCollapsedByDefault(node) 委托给原生
+            // XmlFoldingBuilder（仅对结构折叠生效），t() 折叠必须自带默认折叠状态。
             descriptors.add(
                 FoldingDescriptor(
                     call.node,
                     TextRange(range.startOffset, range.endOffset),
                     null,
-                    value
+                    value,
+                    true,
+                    emptySet()
                 )
             )
         }
@@ -168,7 +173,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             val params = extractParamsFromText(raw.text, messages)
             val value = fw.interpolatePlaceholders(rawValue, params)
             occupiedStarts.add(raw.range.startOffset)
-            out.add(FoldingDescriptor(anchorNode, raw.range, null, value + TOGGLE_HINT))
+            out.add(FoldingDescriptor(anchorNode, raw.range, null, value + TOGGLE_HINT, true, emptySet()))
         }
         // Angular `| translate` 管道：非函数调用，与 $t 正则不匹配，需单独搜索。
         // 与 collectRawTCalls 语义对称：仅在翻译资源中存在的 key 才折叠。
@@ -176,7 +181,7 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
             if (raw.range.startOffset in occupiedStarts) continue
             val rawValue = messages[raw.key] ?: continue
             occupiedStarts.add(raw.range.startOffset)
-            out.add(FoldingDescriptor(anchorNode, raw.range, null, rawValue + TOGGLE_HINT))
+            out.add(FoldingDescriptor(anchorNode, raw.range, null, rawValue + TOGGLE_HINT, true, emptySet()))
         }
     }
 

@@ -7,8 +7,13 @@
         <lang.foldingBuilder
                 language="VueJS"
                 implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
+        <!-- Vue 宿主语言必须注册「复合」builder：
+             平台 forLanguage(Vue) 沿 Vue→HTML→XML 链只取首个注册语言的 builder，
+             直接注册 I18nFoldingBuilder 会遮蔽 XML 的 XmlFoldingBuilder，
+             导致 template 内 div 等结构折叠全部失效。复合 builder 先委托原生
+             结构折叠、再追加 t() 翻译折叠，两类折叠共存。 -->
         <lang.foldingBuilder
                 language="Vue"
-                implementationClass="com.pan.extractor.ui.I18nFoldingBuilder"/>
+                implementationClass="com.pan.extractor.ui.VueHostFoldingBuilder"/>
     </extensions>
 </idea-plugin>

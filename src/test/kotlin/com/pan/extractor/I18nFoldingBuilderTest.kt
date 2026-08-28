@@ -2,6 +2,7 @@ package com.pan.extractor
 
 import com.pan.extractor.ui.*
 
+import com.intellij.lang.folding.LanguageFolding
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.psi.PsiDocumentManager
@@ -9,6 +10,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLanguageInjectionHost
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.jetbrains.vuejs.lang.VueLanguage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 
@@ -674,5 +676,60 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             doc.getText(it.range).trim().startsWith("\$t(")
         }
         assertEquals("Vue 属性绑定三种引号风格都应有覆盖 \$t 调用的折叠区域", 3, callDescriptors.size)
+    }
+
+    /**
+     * 回归（用户报告：普通 Vue template 内的 div 不能折叠）。
+     *
+     * 根因：平台 [LanguageFolding.allForLanguage] 沿语言链（Vue→HTML→XML）只取**首个**
+     * 注册了 builder 的语言。把 I18nFoldingBuilder 直接注册到 Vue 后，forLanguage(Vue)
+     * 返回 I18nFoldingBuilder 而不再 fallback 到 XML 的 XmlFoldingBuilder，
+     * template 内 div / 标签结构折叠全部失效。（JS 语言不受影响：其原生已有
+     * JSFoldingBuilder，多个 builder 会被平台合成 CompositeFoldingBuilder。）
+     *
+     * 修复：Vue 注册复合 builder [VueHostFoldingBuilder]——委托原生结构折叠 + 追加 t() 折叠。
+     * 本测试走平台真实分发路径（forLanguage(Vue)），与编辑器行为一致，
+     * 避免直接 new builder 绕过分发机制导致遮蔽问题漏测。
+     */
+    fun testVueDivStructureFoldingRestoredViaDispatch() {
+        val file = configureFile(
+            "src/DivFold.vue",
+            """
+            <template>
+              <div class="wrap">
+                <span>{{ ${'$'}t('你好世界') }}</span>
+              </div>
+            </template>
+            """.trimIndent()
+        )
+        val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
+
+        // 平台分发：编辑器正是通过 forLanguage(Vue) 获取折叠 builder
+        val dispatched = LanguageFolding.INSTANCE.forLanguage(VueLanguage.INSTANCE)
+        assertTrue(
+            "Vue 语言应分发到复合 builder（否则会遮蔽原生结构折叠），实际: $dispatched",
+            dispatched is VueHostFoldingBuilder
+        )
+
+        val descriptors = dispatched!!.buildFoldRegions(file, doc, false)
+
+        // 1) t() 翻译折叠保留（mustache 走原始文本兜底），且默认折叠状态不变
+        val tFold = descriptors.firstOrNull { it.placeholderText == hint("你好世界") }
+        assertTrue("t() 翻译折叠应保留，实际: ${descriptors.map { it.placeholderText }}", tFold != null)
+        assertEquals("t() 折叠应保持默认折叠（descriptor 硬编码）", true, tFold!!.isCollapsedByDefault())
+
+        // 2) div 结构折叠恢复：存在覆盖 <div> 内容（含 span 行）的多行折叠区域
+        val structureFoldTexts = descriptors.map { doc.getText(it.range) }
+        assertTrue(
+            "div 结构折叠应恢复（应存在覆盖 span 的多行区域），实际区域: $structureFoldTexts",
+            structureFoldTexts.any { it.contains("<span>") && it.contains("</span>") }
+        )
+
+        // 3) 结构折叠占位文本走原生 builder（形如 "<div …"），而非原始文本整体
+        //    （原生 XmlFoldingBuilder 的 placeholder 首字符为标签起始 '<'）
+        assertTrue(
+            "结构折叠占位应委托原生 builder 生成",
+            descriptors.any { it.placeholderText != null && it.placeholderText!!.startsWith("<") }
+        )
     }
 }
