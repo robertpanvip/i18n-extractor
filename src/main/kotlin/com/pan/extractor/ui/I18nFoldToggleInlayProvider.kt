@@ -160,6 +160,9 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
     private fun enqueueInlay(editor: Editor, project: Project, file: PsiFile, messages: Map<String, String>) {
         if (editor.isDisposed || project.isDisposed) return
 
+        // 折叠开关关闭 → 无需显示切换 inlay
+        if (!I18nSettings.getInstance().autoFoldEnabled()) return
+
         // 索引未完成时延迟到 smart mode，避免冷启动阻塞项目打开。
         if (DumbService.isDumb(project)) {
             DumbService.getInstance(project).runWhenSmart {

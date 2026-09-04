@@ -56,6 +56,8 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
      */
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         if (quick) return FoldingDescriptor.EMPTY_ARRAY
+        // 开关关闭 → 不生成任何折叠描述符，保留仅原生结构折叠
+        if (!I18nSettings.getInstance().autoFoldEnabled()) return FoldingDescriptor.EMPTY_ARRAY
         val project = root.project ?: return FoldingDescriptor.EMPTY_ARRAY
         val containingFile = root.containingFile ?: return FoldingDescriptor.EMPTY_ARRAY
         val contextFile = InjectedLanguageManager.getInstance(project).getTopLevelFile(containingFile) ?: containingFile

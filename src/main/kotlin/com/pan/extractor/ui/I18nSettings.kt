@@ -173,6 +173,14 @@ class I18nSettings : PersistentStateComponent<I18nSettingsState> {
     fun setReactLibrary(lib: ReactLibrary) {
         state.reactLibrary = lib.name
     }
+
+    /** 是否启用 t()/t\$() 自动折叠（默认开启，保持向后兼容）。 */
+    fun autoFoldEnabled(): Boolean = state.autoFoldEnabled
+
+    /** 更新是否启用自动折叠。 */
+    fun setAutoFoldEnabled(enabled: Boolean) {
+        state.autoFoldEnabled = enabled
+    }
 }
 
 /** 可序列化的设置状态（XmlSerializerUtil 直接映射字段）。 */
@@ -187,4 +195,5 @@ class I18nSettingsState {
     var vuePlaceholderPrefix: String = "N"
     var foldDisplayLanguage: String = "zh"
     var reactLibrary: String = ReactLibrary.I18NEXT.name
+    var autoFoldEnabled: Boolean = true
 }

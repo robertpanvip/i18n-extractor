@@ -48,6 +48,7 @@ class I18nSettingsConfigurable : Configurable {
     private var vuePrefixField: JTextField? = null
     private var foldLangCombo: JComboBox<String>? = null
     private var reactLibraryCombo: JComboBox<String>? = null
+    private var foldEnabledCheckbox: JCheckBox? = null
 
     override fun getDisplayName(): String = "I18n Extractor"
 
@@ -92,6 +93,11 @@ class I18nSettingsConfigurable : Configurable {
         center.add(JLabel(I18nExtractorBundle.message("settings.vue.prefix.label")))
         vuePrefixField = JTextField(settings.vuePlaceholderPrefix())
         center.add(vuePrefixField!!)
+
+        center.add(JLabel(I18nExtractorBundle.message("settings.fold.enabled.label")))
+        foldEnabledCheckbox = JCheckBox()
+        foldEnabledCheckbox!!.isSelected = settings.autoFoldEnabled()
+        center.add(foldEnabledCheckbox!!)
 
         center.add(JLabel(I18nExtractorBundle.message("settings.fold.lang.label")))
         foldLangCombo = JComboBox(
@@ -162,7 +168,8 @@ class I18nSettingsConfigurable : Configurable {
         val prefixChanged = vuePrefixField?.text?.trim()?.takeIf { it.isNotEmpty() } != settings.vuePlaceholderPrefix()
         val foldChanged = selectedFoldLangId() != settings.foldDisplayLanguage()
         val reactLibraryChanged = selectedReactLibrary() != settings.reactLibrary()
-        return langChanged || outChanged || numChanged || listChanged || prefixChanged || foldChanged || reactLibraryChanged
+        val foldEnabledChanged = foldEnabledCheckbox?.isSelected != settings.autoFoldEnabled()
+        return langChanged || outChanged || numChanged || listChanged || prefixChanged || foldChanged || reactLibraryChanged || foldEnabledChanged
     }
 
     override fun apply() {
@@ -178,6 +185,7 @@ class I18nSettingsConfigurable : Configurable {
         vuePrefixField?.text?.let { settings.setVuePlaceholderPrefix(it) }
         selectedFoldLangId()?.let { settings.setFoldDisplayLanguage(it) }
         selectedReactLibrary()?.let { settings.setReactLibrary(it) }
+        foldEnabledCheckbox?.let { settings.setAutoFoldEnabled(it.isSelected) }
     }
 
     override fun reset() {
@@ -193,6 +201,7 @@ class I18nSettingsConfigurable : Configurable {
         vuePrefixField?.text = settings.vuePlaceholderPrefix()
         foldLangCombo?.selectedItem = foldLangLabel(settings.foldDisplayLanguage())
         reactLibraryCombo?.selectedIndex = ReactLibrary.entries.indexOf(settings.reactLibrary())
+        foldEnabledCheckbox?.isSelected = settings.autoFoldEnabled()
     }
 
     override fun disposeUIResources() {
@@ -206,6 +215,7 @@ class I18nSettingsConfigurable : Configurable {
         vuePrefixField = null
         foldLangCombo = null
         reactLibraryCombo = null
+        foldEnabledCheckbox = null
     }
 
     /**
