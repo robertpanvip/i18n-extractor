@@ -697,4 +697,172 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
         )
         assertTrue("组件内站点应改写为 t('权限名称')", c.contains("t('权限名称')"))
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 5b. 真实报告形态：组件内已有 useTranslation hook + 模块顶层已有 t 调用
+    //     （用户原始代码：hook 已就位，缺的只是模块顶层全局 t 别名）
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 用户报告精确形态：无 locale + 组件内已有 `const { t } = useTranslation()` +
+     * 模块顶层已有 `t('已完成')` 调用 → 顶层 t 无定义，必须注入全局别名：
+     *   - `import { getI18n } from 'react-i18next'` + `const t = getI18n().t`
+     *   - 已有 useTranslation import / hook 均不重复注入
+     *   - 顶层 t('已完成') 与组件 t('测试') 保留原样（各自作用域解析）
+     */
+    fun testMixedExistingHookModuleLevelTCallsNoLocaleInjectsGlobalAliasOnly() {
+        val file = configureFile(
+            "src/Dashboard.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+
+            const STATUS_META: Record<string, { label: string; tone: string }> = {
+              done: { label: t('已完成'), tone: 'success' },
+            };
+
+            export default function Dashboard() {
+                const {t} = useTranslation();
+                return t('测试')
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        // 全局别名（getI18n 回退形态）必须注入
+        assertTrue(
+            "无 locale 混合文件应注入 import { getI18n } from 'react-i18next', got:\n${file.text}",
+            c.contains("import{getI18n}from'react-i18next'")
+        )
+        assertTrue(
+            "无 locale 混合文件应注入 const t = getI18n().t 全局别名, got:\n${file.text}",
+            c.contains("constt=getI18n().t")
+        )
+        // 已有 hook 不重复：useTranslation import 与调用各恰好一次
+        assertEquals(
+            "useTranslation import 应恰好一次, got:\n${file.text}",
+            1, c.split("import{useTranslation}from'react-i18next'").size - 1
+        )
+        assertEquals(
+            "useTranslation() 调用应恰好一次, got:\n${file.text}",
+            1, c.split("useTranslation()").size - 1
+        )
+        // 两类站点保留原样（顶层→全局别名，组件内→已有 hook）
+        assertTrue("模块顶层 t('已完成') 应保留", c.contains("t('已完成')"))
+        assertTrue("组件内 t('测试') 应保留", c.contains("t('测试')"))
+        // 顺序：别名必须位于所有 import 之后
+        val aliasIdx = c.indexOf("constt=getI18n().t")
+        val getI18nImportIdx = c.indexOf("import{getI18n}from'react-i18next'")
+        val useTransImportIdx = c.indexOf("import{useTranslation}from'react-i18next'")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须位于 import（getI18n=$getI18nImportIdx, useTranslation=$useTransImportIdx）之后, got:\n${file.text}",
+            aliasIdx >= 0 && aliasIdx >= getI18nImportIdx && aliasIdx >= useTransImportIdx
+        )
+    }
+
+    /**
+     * 真实形态 + 有 locale：组件内已有 hook + 模块顶层已有 t 调用 →
+     * 注入 locale import + `const t = i18n.t` 全局别名，hook 不重复。
+     */
+    fun testMixedExistingHookModuleLevelTCallsWithLocaleInjectsAliasOnly() {
+        addLocaleIndexExportingI18n()
+
+        val file = configureFile(
+            "src/Dashboard.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+
+            const STATUS_META: Record<string, { label: string; tone: string }> = {
+              done: { label: t('已完成'), tone: 'success' },
+            };
+
+            export default function Dashboard() {
+                const {t} = useTranslation();
+                return t('测试')
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        assertTrue(
+            "有 locale 混合文件应注入 locale import, got:\n${file.text}",
+            c.contains("importi18nfrom'@/locales'")
+        )
+        assertTrue(
+            "有 locale 混合文件应注入 const t = i18n.t 全局别名, got:\n${file.text}",
+            c.contains("constt=i18n.t")
+        )
+        assertEquals(
+            "useTranslation import 应恰好一次, got:\n${file.text}",
+            1, c.split("import{useTranslation}from'react-i18next'").size - 1
+        )
+        assertEquals(
+            "useTranslation() 调用应恰好一次, got:\n${file.text}",
+            1, c.split("useTranslation()").size - 1
+        )
+        assertTrue("模块顶层 t('已完成') 应保留", c.contains("t('已完成')"))
+        assertTrue("组件内 t('测试') 应保留", c.contains("t('测试')"))
+    }
+
+    /**
+     * 真实形态 + 无 locale + 组件内已有 hook + 模块顶层与组件内都有**新中文**（提取场景）→
+     * 注入 getI18n 回退全局别名（顶层站点用），组件内新中文走已有 hook 的 t，hook 不重复。
+     */
+    fun testMixedExistingHookNewChineseNoLocaleInjectsGlobalAliasOnly() {
+        val file = configureFile(
+            "src/Dashboard.tsx",
+            """
+            import { useTranslation } from 'react-i18next';
+
+            const STATUS_META: Record<string, { label: string; tone: string }> = {
+              done: { label: "已完成", tone: "success" },
+            };
+
+            export default function Dashboard() {
+                const {t} = useTranslation();
+                return "测试"
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        assertTrue(
+            "无 locale 混合文件应注入 import { getI18n } from 'react-i18next', got:\n${file.text}",
+            c.contains("import{getI18n}from'react-i18next'")
+        )
+        assertTrue(
+            "无 locale 混合文件应注入 const t = getI18n().t 全局别名, got:\n${file.text}",
+            c.contains("constt=getI18n().t")
+        )
+        assertEquals(
+            "useTranslation import 应恰好一次, got:\n${file.text}",
+            1, c.split("import{useTranslation}from'react-i18next'").size - 1
+        )
+        assertEquals(
+            "useTranslation() 调用应恰好一次, got:\n${file.text}",
+            1, c.split("useTranslation()").size - 1
+        )
+        // 新中文被提取改写：顶层→全局别名，组件内→已有 hook 的 t
+        assertTrue("模块顶层应改写为 t('已完成')", c.contains("t('已完成')"))
+        assertTrue("组件内应改写为 t('测试')", c.contains("t('测试')"))
+        // 别名必须位于所有 import 之后
+        val aliasIdx = c.indexOf("constt=getI18n().t")
+        val getI18nImportIdx = c.indexOf("import{getI18n}from'react-i18next'")
+        val useTransImportIdx = c.indexOf("import{useTranslation}from'react-i18next'")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须位于 import（getI18n=$getI18nImportIdx, useTranslation=$useTransImportIdx）之后, got:\n${file.text}",
+            aliasIdx >= 0 && aliasIdx >= getI18nImportIdx && aliasIdx >= useTransImportIdx
+        )
+    }
 }

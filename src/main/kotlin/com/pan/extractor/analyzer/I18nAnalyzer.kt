@@ -355,6 +355,25 @@ class I18nAnalyzer(
     }
 
     private fun collectTKeyFromCall(call: JSCallExpression) {
+        // 裸短名 t/$t/tc 调用（React 限定）才做作用域预分类：
+        // 关键场景「混合文件 + 已有 hook + 模块顶层已有 t('...')」——顶层 t 未定义时
+        // SymbolAnalyzer 判 UNKNOWN（组件内 hook 解构的 t 作用域不遮蔽顶层），无法进入
+        // TRANSLATION 分支，但调用出现在模块顶层已证明文件需要全局别名（否则顶层 t 运行时
+        // 未定义）。故对裸名候选调用一律 classifySiteScope：顶层 → hasModuleLevelSites +
+        // needInjectGlobalDollarT；组件内 → hasHookScopeSites。
+        // 两个边界：
+        //  1) 仅**裸名**（`t(...)`/`$t(...)`/`tc(...)`）——链式 `i18n.t(...)` / `i18n.global.t(...)`
+        //     自带实例接收者，不需要 hook 或全局别名；预分类会把组件内的 i18n.t 误标成
+        //     hasHookScopeSites 而误注入 useTranslation。
+        //  2) 仅 React——Vue SFC 模板注入 JS 的 containingFile 不是 .vue，classifySiteScope
+        //     会误置 needInjectGlobalDollarT，使 detectTFunctionName 提前 return 而破坏
+        //     i18n.global.t 的 tFunctionName 识别（Vue 依赖该识别决定不注入 useI18n）。
+        if (framework is ReactI18nextStrategy &&
+            SymbolAnalyzer.analyze(call).shape == CalleeShape.BARE_NAME &&
+            TranslationAnalyzer.isTranslationCandidateName(call)
+        ) {
+            classifySiteScope(call)
+        }
         val firstArg = call.arguments.firstOrNull() ?: return
         if (TranslationAnalyzer.analyzeCall(call).status != TranslationCallStatus.TRANSLATION) return
 
