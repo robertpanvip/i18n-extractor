@@ -365,6 +365,20 @@ object I18nFrameworkRegistry {
 
     private val strategies = mutableListOf<I18nFramework>()
 
+    /**
+     * 【性能】detect 结果缓存：文件路径 → (pkgStamp, reactLibrary, 框架)。
+     *
+     * detect 是折叠/inlay/引用/提取四条链路的公共热路径，且每次调用要遍历全部策略
+     * （每个策略各自做 package.json 依赖判定）。框架归属实际只由三类输入决定：
+     *  1. 文件自身（后缀/路径 → 键中的 path）；
+     *  2. 最近 package.json 依赖（→ 键中的 modificationStamp，文件被改自动失效）；
+     *  3. 用户设置 reactLibrary（ReactIntl vs ReactI18next 的分岔）。
+     * 三者任一变化键即变化，缓存结果与逐次全量探测等价。
+     * register/unregister 变更策略表时整体清空。无 virtualFile 的注入片段不缓存
+     * （其 .vue 后缀在首个策略即快路径命中，成本本就极低）。
+     */
+    private val detectCache = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, String, I18nFramework>>()
+
     init {
         // 注册顺序即优先级顺序；detect 按此顺序首个 matches 命中即返回。
         register(VueI18nStrategy)
@@ -386,11 +400,13 @@ object I18nFrameworkRegistry {
     }
 
     fun register(strategy: I18nFramework) {
+        detectCache.clear()
         strategies.add(strategy)
     }
 
     /** 反注册一个策略，用于测试清理或热卸载第三方框架。 */
     fun unregister(strategy: I18nFramework) {
+        detectCache.clear()
         strategies.remove(strategy)
     }
 
@@ -409,6 +425,19 @@ object I18nFrameworkRegistry {
      * `register` 注册 + `matches` 自定义即可真正参与检测（BUG_ANALYSIS 5.2 自定义注册）。
      */
     fun detect(element: PsiElement): I18nFramework {
+        // 缓存命中路径：框架归属只随 (文件, 最近 package.json, reactLibrary 设置) 变化，
+        // 命中后把「遍历全部策略 × 每策略 package.json 依赖判定」降为一次哈希查找。
+        val containingFile = (element as? PsiFile) ?: element.containingFile
+        val vf = containingFile?.virtualFile
+        val cacheKey = vf?.path
+        val reactLib = com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary().name
+        if (cacheKey != null) {
+            val pkgStamp = com.pan.extractor.project.ProjectStructure.nearestPackageJsonStamp(containingFile!!)
+            detectCache[cacheKey]?.let { (stamp, lib, fw) ->
+                if (stamp == pkgStamp && lib == reactLib) return fw
+            }
+        }
+
         var fallback: I18nFramework = GenericStrategy
         var matched: I18nFramework? = null
         for (s in strategies) {
@@ -422,12 +451,18 @@ object I18nFrameworkRegistry {
             }
         }
         val result = matched ?: fallback
-        // 运行时诊断：记录「设置里的 react 库值 + 实际命中的框架」。用户反馈"选了 react-intl
+        if (cacheKey != null) {
+            val pkgStamp = com.pan.extractor.project.ProjectStructure.nearestPackageJsonStamp(containingFile!!)
+            detectCache[cacheKey] = Triple(pkgStamp, reactLib, result)
+            if (detectCache.size > 2048) detectCache.clear() // 防内存泄漏
+        }
+        // 运行时诊断（仅缓存 miss 时记录，避免热路径逐调用刷日志）：
+        // 记录「设置里的 react 库值 + 实际命中的框架」。用户反馈"选了 react-intl
         // 但 app.tsx 未被提取/未发生变化"时，用这行日志锁定根因是 settings 值还是检测逻辑。
-        val fileName = (element as? PsiFile ?: element.containingFile)?.name ?: "-"
+        val fileName = containingFile?.name ?: "-"
         PluginLogBuffer.info(
             LOG,
-            "I18n detect: file=$fileName, reactLibrary=${com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary()}, " +
+            "I18n detect: file=$fileName, reactLibrary=$reactLib, " +
                 "framework=${result.id}"
         )
         return result

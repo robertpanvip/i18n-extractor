@@ -43,7 +43,13 @@ object ProjectStructure {
     private val NGX_TRANSLATE_KEY_RE = Regex(""""@ngx-translate/core"\s*:\s*"""")
     private val ANGULAR_CORE_KEY_RE = Regex(""""@angular/core"\s*:\s*""")
     /** @jsverse/transloco（更名后）与 @ngneat/transloco（旧名）都识别为 Transloco。 */
-    private val TRANSLOCLO_KEY_RE = Regex(""""@(?:jsverse|ngneat)/transloco"\s*:\s*""")
+    private val TRANSLOCLO_KEY_RE = Regex(""""@(?:jsverse|ngneat)/transloco"\s*:\s*"""")
+
+    /** dependencyBlock 的 6 个依赖段头正则（预编译，避免每次解析 package.json 在循环内重复编译）。 */
+    private val DEP_SECTION_RES: List<Regex> = listOf(
+        "dependencies", "devDependencies", "peerDependencies",
+        "optionalDependencies", "bundledDependencies", "bundleDependencies"
+    ).map { Regex("\"$it\"\\s*:\\s*\\{") }
 
     /**
      * 提取 package.json 中所有依赖段（dependencies/devDependencies/peerDependencies/optionalDependencies）
@@ -51,13 +57,9 @@ object ProjectStructure {
      * [REACT_KEY_RE] 误判为 react 依赖。
      */
     private fun dependencyBlock(content: String): String {
-        val sections = listOf(
-            "dependencies", "devDependencies", "peerDependencies",
-            "optionalDependencies", "bundledDependencies", "bundleDependencies"
-        )
         val sb = StringBuilder()
-        for (key in sections) {
-            val m = Regex("\"$key\"\\s*:\\s*\\{").find(content) ?: continue
+        for (sectionRe in DEP_SECTION_RES) {
+            val m = sectionRe.find(content) ?: continue
             val start = m.range.last + 1
             var depth = 1
             var inStr = false
@@ -146,7 +148,18 @@ object ProjectStructure {
         val parsed: Boolean,
         val hasSvelte: Boolean,
         val hasAngular: Boolean,
+        val hasTransloco: Boolean = false,
     )
+
+    /**
+     * 【性能】依赖解析缓存：package.json 路径 → (modificationStamp, 解析结果)。
+     *
+     * readPackageJsonDependencies 是 detect 热路径的底层（一次框架探测最坏触发 7-8 次
+     * package.json 全文读盘 + 解析），而框架归属在单次编辑会话内几乎不变。以
+     * (路径, modStamp) 为键缓存解析结果：package.json 被修改时 stamp 变化自动失效，
+     * 行为与逐次读盘等价。解析失败（catch 分支）不缓存，下次照旧重试。
+     */
+    private val depsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, PackageDeps>>()
 
     /**
      * 读取当前文件所在项目根（向上找最近 package.json）的依赖键值，
@@ -160,7 +173,9 @@ object ProjectStructure {
         while (dir != null) {
             val pkgFile = dir.findChild("package.json")
             if (pkgFile != null) {
-                return try {
+                val stamp = pkgFile.modificationStamp
+                depsCache[pkgFile.path]?.takeIf { it.first == stamp }?.let { return it.second }
+                val parsed = try {
                     val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
                     val deps = dependencyBlock(content)
                     PackageDeps(
@@ -170,15 +185,35 @@ object ProjectStructure {
                         parsed = true,
                         hasSvelte = deps.contains(SVELTE_KEY_RE),
                         hasAngular = deps.contains(NGX_TRANSLATE_KEY_RE) || deps.contains(ANGULAR_CORE_KEY_RE),
+                        hasTransloco = deps.contains(TRANSLOCLO_KEY_RE),
                     )
                 } catch (e: Exception) {
                     PluginLogBuffer.warn(LOG,"ProjectStructure: 读取 package.json 依赖失败，按未解析处理", e)
                     sixFalse
                 }
+                if (parsed.parsed) {
+                    depsCache[pkgFile.path] = stamp to parsed
+                    if (depsCache.size > 512) depsCache.clear() // 防内存泄漏
+                }
+                return parsed
             }
             dir = dir.parent
         }
         return sixFalse
+    }
+
+    /**
+     * 最近 package.json 的 modificationStamp，供上层缓存键使用；找不到返回 -1。
+     * 纯 VFS 目录上溯（内存操作，无读盘）。
+     */
+    internal fun nearestPackageJsonStamp(psiFile: PsiFile): Long {
+        var dir: VirtualFile? = psiFile.virtualFile?.parent ?: return -1L
+        while (dir != null) {
+            val pkgFile = dir.findChild("package.json")
+            if (pkgFile != null) return pkgFile.modificationStamp
+            dir = dir.parent
+        }
+        return -1L
     }
 
     /**
@@ -292,27 +327,14 @@ object ProjectStructure {
         ) {
             return false
         }
-        var dir: VirtualFile? = containingFile.virtualFile?.parent ?: return false
-        while (dir != null) {
-            val pkgFile = dir.findChild("package.json")
-            if (pkgFile != null) {
-                return try {
-                    val content = String(pkgFile.contentsToByteArray(), StandardCharsets.UTF_8)
-                    val deps = dependencyBlock(content)
-                    @Suppress("NAME_SHADOWING")
-                    val hasTransloco = deps.contains(TRANSLOCLO_KEY_RE)
-                    val hasVue = deps.contains(VUE_KEY_RE)
-                    val hasSolid = deps.contains(SOLID_KEY_RE)
-                    val hasSvelte = deps.contains(SVELTE_KEY_RE)
-                    hasTransloco && !hasVue && !hasSolid && !hasSvelte
-                } catch (e: Exception) {
-                    PluginLogBuffer.warn(LOG,"ProjectStructure: 读取 package.json 依赖失败，按未解析处理（isTransloco）", e)
-                    false
-                }
-            }
-            dir = dir.parent
+        // 统一走 readPackageJsonDependencies（享受 depsCache），消除独立读盘逻辑。
+        val (_, hasVue, hasSolid, parsed, hasSvelte, _, hasTransloco) =
+            readPackageJsonDependencies(containingFile)
+        return if (parsed) {
+            hasTransloco && !hasVue && !hasSolid && !hasSvelte
+        } else {
+            false
         }
-        return false
     }
 
     /**
