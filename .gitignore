@@ -52,3 +52,4 @@ build
 
 ### TRAE / IDE 本地配置（用户会话记忆，不能提交）###
 .trae/
+.gradle-home/
