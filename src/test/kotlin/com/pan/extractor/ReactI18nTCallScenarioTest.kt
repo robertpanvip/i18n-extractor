@@ -589,6 +589,63 @@ class ReactI18nTCallScenarioTest : BasePlatformTestCase() {
     }
 
     /**
+     * 用户报告场景：混合文件（模块顶层中文 + 组件内中文）且项目**无 locale i18n 实例文件** →
+     * 顶部必须生成全局 t 别名（getI18n 回退形态），组件内保持 useTranslation hook。
+     *   - 无 locale → 顶部注入 `import { getI18n } from 'react-i18next'` + `const t = getI18n().t`
+     *     （模块顶层站点没有 hook 的 t，必须走全局别名；文件已在用 useTranslation，getI18n() 安全）；
+     *   - 组件内照常注入 `const { t } = useTranslation()`（hook 的 t 遮蔽全局 t，互不冲突）。
+     */
+    fun testMixedModuleLevelNoLocaleInjectsGetI18nAliasAndKeepsHook() {
+        val file = configureFile(
+            "src/Dashboard.tsx",
+            """
+            const STATUS_META: Record<string, { label: string; tone: string }> = {
+              done: { label: "已完成", tone: "success" },
+            };
+
+            export default function Dashboard() {
+                return "测试"
+            }
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val c = compact(file)
+        // 无 locale → 回退形态全局别名：import { getI18n } + const t = getI18n().t
+        assertTrue(
+            "无 locale 混合文件应注入 import { getI18n } from 'react-i18next', got:\n${file.text}",
+            c.contains("import{getI18n}from'react-i18next'")
+        )
+        assertTrue(
+            "无 locale 混合文件应注入 const t = getI18n().t 全局别名, got:\n${file.text}",
+            c.contains("constt=getI18n().t")
+        )
+        // 组件内 hook 照常注入
+        assertTrue(
+            "组件内应注入 const { t } = useTranslation(), got:\n${file.text}",
+            c.contains("const{t}=useTranslation()")
+        )
+        assertTrue(
+            "应注入 useTranslation import, got:\n${file.text}",
+            c.contains("import{useTranslation}from'react-i18next'")
+        )
+        // 两类站点都改写为短 t（作用域各自解析：顶层→全局别名，组件内→hook）
+        assertTrue("模块顶层站点应改写为 t('已完成')", c.contains("t('已完成')"))
+        assertTrue("组件内站点应改写为 t('测试')", c.contains("t('测试')"))
+        // 顺序：别名必须位于所有 import 之后
+        val aliasIdx = c.indexOf("constt=getI18n().t")
+        val getI18nImportIdx = c.indexOf("import{getI18n}from'react-i18next'")
+        val useTransImportIdx = c.indexOf("import{useTranslation}from'react-i18next'")
+        assertTrue(
+            "别名（offset=$aliasIdx）必须位于 import（getI18n=$getI18nImportIdx, useTranslation=$useTransImportIdx）之后, got:\n${file.text}",
+            aliasIdx >= 0 && aliasIdx >= getI18nImportIdx && aliasIdx >= useTransImportIdx
+        )
+    }
+
+    /**
      * 混合文件且顶部已有全局别名（import i18n + const t = i18n.t + 顶层 t('等于')）→
      * 组件内新中文仍注入 useTranslation hook（已有 i18n 实例不阻断组件 hook），
      * 且不重复注入 locale import / 全局别名。

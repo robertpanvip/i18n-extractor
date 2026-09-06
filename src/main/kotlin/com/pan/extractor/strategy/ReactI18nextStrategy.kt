@@ -154,11 +154,15 @@ object ReactI18nextStrategy : I18nFramework {
             // 且文件本身没有任何 i18n 导入时，不生成 getI18n 回退，避免无意义的注入。
             // 但文件已有 `import i18n from 'i18next'` 等旧 i18n 导入时，
             // 仍应注入 getI18n（因为旧导入不提供 getI18n）。
+            // 例外：React 混合文件（模块顶层中文 + 组件/hook 内中文，hasHookScopeSites=true）——
+            // 顶层站点没有 hook 的 t，无 locale 时也必须走 getI18n 回退注入全局别名
+            // （文件已在用 useTranslation，i18n 必然已初始化，getI18n() 安全）。
             val hasLocaleInstance = reactLocaleImport != null
             val skipGetI18nFallback = d.needInjectGlobalDollarT &&
                 !hasLocaleInstance &&
                 !d.reactI18nTFallbackToDollarT &&
-                !alreadyHasGlobalI18nInstance
+                !alreadyHasGlobalI18nInstance &&
+                !d.hasHookScopeSites
 
             val importText: String? = when {
                 requiredImportAlreadyPresent -> null
