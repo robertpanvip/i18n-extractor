@@ -20,6 +20,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor
 import com.intellij.psi.util.PsiTreeUtil
 import java.io.File
@@ -160,6 +161,39 @@ object ProjectStructure {
      * 行为与逐次读盘等价。解析失败（catch 分支）不缓存，下次照旧重试。
      */
     private val depsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, PackageDeps>>()
+
+    /**
+     * 【性能】重型探测（组件/自定义 hook 函数查找）的共享文件级缓存（P1-2）。
+     *
+     * findReactComponentFunctions / findHookFunctions / findVueComponentFunctions 都是对同一
+     * 文件做全量 PSI 遍历（findChildrenOfType 两次 + 逐函数体判定），且被 ImportManager /
+     * 各策略 detect / I18nAnalyzer / SourceRewriter 多处重复调用。以
+     * (探测类型, 文件路径, modStamp, PsiFile 实例) 为键缓存：文件内容变更时 stamp 失效自动重算；
+     * 同 stamp 下 PsiFile 实例被淘汰重建（缓存清理后重新解析）时按新实例重算，避免复用
+     * 旧实例上的过期 PsiElement。返回列表只读共享，调用方不得修改。
+     *
+     * 注意：三种探测的缓存**必须**用不同的 kind 键区分（findHookFunctions 与
+     * findVueComponentFunctions 常在同一文件上相继调用，仅用 path 会让后一次命中
+     * 前一次的探测结果）。
+     */
+    private class FuncsCacheEntry(val stamp: Long, val file: PsiFile, val value: List<PsiElement>)
+    private val funcsCache = java.util.concurrent.ConcurrentHashMap<String, FuncsCacheEntry>()
+
+    private fun funcsMemo(kind: String, file: PsiFile, loader: (PsiFile) -> List<PsiElement>): List<PsiElement> {
+        val vf = file.virtualFile ?: return loader(file)
+        val stamp = vf.modificationStamp
+        val key = "$kind\$${vf.path}"
+        val hit = funcsCache[key]
+        if (hit != null && hit.stamp == stamp &&
+            runCatching { hit.file === PsiManager.getInstance(file.project).findFile(vf) }.getOrDefault(false)
+        ) {
+            return hit.value
+        }
+        val value = loader(file)
+        funcsCache[key] = FuncsCacheEntry(stamp, file, value)
+        if (funcsCache.size > 1024) funcsCache.clear() // 长期会话防无限增长
+        return value
+    }
 
     /**
      * 读取当前文件所在项目根（向上找最近 package.json）的依赖键值，
@@ -368,7 +402,10 @@ object ProjectStructure {
      * 2. 函数体里有 return <JSX>
      * 3. 函数体最外层作用域有 use 开头的函数调用（hook 调用）
      */
-    fun findReactComponentFunctions(file: PsiFile): List<PsiElement> {
+    fun findReactComponentFunctions(file: PsiFile): List<PsiElement> =
+        funcsMemo("react", file) { findReactComponentFunctionsUncached(it) }
+
+    private fun findReactComponentFunctionsUncached(file: PsiFile): List<PsiElement> {
         val result = mutableListOf<PsiElement>()
         // .tsx/.jsx：按 React 命名约定，PascalCase 顶级函数即组件候选——即使函数体没有
         // return <JSX>（如 const AddEditAuthModal = () => { ... }），也应作为
@@ -403,7 +440,10 @@ object ProjectStructure {
      * 2. 函数体顶层作用域包含 React/Vue hooks 调用（useState / useI18n / useRouter 等），
      *    或包含自定义 hooks 调用（其他 useXxx 调用），且会递归检查嵌套函数。
      */
-    fun findHookFunctions(file: PsiFile): List<PsiElement> {
+    fun findHookFunctions(file: PsiFile): List<PsiElement> =
+        funcsMemo("hooks", file) { findHookFunctionsUncached(it) }
+
+    private fun findHookFunctionsUncached(file: PsiFile): List<PsiElement> {
         val result = mutableListOf<PsiElement>()
         val seen = mutableSetOf<PsiElement>()
         // 1. 通过 JSFunction 查找（函数声明、箭头函数、函数表达式）
@@ -461,7 +501,10 @@ object ProjectStructure {
      *  3. 顶级存在 h('div', ...) / createVNode(...) 调用且外层包裹在 PascalCase 函数里
      *     （Vue 渲染函数组件）——可选，先不做，1+2 覆盖主流。
      */
-    fun findVueComponentFunctions(file: PsiFile): List<PsiElement> {
+    fun findVueComponentFunctions(file: PsiFile): List<PsiElement> =
+        funcsMemo("vue", file) { findVueComponentFunctionsUncached(it) }
+
+    private fun findVueComponentFunctionsUncached(file: PsiFile): List<PsiElement> {
         val result = mutableListOf<PsiElement>()
 
         // --- 场景 1：defineComponent 调用 -----------------------------------------------

@@ -1,6 +1,7 @@
 package com.pan.extractor.analyzer
 
 import com.intellij.lang.ecmascript6.psi.ES6ImportDeclaration
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSExpression
 import com.intellij.lang.javascript.psi.JSFunction
@@ -118,6 +119,12 @@ object SymbolAnalyzer {
     /** `export * from '<src>'` 星号全量 re-export 提取（固定模式）。 */
     private val EXPORT_STAR_FROM_RE = Regex("""export\s*\*\s*from\s*['"]([^'"]+)['"]""")
 
+    /** 【P0-2】本地阴影声明检测正则（固定模式，避免热路径每次重编译；group 1 = 声明名）。 */
+    private val SHADOW_KEYWORD_RE = Regex("""\b(namespace|module|class|interface|type)\s+([A-Za-z_$][\w$]*)""")
+    private val SHADOW_FUNCTION_RE = Regex("""\b(function)\s+([A-Za-z_$][\w$]*)""")
+    private val SHADOW_VAR_RE = Regex("""\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*(=|\b:|[,;)\s])""")
+    private val SHADOW_KEYWORD_FUNCTION_RE = Regex("""\b(?:namespace|module|class|interface|type|function)\s+([A-Za-z_$][\w$]*)""")
+
     /** `resolve()` 返回 null 的哨兵（obj 为 VirtualFile 本体的占位，非冲突）。 */
     private object NO_RESOLVE
 
@@ -165,9 +172,19 @@ object SymbolAnalyzer {
 
     /** 取 [file] 对应缓存代。公式变时（WriteAction bump modificationStamp）整代重建，杜绝读陈旧 PSI。 */
     private fun fileScanGen(file: PsiFile): FileScanMemo? {
-        val vf = file.virtualFile ?: return null   // 无虚拟文件（极个别内存/测试文件）→ 禁用缓存直接算
-        val key = vf.path
-        val stamp = vf.modificationStamp
+        val vf = file.virtualFile
+        if (vf != null) return memoOf(file, vf.path, vf.modificationStamp)
+        // 注入片段（Vue mustache 等）：无 VFS 文件 → 回退「宿主文件路径 + 片段起始偏移」为键。
+        // 这样注入 PSI 也走 FileScanMemo 缓存（analyze/resolve/shadow 等按 offset 复用），
+        // 消除「注入片段每次都全量无缓存分析」的准平方级成本。scanData 仍按注入片段自身
+        // 构建（与无缓存路径语义一致）；stamp 用宿主文件，宿主改动即整代重建。
+        val host = InjectedLanguageManager.getInstance(file.project).getInjectionHost(file) ?: return null
+        val hostVf = host.containingFile?.virtualFile ?: return null
+        val key = "${hostVf.path}#inj@${host.textRange.startOffset}"
+        return memoOf(file, key, hostVf.modificationStamp)
+    }
+
+    private fun memoOf(file: PsiFile, key: String, stamp: Long): FileScanMemo {
         var memo = fileScanMemo[key]
         if (memo == null || memo.stamp != stamp) {
             val scanData = buildFileScanData(file)
@@ -352,11 +369,9 @@ object SymbolAnalyzer {
         val text = file.text
         val names = java.util.HashSet<String>()
         // A/B：namespace/module/class/interface/type/function 后紧跟的名字
-        kotlin.text.Regex("""\b(?:namespace|module|class|interface|type|function)\s+([A-Za-z_\$][\w\$]*)""")
-            .findAll(text).forEach { names.add(it.groupValues[1]) }
+        SHADOW_KEYWORD_FUNCTION_RE.findAll(text).forEach { names.add(it.groupValues[1]) }
         // C：const/let/var 后紧跟的名字，且后面必须是 = / : / , / ; / ) / 空白（与逐名正则语义一致）
-        kotlin.text.Regex("""\b(?:const|let|var)\s+([A-Za-z_\$][\w\$]*)\s*(=|\b:|[,;)\s])""")
-            .findAll(text).forEach { names.add(it.groupValues[1]) }
+        SHADOW_VAR_RE.findAll(text).forEach { names.add(it.groupValues[1]) }
         return names
     }
 
@@ -622,10 +637,11 @@ object SymbolAnalyzer {
      * 仅当调用发生在本文件内时可信（shadow 语义：本地同名声明遮蔽任何外部 i18n 符号）。
      */
     private fun hasLocalShadowDeclarationText(file: PsiFile, name: String): Boolean {
-        val escaped = Regex.escape(name)
-        return Regex("""\b(namespace|module|class|interface|type)\s+$escaped\b""").containsMatchIn(file.text) ||
-            Regex("""\b(function)\s+$escaped\b""").containsMatchIn(file.text) ||
-            Regex("""\b(const|let|var)\s+$escaped\b\s*(=|\b:|[,;)\s])""").containsMatchIn(file.text)
+        // 用预编译正则 + group 比较（替代「逐名动态编译 Regex」，避免热路径每次重编译）。
+        val text = file.text
+        return SHADOW_KEYWORD_RE.findAll(text).any { it.groupValues[1] == name } ||
+            SHADOW_FUNCTION_RE.findAll(text).any { it.groupValues[1] == name } ||
+            SHADOW_VAR_RE.findAll(text).any { it.groupValues[1] == name }
     }
 
     /** 文件级 import 扫描：name 是否从 i18n 框架模块导入（含别名 / 默认 / namespace）。 */

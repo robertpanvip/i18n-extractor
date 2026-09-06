@@ -118,17 +118,69 @@ class I18nAnalyzer(
         set(value) { plan.siteCounter = value }
     private fun nextSiteId(): String = "S${++siteCounter}"
 
-    /** React 混合文件作用域分类：组件/hook 函数集合缓存（同一 collect 只扫一次；null = 未计算）。 */
-    private var reactHookScopeFuncs: List<PsiElement>? = null
+    /**
+     * 函数作用域区间表（P1-1）：把「站点是否在组件/hook 函数内」从逐函数 isAncestor 遍历
+     * （O(sites × funcs)）降为「区间二分」（O(log funcs)）。
+     *
+     * 构造时把各函数的 [TextRange] 合并为互不交叠的区间并集（嵌套/重叠函数取并集），
+     * 判断时只需二分定位最后一个 start ≤ offset 的区间。与旧的
+     * `funcs.any { PsiTreeUtil.isAncestor(it, element, false) }` 语义等价：
+     * 函数作用域是文件中连续区间，站点是其子树内节点时 startOffset 必落在区间内。
+     */
+    private class ScopeIntervals private constructor(
+        private val starts: IntArray,
+        private val ends: IntArray,
+    ) {
+        companion object {
+            fun of(funcs: List<PsiElement>): ScopeIntervals? {
+                val ranges = funcs.mapNotNull { f ->
+                    f.textRange?.takeIf { it.endOffset > it.startOffset }
+                }.sortedBy { it.startOffset }
+                if (ranges.isEmpty()) return null
+                val starts = IntArray(ranges.size)
+                val ends = IntArray(ranges.size)
+                var n = 0
+                var curStart = ranges[0].startOffset
+                var curEnd = ranges[0].endOffset
+                for (i in 1 until ranges.size) {
+                    val r = ranges[i]
+                    if (r.startOffset <= curEnd) {
+                        if (r.endOffset > curEnd) curEnd = r.endOffset
+                    } else {
+                        starts[n] = curStart; ends[n] = curEnd; n++
+                        curStart = r.startOffset; curEnd = r.endOffset
+                    }
+                }
+                starts[n] = curStart; ends[n] = curEnd; n++
+                return ScopeIntervals(starts.copyOf(n), ends.copyOf(n))
+            }
+        }
 
-    /** Vue 混合文件作用域分类：组件/hook 函数集合缓存（同一 collect 只扫一次；null = 未计算）。 */
-    private var vueHookScopeFuncs: List<PsiElement>? = null
+        /** offset 是否落在任一函数作用域内（区间已互不交叠 → 二分定位即可）。 */
+        fun contains(offset: Int): Boolean {
+            val s = starts
+            var lo = 0
+            var hi = s.size - 1
+            var idx = -1
+            while (lo <= hi) {
+                val mid = (lo + hi) ushr 1
+                if (s[mid] <= offset) { idx = mid; lo = mid + 1 } else hi = mid - 1
+            }
+            return idx >= 0 && offset < ends[idx]
+        }
+    }
+
+    /** React 混合文件作用域分类：组件/hook 函数作用域区间缓存（同一 collect 只扫一次；null = 未计算）。 */
+    private var reactScopeIntervals: ScopeIntervals? = null
+
+    /** Vue 混合文件作用域分类：组件/hook 函数作用域区间缓存（同一 collect 只扫一次；null = 未计算）。 */
+    private var vueScopeIntervals: ScopeIntervals? = null
 
     /** 重置所有收集期状态（共享 [plan] 原位 [clear]，保证 collect() 幂等可重复执行（BUG_ANALYSIS 4.1））。 */
     fun resetState() {
         plan.clear()
-        reactHookScopeFuncs = null
-        vueHookScopeFuncs = null
+        reactScopeIntervals = null
+        vueScopeIntervals = null
         // P0：JsStringCollector 内的 processedEnums（去重通知的父节点集合）也必须在 collect 间清空，
         // 否则单文件重复 collect() 会因集合泄漏而不再触发后续的枚举跳过通知。
         jsCollector.clearProcessedEnums()
@@ -247,24 +299,28 @@ class I18nAnalyzer(
     /** [element] 是否位于某个 React 组件/hook 函数（hook 注入目标）内部。 */
     private fun isInsideReactHookScope(element: PsiElement): Boolean {
         val file = element.containingFile ?: return false
-        val funcs = reactHookScopeFuncs ?: (
-            (ProjectStructure.findReactComponentFunctions(file).asSequence() +
+        val intervals = reactScopeIntervals ?: (
+            ((ProjectStructure.findReactComponentFunctions(file).asSequence() +
                 ProjectStructure.findHookFunctions(file).asSequence())
-                .distinct().toList()
-                .also { reactHookScopeFuncs = it }
+                .distinct().toList())
+                .let { ScopeIntervals.of(it) }
+                .also { reactScopeIntervals = it }
             )
-        return funcs.any { PsiTreeUtil.isAncestor(it, element, false) }
+        val range = element.textRange ?: return false
+        return intervals != null && intervals.contains(range.startOffset)
     }
 
     /** [element] 是否位于某个 Vue 组件/hook 函数（useI18n 注入目标）内部。 */
     private fun isInsideVueHookScope(file: PsiFile, element: PsiElement): Boolean {
-        val funcs = vueHookScopeFuncs ?: (
-            (ProjectStructure.findVueComponentFunctions(file).asSequence() +
+        val intervals = vueScopeIntervals ?: (
+            ((ProjectStructure.findVueComponentFunctions(file).asSequence() +
                 ProjectStructure.findHookFunctions(file).asSequence())
-                .distinct().toList()
-                .also { vueHookScopeFuncs = it }
+                .distinct().toList())
+                .let { ScopeIntervals.of(it) }
+                .also { vueScopeIntervals = it }
             )
-        return funcs.any { PsiTreeUtil.isAncestor(it, element, false) }
+        val range = element.textRange ?: return false
+        return intervals != null && intervals.contains(range.startOffset)
     }
 
     // ─────────────────────────────────────────────────────────────
