@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.9.0"
+version = "1.10.0"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,14 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.10.0</h4>
+            <ul>
+                <li>Performance: significantly faster extraction on large files and long-running sessions</li>
+                <li>Cached analysis for injected PSI (Vue mustache) via host-file key fallback — no more repeated full scans</li>
+                <li>Precompiled regex constants for local-shadow declaration detection (no per-call recompilation)</li>
+                <li>Binary-search scope classification replaces per-function ancestor traversal (O(n) → O(log n))</li>
+                <li>Shared file-level cache for React/Vue component and custom-hook detection across detect/collect/rewrite phases</li>
+            </ul>
             <h4>1.6.9</h4>
             <ul>
                 <li>Multi-framework support with auto-detection: Vue (vue-i18n), React (react-i18next &amp; react-intl), Angular (ngx-translate), Solid (solid-i18n), Svelte (svelte-i18n)</li>
