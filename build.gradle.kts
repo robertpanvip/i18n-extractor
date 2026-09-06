@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.11.0"
+version = "1.11.1"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.11.1</h4>
+            <ul>
+                <li>Fix: mixed files with an existing module-level <code>t('...')</code> call (outside any hook scope) now correctly classify that call by scope and inject a global <code>t</code> alias — <code>const t = getI18n().t</code> (no locale) or <code>const t = i18n.t</code> (locale present) — even when the top-level <code>t</code> cannot be proven as a translation call, while avoiding duplicate <code>useTranslation</code> injection and leaving chained <code>i18n.t</code> calls untouched</li>
+            </ul>
             <h4>1.11.0</h4>
             <ul>
                 <li>Fix: mixed files (module-level Chinese + component-level Chinese) now always inject a global <code>t</code> alias at the top — <code>const t = getI18n().t</code> fallback when no locale instance exists — while keeping the component-level <code>const { t } = useTranslation()</code> hook</li>
