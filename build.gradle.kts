@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.10.0"
+version = "1.11.0"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.11.0</h4>
+            <ul>
+                <li>Fix: mixed files (module-level Chinese + component-level Chinese) now always inject a global <code>t</code> alias at the top — <code>const t = getI18n().t</code> fallback when no locale instance exists — while keeping the component-level <code>const { t } = useTranslation()</code> hook</li>
+            </ul>
             <h4>1.10.0</h4>
             <ul>
                 <li>Performance: significantly faster extraction on large files and long-running sessions</li>
