@@ -425,6 +425,10 @@ object I18nFrameworkRegistry {
      * `register` 注册 + `matches` 自定义即可真正参与检测（BUG_ANALYSIS 5.2 自定义注册）。
      */
     fun detect(element: PsiElement): I18nFramework {
+        // 元素已失效（PSI 树被重写后收集阶段持有的引用变 stale）：返回通用策略兜底，
+        // 避免 containingFile / virtualFile 等访问抛 PsiInvalidElementAccessException。
+        if (!element.isValid) return GenericStrategy
+
         // 缓存命中路径：框架归属只随 (文件, 最近 package.json, reactLibrary 设置) 变化，
         // 命中后把「遍历全部策略 × 每策略 package.json 依赖判定」降为一次哈希查找。
         val containingFile = (element as? PsiFile) ?: element.containingFile

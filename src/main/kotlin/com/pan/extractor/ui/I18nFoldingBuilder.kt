@@ -122,6 +122,9 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         messages: Map<String, String>,
         descriptors: MutableList<FoldingDescriptor>,
     ) {
+        // PSI 树可能在 collectJSCallExpressions 收集后、此处处理前被重写修改，
+        // 此时 call 已失效 → 跳过，避免 containingFile 等访问抛 PsiInvalidElementAccessException。
+        if (!call.isValid) return
         // 注意：此方法仅由宿主树循环调用（调用方的 root.containingFile == contextFile），
         // 传进来的 call 都是坐标可靠的宿主树调用（.ts/.tsx 属性绑定、Vue <script> 块等）。
         // 因此**不被** Vue 反引号注入调用（那是注入子树，走 addRawFolds 兜底）。原本这里
