@@ -18,6 +18,7 @@ import com.pan.extractor.lang.SiteKind
 import com.pan.extractor.*
 import com.intellij.lang.javascript.psi.JSCallExpression
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSReferenceExpression
 import com.intellij.lang.javascript.psi.JSBinaryExpression
 import com.intellij.lang.javascript.psi.JSObjectLiteralExpression
 import com.intellij.lang.javascript.psi.ecma6.JSStringTemplateExpression
@@ -369,7 +370,10 @@ class I18nAnalyzer(
         //     会误置 needInjectGlobalDollarT，使 detectTFunctionName 提前 return 而破坏
         //     i18n.global.t 的 tFunctionName 识别（Vue 依赖该识别决定不注入 useI18n）。
         if (framework is ReactI18nextStrategy &&
-            SymbolAnalyzer.analyze(call).shape == CalleeShape.BARE_NAME &&
+            // 纯语法判定裸名（不触发 resolve，避免 TypeScript 服务超时）：
+            // BARE_NAME = methodExpression 是 JSReferenceExpression 且无 qualifier
+            // 即 `t(...)`/`$t(...)`/`tc(...)`，而非 `i18n.t(...)` 等链式调用
+            (call.methodExpression as? JSReferenceExpression)?.qualifier == null &&
             TranslationAnalyzer.isTranslationCandidateName(call)
         ) {
             classifySiteScope(call)
