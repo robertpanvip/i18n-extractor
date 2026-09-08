@@ -83,15 +83,18 @@ class I18nFoldingBuilder : FoldingBuilderEx() {
         // 兜底，故此处仅当 root 属于宿主 contextFile 时才扫宿主树（root 为注入 PSI 时跳过）。
         val descriptors = mutableListOf<FoldingDescriptor>()
         if (root is PsiFile && root.containingFile == contextFile) {
+            // 宿主树（== 折叠目标文档）上的 $t/t() 调用：坐标即宿主坐标，可直接折叠。
             for (call in collectJSCallExpressions(root)) {
                 addFoldingDescriptor(call, messages, descriptors)
             }
+            // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
+            // 仅当 root 属于宿主文件时才追加 raw fold：VueJS 注入路径的 root.node 是注入
+            // JS 节点，与 raw.range 的宿主坐标跨文件，会被 CompositeFoldingBuilder.assertSameFile
+            // 静默丢弃 → $t() 折叠缺失 → 点击 inlay 时误选中 bracket 折叠。
+            // VueHostFoldingBuilder 已用宿主文件 root 正确创建了 raw fold，此处无需重复。
+            val anchorNode = root.node ?: contextFile.node
+            addRawFolds(contextFile, messages, descriptors, anchorNode)
         }
-        // 模板表达式（{{ $t('..') }} 等）注入坐标不可靠，按宿主原始文本兜底折叠。
-        // 注意：raw fold 描述符使用 root.node 作为锚点 ASTNode（属于同一文件），
-        // 避免 CompositeFoldingBuilder.assertSameFile 的跨文件断言失败。
-        val anchorNode = root.node ?: contextFile.node
-        addRawFolds(contextFile, messages, descriptors, anchorNode)
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
         if (elapsedMs >= SLOW_FOLD_MS) {
             logger.info("I18nFoldingBuilder[折叠] file=${contextFile.name} size=${contextFile.textLength}B folded=${descriptors.size} elapsed=${elapsedMs}ms")

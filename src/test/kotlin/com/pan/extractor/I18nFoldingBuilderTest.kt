@@ -306,13 +306,10 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
                 </template>
                 """.trimIndent()
             )
-            val inj = InjectedLanguageManager.getInstance(project)
-            val host = PsiTreeUtil.collectElementsOfType(
-                file, PsiLanguageInjectionHost::class.java
-            ).firstOrNull { it.text.contains("${'$'}t") }!!
-            val injected = inj.getInjectedPsiFiles(host)!!.first().first
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
-            val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+            // 以 Vue 宿主文件为 root：生产环境由 VueHostFoldingBuilder 调用，root 为宿主文件。
+            // 注入 JS 片段路径的 root.node 与 raw.range 跨文件，会被 assertSameFile 静默丢弃。
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             assertEquals("应折叠 1 处", 1, descriptors.size)
             assertEquals("Vue 双花括号应反转义为单花括号，不替换参数", hint("Hello{0}"), descriptors.first().placeholderText)
         } finally {
@@ -377,13 +374,9 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
                 </template>
                 """.trimIndent()
             )
-            val inj = InjectedLanguageManager.getInstance(project)
-            val host = PsiTreeUtil.collectElementsOfType(
-                file, PsiLanguageInjectionHost::class.java
-            ).firstOrNull { it.text.contains("${'$'}t") }!!
-            val injected = inj.getInjectedPsiFiles(host)!!.first().first
             val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
-            val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+            // 以 Vue 宿主文件为 root：生产环境由 VueHostFoldingBuilder 调用，root 为宿主文件。
+            val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
             // 期望外层骨架折叠后看到「完整文案」请输入搜索关键词
             val outer = descriptors.firstOrNull { it.placeholderText?.contains("请输入") == true }
             System.out.println("==== REPRO fold placeholders = ${descriptors.map { it.placeholderText }}")
@@ -402,14 +395,10 @@ class I18nFoldingBuilderTest : BasePlatformTestCase() {
             </template>
             """.trimIndent()
         )
-        // Vue 模板插值会被注入为 VueJS PSI，折叠实际作用于注入片段。
-        val inj = InjectedLanguageManager.getInstance(project)
-        val host = PsiTreeUtil.collectElementsOfType(
-            file, PsiLanguageInjectionHost::class.java
-        ).firstOrNull { it.text.contains("${'$'}t") }!!
-        val injected = inj.getInjectedPsiFiles(host)!!.first().first
         val doc = PsiDocumentManager.getInstance(project).getDocument(file)!!
-        val descriptors = I18nFoldingBuilder().buildFoldRegions(injected, doc, false)
+        // 以 Vue 宿主文件为 root：生产环境由 VueHostFoldingBuilder 调用，root 为宿主文件。
+        // 注入 JS 片段路径的 root.node 与 raw.range 跨文件，会被 assertSameFile 静默丢弃。
+        val descriptors = I18nFoldingBuilder().buildFoldRegions(file, doc, false)
         assertTrue("Vue 模板插值应折叠", descriptors.isNotEmpty())
         assertEquals("占位文本应为翻译值", hint("你好世界"), descriptors.first().placeholderText)
     }
