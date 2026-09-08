@@ -11,6 +11,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Inlay
+import com.intellij.codeInsight.folding.CodeFoldingManager
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorFactoryEvent
@@ -80,6 +82,52 @@ class I18nFoldToggleInlayProvider : EditorFactoryListener, FileEditorManagerList
         private const val DEBOUNCE_MS = 500L
 
         private data class InlayTask(val editor: Editor, val file: PsiFile, val messages: Map<String, String>)
+
+        /**
+         * 折叠开关（或折叠展示语言）在设置面板被应用后调用，刷新所有已打开编辑器的
+         * 折叠区域与切换 inlay：
+         *  - 关闭折叠：移除本插件 inlay，并强制编辑器**重新计算折叠区域** —— 折叠构建器
+         *    在开关关闭时返回空，平台会据此删除既有 `$t()` 折叠区域并恢复原文，
+         *    否则折叠会残留到该文件关闭重开。
+         *  - 开启折叠 / 切换展示语言：清除已处理标记并强制重算，使 `$t()` 折叠与 inlay 立即
+         *    以新语言重建。
+         */
+        fun refreshForFoldSettingChange(project: com.intellij.openapi.project.Project?) {
+            val app = ApplicationManager.getApplication()
+            app.invokeLater {
+                val enabled = I18nSettings.getInstance().autoFoldEnabled()
+                val openProjects = if (project != null && !project.isDisposed)
+                    listOf(project)
+                else
+                    ProjectManager.getInstance().openProjects.asList()
+                for (p in openProjects) {
+                    if (p.isDisposed) continue
+                    val editorManager = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(p)
+                    for (fileEditor in editorManager.allEditors) {
+                        val editor = (fileEditor as? com.intellij.openapi.fileEditor.TextEditor)?.editor
+                            ?: continue
+                        if (editor.isDisposed) continue
+                        // 清除去重标记：开启后会重新入队生成 inlay。
+                        // 关闭时无 inlay 任务要生成，但也会重算折叠（清空区）。
+                        processedEditors.remove(editor)
+                        if (!enabled) {
+                            removeAllToggleInlaysForRefresh(editor)
+                        }
+                        CodeFoldingManager.getInstance(p).updateFoldRegionsAsync(editor, false)
+                    }
+                }
+            }
+        }
+
+        /** 移除编辑器中所有本插件 [I18nFoldToggleRenderer] 类型 inlay（供设置关闭折叠时清空残留）。 */
+        private fun removeAllToggleInlaysForRefresh(editor: Editor) {
+            val inlayModel = editor.inlayModel
+            for (inlay in inlayModel.getInlineElementsInRange(0, editor.document.textLength)) {
+                if (inlay.renderer is I18nFoldToggleRenderer) {
+                    inlay.dispose()
+                }
+            }
+        }
     }
 
     override fun editorCreated(event: EditorFactoryEvent) {

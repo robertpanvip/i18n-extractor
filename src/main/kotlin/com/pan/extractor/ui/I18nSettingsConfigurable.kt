@@ -173,6 +173,10 @@ class I18nSettingsConfigurable : Configurable {
     }
 
     override fun apply() {
+        // 记录折叠相关设置是否发生变化（开关状态 / 展示语言），用于应用后刷新已打开编辑器。
+        val foldEnabledBefore = I18nSettings.getInstance().autoFoldEnabled()
+        val foldLangBefore = I18nSettings.getInstance().foldDisplayLanguage()
+
         val settings = I18nSettings.getInstance()
         settings.setLanguageIds(boxes.filterValues { it.isSelected }.keys)
         outputButtons.entries.firstOrNull { it.value.isSelected }?.key?.let {
@@ -186,6 +190,14 @@ class I18nSettingsConfigurable : Configurable {
         selectedFoldLangId()?.let { settings.setFoldDisplayLanguage(it) }
         selectedReactLibrary()?.let { settings.setReactLibrary(it) }
         foldEnabledCheckbox?.let { settings.setAutoFoldEnabled(it.isSelected) }
+
+        // 折叠开关或展示语言变更 → 立即刷新所有已打开编辑器的折叠区域与 inlay，
+        // 否则关闭折叠后当前文件仍保持折叠，直到关闭重开。
+        if (settings.autoFoldEnabled() != foldEnabledBefore ||
+            settings.foldDisplayLanguage() != foldLangBefore
+        ) {
+            I18nFoldToggleInlayProvider.refreshForFoldSettingChange(null)
+        }
     }
 
     override fun reset() {
