@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.12.0"
+version = "1.13.0"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.13.0</h4>
+            <ul>
+                <li>Fix: toggling the folding switch (or the display language) in Settings now immediately refreshes all open editors — <code>\${'$'}t()</code> folds and toggle affordances disappear/rebuild on the spot, no longer waiting for the file to be closed and reopened</li>
+            </ul>
             <h4>1.12.0</h4>
             <ul>
                 <li>Fix: stable performance — <code>SymbolAnalyzer</code> no longer triggers the IDE TypeScript service when deciding bare vs. chained <code>t</code> calls (purely syntactic <code>qualifier == null</code> check), eliminating 20s <code>ideGetResolvedSignature</code> timeouts during extraction</li>
