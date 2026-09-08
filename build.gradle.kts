@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.11.1"
+version = "1.12.0"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.12.0</h4>
+            <ul>
+                <li>Fix: stable performance — <code>SymbolAnalyzer</code> no longer triggers the IDE TypeScript service when deciding bare vs. chained <code>t</code> calls (purely syntactic <code>qualifier == null</code> check), eliminating 20s <code>ideGetResolvedSignature</code> timeouts during extraction</li>
+                <li>Fix: folding no longer throws <code>PsiInvalidElementAccessException</code> when the PSI tree is rewritten between collection and folding (defensive <code>isValid</code> guards on stale elements)</li>
+                <li>Fix: Vue template <code>\${'$'}t()</code> folds no longer steal the native <code>&lt;div&gt;</code> / tag / function bracket folds — the injected JS path no longer creates raw folds (cross-file descriptors were silently dropped by <code>CompositeFoldingBuilder.assertSameFile</code>), while <code>VueHostFoldingBuilder</code> keeps native structure folding intact</li>
+            </ul>
             <h4>1.11.1</h4>
             <ul>
                 <li>Fix: mixed files with an existing module-level <code>t('...')</code> call (outside any hook scope) now correctly classify that call by scope and inject a global <code>t</code> alias — <code>const t = getI18n().t</code> (no locale) or <code>const t = i18n.t</code> (locale present) — even when the top-level <code>t</code> cannot be proven as a translation call, while avoiding duplicate <code>useTranslation</code> injection and leaving chained <code>i18n.t</code> calls untouched</li>
