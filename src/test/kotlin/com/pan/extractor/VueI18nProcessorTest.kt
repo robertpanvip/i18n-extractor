@@ -2933,5 +2933,17 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "参数对象应含 N0: record.versionNum，got:\n$result",
             result.contains("N0: record.versionNum")
         )
+
+        // mustache 整体应被替换为 $t('第{N0}版', { N0: record.versionNum })，且子字面量
+        // "第"/"版" 不应被重复提取（否则会残留 $t('第') / $t('版') 或嵌套替换）
+        val c = result.replace("\\s+".toRegex(), "")
+        assertTrue(
+            "mustache 应整体替换为 {{ \$t('第{N0}版', { N0: record.versionNum }) }}，got:\n$result",
+            c.contains("{{\$t('第{N0}版',{N0:record.versionNum})}}")
+        )
+        assertFalse(
+            "子字面量不应被单独重复提取，got:\n$result",
+            c.contains("\$t('第')") || c.contains("\$t('版')")
+        )
     }
 }
