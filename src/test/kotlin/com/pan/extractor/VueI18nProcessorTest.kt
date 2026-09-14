@@ -2894,4 +2894,44 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             settings.setLanguageIds(savedLang)
         }
     }
+
+    /**
+     * Bug 复现：mustache 中字符串拼接含变量 `{{ "第" + record.versionNum + "版" }}`
+     * 应生成 `$t('第{N0}版', { N0: record.versionNum })`，
+     * 不应出现嵌套占位符 `{N{N0}}` 或参数值变成字面量 `0`。
+     */
+    fun testMustacheStringConcatWithVariablePlaceholder() {
+        val file = configureFile(
+            "src/ConcatVar.vue",
+            """
+            <template>
+                <span>{{ "第" + record.versionNum + "版" }}</span>
+            </template>
+            <script setup lang="ts">
+            const record = { versionNum: 1 }
+            </script>
+            """.trimIndent()
+        )
+
+        val processor = I18nProcessor(project, file)
+        processor.collect()
+        processor.runWithUndo()
+
+        val result = file.text
+        // 资源文案应含命名占位 {N0}
+        assertTrue(
+            "应生成 \$t('第{N0}版', ...) 含命名占位 {N0}，got:\n$result",
+            result.contains("第{N0}版")
+        )
+        // 不应出现嵌套占位符 {N{N0}}
+        assertFalse(
+            "不应出现嵌套占位符 {N{N0}}，got:\n$result",
+            result.contains("{N{N0}}")
+        )
+        // 参数值应是变量表达式 record.versionNum，而不是字面量 0
+        assertTrue(
+            "参数对象应含 N0: record.versionNum，got:\n$result",
+            result.contains("N0: record.versionNum")
+        )
+    }
 }
