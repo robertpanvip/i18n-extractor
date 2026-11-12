@@ -205,7 +205,8 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
 
         val extensions = setOf("vue", "tsx", "jsx", "ts", "js")
         val bugPattern = Regex("""(?:\{N\d+\}|\{\{\d+\}\})""")
-        val nestedBug = Regex("""\{(?:N\d+|\{\{\d+\}\})""")
+        // 真正的嵌套占位符: {N{N0}} 或 {{0{{1}}}} — 占位符内部又出现占位符格式
+        val nestedBug = Regex("""(?:\{N\{N\d+\}\}|\{\{\d+\{\{\d+\}\}\}\})""")
         val zeroParamBug = Regex("""\{\s*(?:N\d+|['"]\d+['"])\s*:\s*0\s*\}""")
 
         data class BugFile(val project: String, val path: String, val bugs: List<String>)
@@ -240,16 +241,16 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
                         // 检查 bug 模式
                         val foundBugs = mutableListOf<String>()
                         if (nestedBug.containsMatchIn(result)) {
-                            foundBugs.add("嵌套占位符: ${nestedBug.findAll(result).map { it.value }.distinct().take(3)}")
+                            foundBugs.add("嵌套占位符: ${nestedBug.findAll(result).map { it.value }.distinct().take(3).toList()}")
                         }
                         if (zeroParamBug.containsMatchIn(result)) {
-                            foundBugs.add("参数值为字面量 0: ${zeroParamBug.findAll(result).map { it.value }.distinct().take(3)}")
+                            foundBugs.add("参数值为字面量 0: ${zeroParamBug.findAll(result).map { it.value }.distinct().take(3).toList()}")
                         }
                         // 检查 $t() 调用是否语法正确（括号匹配）
                         val tCalls = Regex("""${'$'}t\([^)]*\)""").findAll(result).toList()
                         val badTCalls = tCalls.filter { it.value.count { c -> c == '(' } != it.value.count { c -> c == ')' } }
                         if (badTCalls.isNotEmpty()) {
-                            foundBugs.add("括号不匹配的 \$t() 调用: ${badTCalls.map { it.value.take(50) }.distinct().take(3)}")
+                            foundBugs.add("括号不匹配的 \$t() 调用: ${badTCalls.map { it.value.take(50) }.distinct().take(3).toList()}")
                         }
 
                         if (foundBugs.isNotEmpty()) {
