@@ -497,4 +497,142 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
         return Regex("""[\u4e00-\u9fff]+""").findAll(cleaned)
             .map { it.value }.distinct().joinToString("、")
     }
+
+    // ───────────────────────────────────────────────
+    // Top 100 复杂文件扫描（手工挑选）
+    // 路径列表在 /tmp/top100_paths.txt（相对 test-fixtures/）
+    // 每 10 个文件 GC 一次，不 save 避免 stripTrailingSpaces
+    // ───────────────────────────────────────────────
+
+    fun testTop100Complex() {
+        val topPathsFile = File("/tmp/top100_paths.txt")
+        assertTrue("/tmp/top100_paths.txt 不存在，先跑 python3 挑选", topPathsFile.exists())
+        val relPaths = topPathsFile.readLines().filter { it.isNotBlank() }
+        println("\n==============================================")
+        println(" 🔬 Top 100 复杂文件扫描")
+        println("==============================================")
+        println("路径数: ${relPaths.size}\n")
+
+        val fixturesRoot = File(fixturesDir)
+
+        val nestedBug = Regex("""(?:\{N\{N\d+\}\}|\{\{\d+\{\{\d+\}\}\}\})""")
+        val emptyTCall = Regex("""${'$'}t\(\s*['"`]\s*['"`]\s*\)""")
+        val hasChinese = Regex("""[\u4e00-\u9fff]""")
+        val hasTCall = Regex("""${'$'}t\(""")
+        val hasDollarTCall = Regex("""\bt\([^)]*['"`][\u4e00-\u9fff]""")
+
+        data class BugFile(val path: String, val lines: Int, val bugs: List<String>)
+        data class CrashFile(val path: String, val lines: Int, val ex: String, val msg: String)
+
+        val allBugs = mutableListOf<BugFile>()
+        val crashes = mutableListOf<CrashFile>()
+        val missed = mutableListOf<BugFile>()
+        var processed = 0
+
+        for (relPath in relPaths) {
+            val file = File(fixturesRoot, relPath.removePrefix("./"))
+            if (!file.exists()) {
+                println("  ⚠️  跳过不存在: $relPath")
+                continue
+            }
+            val lines = file.readText().lines().size
+            processed++
+
+            if (processed % 10 == 0) {
+                println("  ... 已处理 $processed / ${relPaths.size}（GC 中）")
+                System.gc()
+                Thread.sleep(200)
+            }
+
+            // 解析 project + 相对路径
+            val parts = relPath.removePrefix("./").split("/", limit = 2)
+            val projectName = parts[0]
+            val innerPath = if (parts.size > 1) parts[1] else relPath
+
+            val psiFile = loadExternalFile(projectName, innerPath) ?: continue
+            val contentBefore = file.readText()
+
+            try {
+                val processor = I18nProcessor(project, psiFile)
+                processor.collect()
+                com.intellij.psi.impl.source.PostprocessReformattingAspect.getInstance(project).disablePostprocessFormattingInside {
+                    WriteCommandAction.runWriteCommandAction(project) {
+                        processor.runWithUndo()
+                    }
+                }
+                // 不 save，直接从 PSI 读结果（避免 stripTrailingSpaces 等副作用）
+                val result = psiFile.text
+
+                val bugs = mutableListOf<String>()
+                if (nestedBug.containsMatchIn(result)) {
+                    bugs.add("嵌套占位符: ${nestedBug.findAll(result).map { it.value }.distinct().take(3)}")
+                }
+                if (emptyTCall.containsMatchIn(result)) {
+                    bugs.add("空 \$t(): ${emptyTCall.findAll(result).map { it.value }.distinct().take(3)}")
+                }
+                val allTCalls = Regex("""${'$'}t\([^)]*\)""").findAll(result).toList()
+                val openT = Regex("""${'$'}t\(""").findAll(result).count()
+                if (openT > allTCalls.size) {
+                    bugs.add("括号不匹配: $openT 个 \$t( 只匹配 ${allTCalls.size} 个完整调用")
+                }
+
+                if (bugs.isNotEmpty()) allBugs.add(BugFile(relPath, lines, bugs))
+
+                if (hasChinese.containsMatchIn(contentBefore)
+                    && !hasTCall.containsMatchIn(result)
+                    && !hasDollarTCall.containsMatchIn(result)
+                ) {
+                    val nonComment = extractNonCommentChinese(contentBefore)
+                    if (nonComment.isNotBlank()) {
+                        missed.add(BugFile(relPath, lines,
+                            listOf("有中文但无 \$t() — 可能漏翻译: ${nonComment.take(80)}")))
+                    }
+                }
+
+                // GC 会自动回收 psiFile（下一次循环会覆盖变量）
+            } catch (e: Throwable) {
+                crashes.add(CrashFile(relPath, lines, e.javaClass.simpleName,
+                    (e.message ?: "").take(150)))
+            }
+        }
+
+        println("\n==============================================")
+        println(" 🏁 Top 100 扫描完成")
+        println("==============================================")
+        println("处理文件: $processed")
+        println("❌ Bug: ${allBugs.size}")
+        println("💥 崩溃: ${crashes.size}")
+        println("⚠️  可能漏翻译: ${missed.size}")
+
+        if (allBugs.isNotEmpty()) {
+            println("\n--- BUG ---")
+            allBugs.forEach { b ->
+                println("  [BUG] ${b.path} (${b.lines}行)")
+                b.bugs.forEach { println("        $it") }
+            }
+        }
+        if (crashes.isNotEmpty()) {
+            println("\n--- CRASH ---")
+            crashes.forEach { c ->
+                println("  [CRASH] ${c.path} (${c.lines}行)")
+                println("          ${c.ex}: ${c.msg}")
+            }
+        }
+        if (missed.isNotEmpty()) {
+            println("\n--- 可能漏翻译 (前 30) ---")
+            missed.take(30).forEach { m ->
+                println("  [MISS] ${m.path} (${m.lines}行)")
+                m.bugs.forEach { println("         $it") }
+            }
+            if (missed.size > 30) println("  ... 还有 ${missed.size - 30} 个")
+        }
+
+        val fatal = crashes.map { Triple(it.path, it.ex, it.msg) } +
+                     allBugs.map { Triple(it.path, "BUG", it.bugs.joinToString(",")) }
+        assertTrue(
+            "Top 100 扫描发现 ${fatal.size} 个严重问题:\n" +
+                fatal.joinToString("\n") { (p, t, d) -> "  [$t] $p: $d" },
+            fatal.isEmpty()
+        )
+    }
 }
