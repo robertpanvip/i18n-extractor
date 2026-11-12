@@ -351,4 +351,35 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         val result = processReact(react)
         assertFalse(nestedReactRegex.containsMatchIn(result))
     }
+
+    // ───────────────────────────────────────────────
+    // Top 100 扫描发现的真 Bug:
+    // 无插值模板字符串作为非首个函数参数时漏翻译
+    // 来源: pro-components/src/form/BaseForm/BaseForm.tsx:445
+    //   noteOnce(isEqual, `initialValues 只在 form 初始化时生效...`)
+    // ───────────────────────────────────────────────
+
+    fun testReactTemplateLiteralNoSubstitutionAsSecondArg() {
+        val react = """
+        import React from 'react'
+        export function BaseForm() {
+          const noteOnce = (cond: boolean, msg: string) => {}
+          const isEqual = true
+          useEffect(() => {
+            noteOnce(
+              isEqual,
+              `initialValues 只在 form 初始化时生效，如果你需要异步加载推荐使用 request`,
+            )
+          }, [])
+          return null
+        }
+        """.trimIndent()
+        val result = processReact(react)
+
+        // 应该生成 $t('initialValues 只在 form 初始化时生效...')
+        assertTrue(
+            "无插值模板字符串应被提取为 \$t()，got:\n$result",
+            result.contains("\$t(") || result.contains("{t(")
+        )
+    }
 }
