@@ -112,6 +112,11 @@ tasks {
     test {
         useJUnit()
 
+        // 批量扫描 ExternalProjectE2ETest.testBatchScanAllFixtures 需要加载 17 个
+        // 外部项目 × 200 文件，耗内存（512m+ metaspace）且慢（30s+），
+        // 不放在默认 `gradle test` 里跑。改用 `gradle batchE2ETest` 手动触发。
+        exclude("**/ExternalProjectE2ETest.testBatchScanAllFixtures*")
+
         // 仅本地生效（scripts/run-tests.sh 传 -PforkTest=true）：
         // 本地沙箱 cgroup 只有 4GiB，堆 + metaspace + native 直接内存容易超限，
         // 需限制并行 fork 数、堆大小、按类独立 fork 并限定 metaspace。
@@ -141,6 +146,27 @@ tasks {
                 "standardError"
             )
         }
+    }
+
+    // 手动触发 17 项目批量扫描：gradle batchE2ETest
+    // 覆盖真实开源项目（vue-vben-admin, ant-design-vue, pro-components 等）
+    // 中的字符串拼接 / 模板字符串 / 三元表达式 等复杂场景。
+    // 参考: ExternalProjectE2ETest.testBatchScanAllFixtures
+    register<Test>("batchE2ETest") {
+        group = "verification"
+        description = "Run batch scan over 17 real open-source projects (200 files, ~30s)"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = sourceSets.test.get().runtimeClasspath
+        useJUnit()
+        include("**/ExternalProjectE2ETest.testBatchScanAllFixtures*")
+        // 批量扫描需要更大内存
+        maxHeapSize = "1024m"
+        jvmArgs(
+            "-XX:+UseParallelGC",
+            "-XX:MaxMetaspaceSize=512m",
+            "-XX:ReservedCodeCacheSize=128m",
+            "-Didea.jcef.enabled=false"
+        )
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
