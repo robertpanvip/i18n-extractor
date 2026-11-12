@@ -200,7 +200,14 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
     fun testBatchScanAllFixtures() {
         val fixturesRoot = File(fixturesDir)
         val fixtureProjects = listOf(
-            "vue-vben-admin", "ant-design-vue", "arco-design-vue"
+            // Vue 项目
+            "vue-vben-admin", "vue-pure-admin", "arco-design-vue",
+            "naive-ui", "pptist", "geeker-admin", "ant-design-vue",
+            "element-plus", "vant",
+            // React 项目
+            "pro-components", "tdesign-react", "arco-design",
+            "ant-design-mobile", "ant-design", "docusaurus",
+            "material-ui", "uniapp"
         )
 
         val extensions = setOf("vue", "tsx", "jsx", "ts", "js")
@@ -213,10 +220,13 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
 
         val bugs = mutableListOf<BugFile>()
         var processedCount = 0
+        val perProjectLimit = 15  // 每项目最多扫描 15 个中文文件
+        val totalLimit = 200      // 总共最多 200 个文件
 
         for (project in fixtureProjects) {
             val projectDir = File(fixturesRoot, project)
             if (!projectDir.isDirectory) continue
+            var projectCount = 0
 
             projectDir.walkTopDown().forEach { file ->
                 if (file.isFile && file.extension in extensions) {
@@ -228,8 +238,10 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
                     // 只处理含中文的文件（可能被提取）
                     if (!Regex("""[\u4e00-\u9fff]""").containsMatchIn(content)) return@forEach
 
-                    // 限制处理速度：总共最多 80 个文件（避免 Metaspace OOM）
-                    if (processedCount > 80) return@forEach
+                    // 每项目上限
+                    if (projectCount >= perProjectLimit) return@forEach
+                    // 总上限
+                    if (processedCount >= totalLimit) return@forEach
 
                     val psiFile = loadExternalFile(project, file.relativeTo(projectDir).path)
                         ?: return@forEach
@@ -237,6 +249,7 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
                     try {
                         val result = processFile(psiFile)
                         processedCount++
+                        projectCount++
 
                         // 检查 bug 模式
                         val foundBugs = mutableListOf<String>()
