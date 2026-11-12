@@ -73,14 +73,16 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
         return myFixture.addFileToProject(fixturePath, content)
     }
 
-    /** 跑完整流程：collect → runWithUndo，返回处理后的文件内容。 */
+    /** 跑完整流程：collect → runWithUndo，返回处理后的文件内容。
+     *  禁用后处理格式化以加速（真实使用场景也不需要）。 */
     private fun processFile(psiFile: PsiFile): String {
         val processor = I18nProcessor(project, psiFile)
         processor.collect()
-        WriteCommandAction.runWriteCommandAction(project) {
-            processor.runWithUndo()
+        com.intellij.psi.impl.source.PostprocessReformattingAspect.getInstance(project).disablePostprocessFormattingInside {
+            WriteCommandAction.runWriteCommandAction(project) {
+                processor.runWithUndo()
+            }
         }
-        // 重新读取 PSI，拿到最新内容
         FileDocumentManager.getInstance().saveAllDocuments()
         return psiFile.text
     }
@@ -292,5 +294,207 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
                 },
             bugs.isEmpty()
         )
+    }
+
+    // ───────────────────────────────────────────────
+    // 暴力全量扫描：无任何截断，跑所有含中文文件
+    // 暴露插件在真实项目中可能遇到的所有问题
+    // 用法: gradle test --tests "*testBruteForceScanAll*"
+    // 或: gradle batchE2ETest (已在 build.gradle.kts 配置)
+    // ───────────────────────────────────────────────
+
+    fun testBruteForceScanAll() {
+        val fixturesRoot = File(fixturesDir)
+        val fixtureProjects = listOf(
+            "vue-vben-admin", "vue-pure-admin", "arco-design-vue",
+            "naive-ui", "pptist", "geeker-admin", "ant-design-vue",
+            "element-plus", "vant", "pro-components", "tdesign-react",
+            "arco-design", "ant-design-mobile", "ant-design", "docusaurus",
+            "material-ui", "uniapp"
+        )
+
+        val extensions = setOf("vue", "tsx", "jsx", "ts", "js")
+
+        // 扩展 bug 检测模式
+        val nestedBug = Regex("""(?:\{N\{N\d+\}\}|\{\{\d+\{\{\d+\}\}\}\})""")
+        val bracketMismatch = Regex("""${'$'}t\([^)]*""")  // 开了没关
+        val emptyTCall = Regex("""${'$'}t\(\s*['"`]\s*['"`]\s*\)""")  // $t('') 空 key
+
+        // 还没被翻译但含中文（rewrites = 0）
+        val hasChinese = Regex("""[\u4e00-\u9fff]""")
+        val hasTCall = Regex("""${'$'}t\(""")
+        val hasDollarTCall = Regex("""\bt\([^)]*['"`][\u4e00-\u9fff]""")  // 普通 t() 调用含中文
+
+        data class BugFile(
+            val project: String,
+            val path: String,
+            val fileLines: Int,
+            val bugs: List<String>
+        )
+
+        data class CrashFile(
+            val project: String,
+            val path: String,
+            val fileLines: Int,
+            val exceptionClass: String,
+            val exceptionMessage: String
+        )
+
+        val allBugs = mutableListOf<BugFile>()
+        val crashes = mutableListOf<CrashFile>()
+        val missedTranslations = mutableListOf<BugFile>()  // 有中文但没翻译
+        var totalProcessed = 0
+        var totalWithChinese = 0
+        var filesWithTAfter = 0
+        var emptyProjectStats = mutableMapOf<String, Int>()  // 每项目处理数
+
+        println("\n==============================================")
+        println(" 🔍 暴力全量扫描开始 — 无限制，跑所有中文文件")
+        println("==============================================\n")
+
+        for (project in fixtureProjects) {
+            val projectDir = File(fixturesRoot, project)
+            if (!projectDir.isDirectory) continue
+            var projectCount = 0
+
+            val allZhFiles = mutableListOf<Pair<File, Int>>()  // (file, lineCount)
+            projectDir.walkTopDown().forEach { file ->
+                if (file.isFile && file.extension in extensions) {
+                    val pathStr = file.absolutePath
+                    if (pathStr.contains("node_modules") || pathStr.contains("/dist/")) return@forEach
+                    val content = file.readText()
+                    if (hasChinese.containsMatchIn(content)) {
+                        allZhFiles.add(file to content.lines().size)
+                    }
+                }
+            }
+
+            // 按行数从大到小排序（复杂文件优先）
+            allZhFiles.sortByDescending { it.second }
+            totalWithChinese += allZhFiles.size
+
+            println("📂 $project: ${allZhFiles.size} 个中文文件待处理")
+
+            for ((file, lineCount) in allZhFiles) {
+                val relPath = file.relativeTo(projectDir).path
+                val psiFile = loadExternalFile(project, relPath) ?: continue
+
+                try {
+                    val contentBefore = file.readText()
+                    val result = processFile(psiFile)
+                    totalProcessed++
+                    projectCount++
+
+                    // 检查 bug
+                    val foundBugs = mutableListOf<String>()
+
+                    if (nestedBug.containsMatchIn(result)) {
+                        foundBugs.add("嵌套占位符: ${nestedBug.findAll(result).map { it.value }.distinct().take(3).toList()}")
+                    }
+                    if (emptyTCall.containsMatchIn(result)) {
+                        foundBugs.add("空 \$t() 调用: ${emptyTCall.findAll(result).map { it.value }.distinct().take(3).toList()}")
+                    }
+                    val allTCalls = Regex("""${'$'}t\([^)]*\)""").findAll(result).toList()
+                    val openCalls = Regex("""${'$'}t\(""").findAll(result).count()
+                    if (openCalls > allTCalls.size) {
+                        foundBugs.add("括号可能不匹配: 有 $openCalls 个 \$t( 但只匹配到 ${allTCalls.size} 个完整调用")
+                    }
+
+                    if (foundBugs.isNotEmpty()) {
+                        allBugs.add(BugFile(project, relPath, lineCount, foundBugs))
+                    }
+
+                    if (hasChinese.containsMatchIn(contentBefore)
+                        && !hasTCall.containsMatchIn(result)
+                        && !hasDollarTCall.containsMatchIn(result)
+                    ) {
+                        val nonCommentChinese = extractNonCommentChinese(contentBefore)
+                        if (nonCommentChinese.isNotBlank()) {
+                            missedTranslations.add(BugFile(
+                                project, relPath, lineCount,
+                                listOf("有中文但处理后无 \$t() — 可能漏翻译: ${nonCommentChinese.take(80)}")
+                            ))
+                        }
+                    }
+
+                    if (hasTCall.containsMatchIn(result)) filesWithTAfter++
+
+                } catch (e: Throwable) {
+                    crashes.add(CrashFile(
+                        project, relPath, lineCount,
+                        e.javaClass.simpleName,
+                        (e.message ?: "no message").take(200)
+                    ))
+                } finally {
+                    // 保存后移除文件，LightProject 不保留已处理文件以节省内存
+                    FileDocumentManager.getInstance().saveAllDocuments()
+                }
+            }
+            emptyProjectStats[project] = projectCount
+        }
+
+        // ── 汇总输出 ──
+        println("\n==============================================")
+        println(" 🏁 暴力全量扫描完成")
+        println("==============================================\n")
+        println("📊 总统计:")
+        println("   含中文文件总数: $totalWithChinese")
+        println("   成功处理: $totalProcessed")
+        println("   生成 \$t() 的文件: $filesWithTAfter")
+        println("   发现 bug: ${allBugs.size}")
+        println("   发生崩溃: ${crashes.size}")
+        println("   可能漏翻译: ${missedTranslations.size}")
+
+        println("\n📋 每项目详情:")
+        emptyProjectStats.forEach { (p, c) -> println("   $p: $c 文件") }
+
+        if (allBugs.isNotEmpty()) {
+            println("\n❌ BUG 文件 (${allBugs.size}):")
+            allBugs.forEach { b ->
+                println("   [BUG] ${b.project}/${b.path} (${b.fileLines}行)")
+                b.bugs.forEach { println("         $it") }
+            }
+        }
+
+        if (crashes.isNotEmpty()) {
+            println("\n💥 崩溃文件 (${crashes.size}):")
+            crashes.forEach { c ->
+                println("   [CRASH] ${c.project}/${c.path} (${c.fileLines}行)")
+                println("           ${c.exceptionClass}: ${c.exceptionMessage}")
+            }
+        }
+
+        if (missedTranslations.isNotEmpty()) {
+            println("\n⚠️  可能漏翻译 (${missedTranslations.size}, 显示前 30):")
+            missedTranslations.take(30).forEach { m ->
+                println("   [MISS] ${m.project}/${m.path} (${m.fileLines}行)")
+                m.bugs.forEach { println("         $it") }
+            }
+            if (missedTranslations.size > 30) {
+                println("   ... 还有 ${missedTranslations.size - 30} 个未显示")
+            }
+        }
+
+        // 核心断言：不应有崩溃和明显 bug
+        val fatal = crashes.map { c -> Triple(c.project, c.path, c.exceptionClass) } +
+                     allBugs.map { b -> Triple(b.project, b.path, b.bugs.joinToString(",")) }
+        assertTrue(
+            "暴力全量扫描发现 ${fatal.size} 个严重问题:\n" +
+                fatal.joinToString("\n") { (p, path, detail) -> "  $p/$path: $detail" },
+            fatal.isEmpty()
+        )
+    }
+
+    /** 提取非注释中的中文（跳过 // / * * / / <!-- --> 注释） */
+    private fun extractNonCommentChinese(content: String): String {
+        val lineComment = Regex("""//[^\n]*""")
+        val blockComment = Regex("""(?s)/\*.*?\*/""")
+        val htmlComment = Regex("""(?s)<!--.*?-->""")
+        val cleaned = content
+            .replace(lineComment, "")
+            .replace(blockComment, "")
+            .replace(htmlComment, "")
+        return Regex("""[\u4e00-\u9fff]+""").findAll(cleaned)
+            .map { it.value }.distinct().joinToString("、")
     }
 }

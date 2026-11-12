@@ -148,22 +148,40 @@ tasks {
         }
     }
 
-    // 手动触发 17 项目批量扫描：gradle batchE2ETest
-    // 覆盖真实开源项目（vue-vben-admin, ant-design-vue, pro-components 等）
-    // 中的字符串拼接 / 模板字符串 / 三元表达式 等复杂场景。
-    // 参考: ExternalProjectE2ETest.testBatchScanAllFixtures
+    // 手动触发批量扫描：gradle batchE2ETest
+    // 包含两种模式:
+    //   1. testBatchScanAllFixtures     — 之前的受控扫描 (17项目 x 200文件)
+    //   2. testBruteForceScanAll        — 暴力全量扫描 (17项目 x 所有中文文件, 5300+)
     register<Test>("batchE2ETest") {
         group = "verification"
-        description = "Run batch scan over 17 real open-source projects (200 files, ~30s)"
+        description = "Batch scan over 17 real open-source projects (200+ files, ~30s)"
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         useJUnit()
         include("**/ExternalProjectE2ETest.testBatchScanAllFixtures*")
+        // 暴力扫描需要更大内存 + 更长时间，单独用 gradle bruteForceE2ETest 触发
         // 批量扫描需要更大内存
         maxHeapSize = "1024m"
         jvmArgs(
             "-XX:+UseParallelGC",
             "-XX:MaxMetaspaceSize=512m",
+            "-XX:ReservedCodeCacheSize=128m",
+            "-Didea.jcef.enabled=false"
+        )
+    }
+
+    // 暴力全量扫描：5300+ 文件，可能跑几分钟
+    register<Test>("bruteForceE2ETest") {
+        group = "verification"
+        description = "BRUTE-FORCE scan: all 5300+ Chinese files from 17 projects, ~5-10min"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = sourceSets.test.get().runtimeClasspath
+        useJUnit()
+        include("**/ExternalProjectE2ETest.testBruteForceScanAll*")
+        maxHeapSize = "1536m"
+        jvmArgs(
+            "-XX:+UseParallelGC",
+            "-XX:MaxMetaspaceSize=768m",
             "-XX:ReservedCodeCacheSize=128m",
             "-Didea.jcef.enabled=false"
         )
