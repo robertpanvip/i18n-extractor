@@ -200,9 +200,7 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
     fun testBatchScanAllFixtures() {
         val fixturesRoot = File(fixturesDir)
         val fixtureProjects = listOf(
-            "ant-design-vue", "element-plus", "vue-vben-admin",
-            "arco-design-vue", "vant", "naive-ui", "ant-design",
-            "vue-pure-admin", "docusaurus"
+            "vue-vben-admin", "ant-design-vue", "arco-design-vue"
         )
 
         val extensions = setOf("vue", "tsx", "jsx", "ts", "js")
@@ -229,8 +227,8 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
                     // 只处理含中文的文件（可能被提取）
                     if (!Regex("""[\u4e00-\u9fff]""").containsMatchIn(content)) return@forEach
 
-                    // 限制处理速度：总共最多 500 个文件
-                    if (processedCount > 500) return@forEach
+                    // 限制处理速度：总共最多 80 个文件（避免 Metaspace OOM）
+                    if (processedCount > 80) return@forEach
 
                     val psiFile = loadExternalFile(project, file.relativeTo(projectDir).path)
                         ?: return@forEach

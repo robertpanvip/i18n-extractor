@@ -124,7 +124,7 @@ tasks {
                 "-XX:+UseParallelGC",
                 "-XX:MinHeapFreeRatio=5",
                 "-XX:MaxHeapFreeRatio=15",
-                "-XX:MaxMetaspaceSize=256m",
+                "-XX:MaxMetaspaceSize=512m",
                 "-XX:ReservedCodeCacheSize=64m",
                 "-Didea.jcef.enabled=false",
                 "-Djava.util.concurrent.ForkJoinPool.common.parallelism=2"
