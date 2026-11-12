@@ -374,9 +374,19 @@ class JsStringCollector(
         }
 
         // 跳过模板字面量内部的字符串字面量（如 `${'中文'}` 中的 '中文'），
-        // 因为外层模板字面量的处理逻辑会统一处理
-        if (PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java) != null) {
-            return
+        // 因为外层模板字面量的处理逻辑会统一处理——但仅限「外层模板的静态部分（非 ${}）
+        // 含中文」的情况。如果外层模板的中文全在 ${} 内部（如 `${cond ? '中文' : 'EN'}`），
+        // 外层 collectJSStringTemplate 会把 ${} 整体替换成占位符，导致 message 无中文而跳过，
+        // 此时内层字面量必须自己处理，否则两边落空（rewrites = 0）。
+        val parentTpl = PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java)
+        if (parentTpl != null) {
+            val tplContent = parentTpl.text.substring(1, parentTpl.text.length - 1)
+            // 去掉所有 ${...} 插值后，看剩余的静态部分是否含中文
+            val staticPart = templateVarRegex.replace(tplContent, "")
+            if (processor.containsTargetLanguage(staticPart, SiteKind.JS_TEMPLATE)) {
+                return // 外层模板有静态中文，交给它统一处理
+            }
+            // 否则：外层模板的中文全在 ${} 内部，继续处理内层字面量
         }
 
         if (processor.isJSTemplateLiteral(raw)) {

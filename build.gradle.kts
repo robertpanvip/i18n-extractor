@@ -118,13 +118,16 @@ tasks {
         // 线上 CI（约 7GB 多核）内存充足，保持默认参数跑得更快。
         if (project.findProperty("forkTest") == "true") {
             maxParallelForks = 1
-            maxHeapSize = "768m"
+            maxHeapSize = "512m"
             forkEvery = 1
             jvmArgs(
                 "-XX:+UseParallelGC",
                 "-XX:MinHeapFreeRatio=5",
-                "-XX:MaxHeapFreeRatio=25",
-                "-XX:MaxMetaspaceSize=512m"
+                "-XX:MaxHeapFreeRatio=15",
+                "-XX:MaxMetaspaceSize=256m",
+                "-XX:ReservedCodeCacheSize=64m",
+                "-Didea.jcef.enabled=false",
+                "-Djava.util.concurrent.ForkJoinPool.common.parallelism=2"
             )
         }
 

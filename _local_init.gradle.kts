@@ -354,13 +354,15 @@ allprojects {
             }
         }
 
-        // 最后再把顺序调成：腾讯仓前置 → 原有仓 → JetBrains 专用仓
+        // 最后再把顺序调成：Maven Central/GPP 官仓 → 腾讯仓 → JetBrains 专用仓
+        //   说明：腾讯镜像不是 Maven Central 的完整镜像，缺失的 artifact（如 proxy-vole、
+        //   hash4j）腾讯仓返回 404 时 Gradle 可能不会 fallthrough，因此把官仓放在前面优先命中。
         val tencentList = repositories.filter { it.name.startsWith("Tencent") }
         val jbList = repositories.filter { it.name.startsWith("Jetbrains") }
         val others = repositories.filter { it !in tencentList && it !in jbList }
         repositories.clear()
-        tencentList.forEach { repositories.add(it) }
         others.forEach { repositories.add(it) }
+        tencentList.forEach { repositories.add(it) }
         jbList.forEach { repositories.add(it) }
 
         // ---------- 本地环境覆盖（只作用于本地 init 脚本执行时，不会写入线上 build.gradle.kts） ----------

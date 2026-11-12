@@ -461,8 +461,9 @@ class I18nAnalyzer(
                     }
                 }
                 is XmlAttributeValue -> collectXmlAttributeValueChange(element)
-                is JSLiteralExpression -> jsCollector.collectJSStringChange(element)
-                is JSBinaryExpression -> jsCollector.collectJSBinaryExpressionChange(element)
+                // JSStringTemplateExpression 必须排在 JSLiteralExpression 前面，
+                // 因为 JSStringTemplateExpressionImpl 继承自 JSLiteralExpressionImpl，
+                // when 匹配是按顺序的，否则模板字符串会被 JSLiteralExpression 分支先吃掉。
                 is JSStringTemplateExpression -> {
                     // 跳过已翻译的 $t() 调用参数，避免重复提取
                     val parent = element.parent
@@ -478,6 +479,8 @@ class I18nAnalyzer(
                     }
                     jsCollector.collectJSStringTemplate(raw, element) { value -> value }
                 }
+                is JSLiteralExpression -> jsCollector.collectJSStringChange(element)
+                is JSBinaryExpression -> jsCollector.collectJSBinaryExpressionChange(element)
             }
         }
 
