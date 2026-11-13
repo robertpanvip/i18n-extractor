@@ -130,6 +130,9 @@ object TsObjectMerger {
         val lines = oldBody.split("\n").toMutableList()
         val mergedKeys = mergedNested.keys.toSet()
 
+        // ── 格式风格探测（从原文件推断，避免输出格式漂移）──────────
+        val (quoteStyle, trailingCommaStyle) = detectFormatStyle(oldBody)
+
         // 推断默认缩进单位（首行有内容的 indent）
         val innerIndentUnit = lines.firstOrNull { it.isNotBlank() }?.takeWhile { it == ' ' || it == '\t' }.orEmpty()
             .ifBlank { "  " }
@@ -192,15 +195,16 @@ object TsObjectMerger {
             val block = blockByStart[i]
             if (block != null) {
                 if (block.key in dropKeys) { i = block.end + 1; continue }
-                val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2)
+                val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2, quoteStyle, trailingCommaStyle)
                 val rLines = rendered.split("\n")
                 val comment = block.trailingComment
+                val blockComma = if (trailingCommaStyle) "," else ""
                 if (rLines.size == 1) {
-                    out.add("${block.keyRowPrefix} $rendered,$comment")
+                    out.add("${block.keyRowPrefix} $rendered$blockComma$comment")
                 } else {
                     out.add("${block.keyRowPrefix} ${rLines.first()}")
                     out.addAll(rLines.subList(1, rLines.lastIndex))
-                    out.add(rLines.last() + ",$comment")
+                    out.add(rLines.last() + blockComma + comment)
                 }
                 i = block.end + 1
                 continue
@@ -209,7 +213,7 @@ object TsObjectMerger {
             if (rw != null) {
                 if (rw.key in dropKeys) { i++; continue }
                 if (rw.key in mergedKeys) {
-                    val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1)
+                    val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle)
                     val prefix = lines[i].substring(0, rw.colonPosInLine + 1)
                     val suffix = if (rw.trailingComma) "," else ""
                     out.add("$prefix $valueStr$suffix${rw.trailingComment}")
@@ -230,16 +234,18 @@ object TsObjectMerger {
                     val last = out[k]
                     val lastTrimmed = last.trimEnd()
                     val endsWithOpen = lastTrimmed.endsWith(",") || lastTrimmed.endsWith("{") || lastTrimmed.endsWith("[")
-                    if (lastTrimmed.isNotEmpty() && !endsWithOpen) {
+                    // 只有原文件用尾逗号风格才补逗号，否则保持原样
+                    if (lastTrimmed.isNotEmpty() && !endsWithOpen && trailingCommaStyle) {
                         out[k] = last.substring(0, lastTrimmed.length) + "," + last.substring(lastTrimmed.length)
                     }
                     break
                 }
             }
             val additions = newKeys.map { k ->
-                val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k)
-                val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1)
-                "$innerIndentUnit$keyExpr: $valueStr,"
+                val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k, quoteStyle)
+                val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle)
+                val comma = if (trailingCommaStyle) "," else ""
+                "$innerIndentUnit$keyExpr: $valueStr$comma"
             }
             out.addAll(insertPos, additions)
         }
@@ -414,9 +420,17 @@ object TsObjectMerger {
         return false
     }
 
-    /** 把静态值渲染为 TS 字面量字符串（value 段）。nestingDepth = 当前对象嵌套层数（1 = 对象首层级）。 */
+    /** 把静态值渲染为 TS 字面量字符串（value 段）。
+     *  quoteStyle = 字符 ' 或 " 表示优先使用哪种引号（从原文件探测）；
+     *  trailingComma = 是否在嵌套对象/数组末尾加逗号（从原文件探测）。 */
     @Suppress("UNCHECKED_CAST")
-    private fun renderStaticValue(value: Any?, indentUnit: String, nestingDepth: Int): String {
+    private fun renderStaticValue(
+        value: Any?,
+        indentUnit: String,
+        nestingDepth: Int,
+        quoteStyle: Char = '\'',
+        trailingComma: Boolean = true
+    ): String {
         val indent = indentUnit.repeat(nestingDepth)
         val outerIndent = indentUnit.repeat((nestingDepth - 1).coerceAtLeast(0))
         return when (value) {
@@ -425,39 +439,45 @@ object TsObjectMerger {
             is Number -> {
                 if (value is Double && value.isNaN()) "null" else value.toString()
             }
-            is String -> quoteForTs(value)
+            is String -> quoteForTs(value, quoteStyle)
             is Map<*, *> -> {
                 val m = value as Map<String, Any?>
                 if (m.isEmpty()) return "{}"
                 val inner = m.entries.joinToString(",\n") { (k, v) ->
-                    val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k)
-                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1)
+                    val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k, quoteStyle)
+                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma)
                     "$indent$keyExpr: $vStr"
                 }
-                "{\n$inner,\n$outerIndent}"
+                if (trailingComma) "{\n$inner,\n$outerIndent}"
+                else "{\n$inner\n$outerIndent}"
             }
             is List<*> -> {
                 if (value.isEmpty()) return "[]"
                 val inner = value.joinToString(",\n") { v ->
-                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1)
+                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma)
                     "$indent$vStr"
                 }
-                "[\n$inner,\n$outerIndent]"
+                if (trailingComma) "[\n$inner,\n$outerIndent]"
+                else "[\n$inner\n$outerIndent]"
             }
             else -> "null"
         }
     }
 
-    private fun quoteForTs(s: String): String {
+    /** 把字符串包装成 TS 引号字符串。
+     *  preferredQuote = 优先用的引号字符（' 或 "），从原文件探测。
+     *  若首选引号在字符串内部出现（无法使用），则自动切换到另一种。 */
+    private fun quoteForTs(s: String, preferredQuote: Char = '\''): String {
+        val otherQuote = if (preferredQuote == '\'') '"' else '\''
         val q = when {
-            '\'' !in s -> "'"
-            '"' !in s -> "\""
-            else -> "'"
+            preferredQuote !in s -> preferredQuote
+            otherQuote !in s -> otherQuote
+            else -> preferredQuote  // 两种都在，仍然用首选并转义
         }
         val escaped = s.flatMap { c ->
             when {
                 c == '\\' -> listOf('\\', '\\')
-                c == q.first() -> listOf('\\', q.first())
+                c == q -> listOf('\\', q)
                 c == '\n' -> listOf('\\', 'n')
                 c == '\r' -> listOf('\\', 'r')
                 c == '\t' -> listOf('\\', 't')
@@ -466,6 +486,50 @@ object TsObjectMerger {
             }
         }.joinToString("")
         return "$q$escaped$q"
+    }
+
+    /** 探测对象体的格式风格。
+     *  返回: Pair<引号字符（' 或 "）, 是否使用尾逗号>
+     *  - 引号风格: 扫描前 30 个字符串字面量，单/双引号多票决；若样本不够默认 '\''
+     *  - 尾逗号风格: 扫描前 20 个多行块（对象/数组）最后一行是否有逗号，多票决；默认 true */
+    private fun detectFormatStyle(body: String): Pair<Char, Boolean> {
+        // ── 引号风格探测 ──
+        val strLiteral = Regex("""(?s)(?:['"])((?:[^\\'"]|\\.)*)?\1""")
+        var singleCount = 0
+        var doubleCount = 0
+        val maxSamples = 30
+        var sampled = 0
+        var idx = 0
+        while (sampled < maxSamples) {
+            val m = strLiteral.find(body, idx) ?: break
+            val ch = body[m.range.first]
+            if (ch == '\'') singleCount++ else doubleCount++
+            idx = m.range.last + 1
+            sampled++
+        }
+        val quoteChar = when {
+            singleCount > doubleCount -> '\''
+            doubleCount > singleCount -> '"'
+            else -> '\''  // 平局或无样本：默认单引号（多数 TS 项目风格）
+        }
+
+        // ── 尾逗号风格探测 ──
+        // 简单策略: 扫描原对象体里 key: value 行，看行尾是否有逗号（排除注释干扰）
+        val keyValueLine = Regex("""^\s*\S.*:.*\S\s*,?\s*(?://.*)?$""")
+        var withComma = 0
+        var withoutComma = 0
+        val keyValueLines = body.split("\n").filter { keyValueLine.matches(it) }
+        for (line in keyValueLines.take(40)) {
+            val noComment = line.substringBefore("//").trimEnd()
+            if (noComment.endsWith(",")) withComma++ else withoutComma++
+        }
+        val trailing = when {
+            withComma > withoutComma -> true
+            withoutComma > withComma -> false
+            else -> true  // 平局或无样本：默认有尾逗号
+        }
+
+        return quoteChar to trailing
     }
 
     private fun parsePropertyKey(keyPart: String): String? =
