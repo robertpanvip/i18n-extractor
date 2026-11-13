@@ -124,18 +124,25 @@ object TsObjectMerger {
      * - 新 key → 在 } 之前追加，按 key 字典序追加
      */
     fun regenerateObjectLiteralBody(oldObjBody: String, mergedNested: Map<String, Any?>, dropKeys: Set<String> = emptySet()): String {
-        val oldBody = oldObjBody.trim().let {
+        val rawBody = oldObjBody.trim().let {
             if (it.startsWith("{") && it.endsWith("}")) it.substring(1, it.length - 1) else it
         }
-        val lines = oldBody.split("\n").toMutableList()
+        // 原始换行符（strip 之前检测，避免 CRLF 变 LF 后检测不到）
+        val isMultiLine = rawBody.contains('\n') || rawBody.contains('\r')
+        // split 后统一 strip 每行末尾 \r（CRLF 兼容），避免保留行末尾混入 \r 导致格式混乱
+        val lines = rawBody.split("\n").map { it.removeSuffix("\r") }.toMutableList()
         val mergedKeys = mergedNested.keys.toSet()
 
         // ── 格式风格探测（从原文件推断，避免输出格式漂移）──────────
-        val (quoteStyle, trailingCommaStyle) = detectFormatStyle(oldBody)
+        val (quoteStyle, trailingCommaStyle) = detectFormatStyle(rawBody)
+        val newline = detectNewlineStyle(rawBody)
 
         // 推断默认缩进单位（首行有内容的 indent）
-        val innerIndentUnit = lines.firstOrNull { it.isNotBlank() }?.takeWhile { it == ' ' || it == '\t' }.orEmpty()
-            .ifBlank { "  " }
+        val firstNonBlank = lines.firstOrNull { it.isNotBlank() }
+        // 注意：不能用 ifBlank —— tab('\t') 是 whitespace，isBlank() 会返回 true！
+        // 应该用 ifEmpty —— 只在完全空串时 fallback 为 "  "
+        val inferredIndent = firstNonBlank?.takeWhile { it == ' ' || it == '\t' }.orEmpty()
+        val innerIndentUnit = inferredIndent.ifEmpty { "  " }
 
         data class SingleRewrite(
             val lineIdx: Int,
@@ -195,8 +202,8 @@ object TsObjectMerger {
             val block = blockByStart[i]
             if (block != null) {
                 if (block.key in dropKeys) { i = block.end + 1; continue }
-                val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2, quoteStyle, trailingCommaStyle)
-                val rLines = rendered.split("\n")
+                val rendered = renderStaticValue(mergedNested[block.key], innerIndentUnit, nestingDepth = 2, quoteStyle, trailingCommaStyle, newline)
+                val rLines = rendered.split("\n").map { it.removeSuffix("\r") }
                 val comment = block.trailingComment
                 val blockComma = if (trailingCommaStyle) "," else ""
                 if (rLines.size == 1) {
@@ -213,7 +220,7 @@ object TsObjectMerger {
             if (rw != null) {
                 if (rw.key in dropKeys) { i++; continue }
                 if (rw.key in mergedKeys) {
-                    val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle)
+                    val valueStr = renderStaticValue(mergedNested[rw.key], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle, newline)
                     val prefix = lines[i].substring(0, rw.colonPosInLine + 1)
                     val suffix = if (rw.trailingComma) "," else ""
                     out.add("$prefix $valueStr$suffix${rw.trailingComment}")
@@ -243,7 +250,7 @@ object TsObjectMerger {
             }
             val additions = newKeys.map { k ->
                 val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k, quoteStyle)
-                val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle)
+                val valueStr = renderStaticValue(mergedNested[k], innerIndentUnit, nestingDepth = 1, quoteStyle, trailingCommaStyle, newline)
                 val comma = if (trailingCommaStyle) "," else ""
                 "$innerIndentUnit$keyExpr: $valueStr$comma"
             }
@@ -253,19 +260,16 @@ object TsObjectMerger {
         while (out.isNotEmpty() && out.first().isBlank()) out.removeAt(0)
         while (out.isNotEmpty() && out.last().isBlank()) out.removeAt(out.lastIndex)
 
-        // 保留原始对象体的括号换行风格：若原始对象内部含有换行（多行风格），
-        // 则 { 与首属性、} 与前一行各自换行 —— 避免「{ 与首属性被粘到同一行」的格式塌陷；
-        // 单行风格（{ a: 1 }）保持同行，不强行拆行。
-        val multiLineStyle = oldBody.contains('\n')
-        val closeIndent = if (multiLineStyle) {
-            // 复刻原始闭合 } 前的缩进（多数顶层级 export 为列 0，嵌套对象可能带缩进）
+        // 保留原始对象体的括号换行风格
+        val closeIndent = if (isMultiLine) {
             val trimmedOuter = oldObjBody.trim()
-            val lastNl = trimmedOuter.lastIndexOf('\n')
-            if (lastNl >= 0) trimmedOuter.substring(lastNl + 1).takeWhile { it == ' ' || it == '\t' } else ""
+            val lastNl = maxOf(trimmedOuter.lastIndexOf("\r\n"), trimmedOuter.lastIndexOf('\n'))
+            val afterNl = if (lastNl >= 0) trimmedOuter.substring(lastNl + 1).removePrefix("\r") else ""
+            afterNl.takeWhile { it == ' ' || it == '\t' }
         } else ""
-        val open = if (multiLineStyle) "{\n" else "{"
-        val close = if (multiLineStyle) "\n$closeIndent}" else "}"
-        return open + out.joinToString("\n") + close
+        val open = if (isMultiLine) "{$newline" else "{"
+        val close = if (isMultiLine) "$newline$closeIndent}" else "}"
+        return open + out.joinToString(newline) + close
     }
 
     /** 从 startIdx 行开始，找到与行首开括号匹配的闭合行索引（含）。 */
@@ -422,14 +426,16 @@ object TsObjectMerger {
 
     /** 把静态值渲染为 TS 字面量字符串（value 段）。
      *  quoteStyle = 字符 ' 或 " 表示优先使用哪种引号（从原文件探测）；
-     *  trailingComma = 是否在嵌套对象/数组末尾加逗号（从原文件探测）。 */
+     *  trailingComma = 是否在嵌套对象/数组末尾加逗号（从原文件探测）；
+     *  newline = 换行符字符串 "\n" 或 "\r\n"（从原文件探测）。 */
     @Suppress("UNCHECKED_CAST")
     private fun renderStaticValue(
         value: Any?,
         indentUnit: String,
         nestingDepth: Int,
         quoteStyle: Char = '\'',
-        trailingComma: Boolean = true
+        trailingComma: Boolean = true,
+        newline: String = "\n"
     ): String {
         val indent = indentUnit.repeat(nestingDepth)
         val outerIndent = indentUnit.repeat((nestingDepth - 1).coerceAtLeast(0))
@@ -443,22 +449,22 @@ object TsObjectMerger {
             is Map<*, *> -> {
                 val m = value as Map<String, Any?>
                 if (m.isEmpty()) return "{}"
-                val inner = m.entries.joinToString(",\n") { (k, v) ->
+                val inner = m.entries.joinToString(",$newline") { (k, v) ->
                     val keyExpr = if (k.matches(RegexCatalog.IDENTIFIER)) k else quoteForTs(k, quoteStyle)
-                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma)
+                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma, newline)
                     "$indent$keyExpr: $vStr"
                 }
-                if (trailingComma) "{\n$inner,\n$outerIndent}"
-                else "{\n$inner\n$outerIndent}"
+                if (trailingComma) "{$newline$inner,$newline$outerIndent}"
+                else "{$newline$inner$newline$outerIndent}"
             }
             is List<*> -> {
                 if (value.isEmpty()) return "[]"
-                val inner = value.joinToString(",\n") { v ->
-                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma)
+                val inner = value.joinToString(",$newline") { v ->
+                    val vStr = renderStaticValue(v, indentUnit, nestingDepth + 1, quoteStyle, trailingComma, newline)
                     "$indent$vStr"
                 }
-                if (trailingComma) "[\n$inner,\n$outerIndent]"
-                else "[\n$inner\n$outerIndent]"
+                if (trailingComma) "[$newline$inner,$newline$outerIndent]"
+                else "[$newline$inner$newline$outerIndent]"
             }
             else -> "null"
         }
@@ -486,6 +492,22 @@ object TsObjectMerger {
             }
         }.joinToString("")
         return "$q$escaped$q"
+    }
+
+    /** 探测对象体的换行符风格。
+     *  返回: "\r\n"（CRLF, Windows）或 "\n"（LF, Unix）
+     *  - 统计 \r\n 和 \n 的出现次数，多票决
+     *  - 平局或无样本默认 "\n"（Unix/Linux/macOS 多数派） */
+    private fun detectNewlineStyle(body: String): String {
+        val crlfCount = body.windowed(2).count { it == "\r\n" }
+        // 纯 \n 数 = 总换行数 - CRLF 数
+        val totalNewlines = body.count { it == '\n' }
+        val lfOnly = totalNewlines - crlfCount
+        return when {
+            crlfCount > lfOnly -> "\r\n"
+            lfOnly > crlfCount -> "\n"
+            else -> "\n"  // 平局默认 LF
+        }
     }
 
     /** 探测对象体的格式风格。

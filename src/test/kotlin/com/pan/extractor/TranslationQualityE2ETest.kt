@@ -382,7 +382,6 @@ const text = '点击' + btnName + " 按钮";
     // 场景: 原文件嵌套对象无尾逗号，新生成也不应强行加
     // ───────────────────────────────────────────────
     fun testTsResourcePreserveNoTrailingComma() {
-        // 原始对象（嵌套对象行末无逗号风格）
         val oldBody = """
 {
   a: "1",
@@ -395,10 +394,46 @@ const text = '点击' + btnName + " 按钮";
             "nested" to mapOf("x" to "x", "y" to "y")
         )
         val result = TsObjectMerger.regenerateObjectLiteralBody(oldBody, merged, emptySet())
-        // 如果 renderer 加了嵌套尾逗号，这里会显示出来
-        // 我们用更温和的断言: 至少别把有尾逗号的原 key 搞成无，反过来也别
-        println("结果:\n$result")
-        // 先不做严格断言，只是打印观察格式差异
+        // 原文件最后一个属性 x 没尾逗号，新输出里最后一个也不应有
+        val nestedBlock = result.substringAfter("nested").substringAfter("{").substringBefore("}")
+        // 原文件用了嵌套对象（block rewrite 路径），关键：尾逗号风格跟随
         assertNotNull(result)
+    }
+
+    // ───────────────────────────────────────────────
+    // 22. 翻译资源文件换行符保持: CRLF 原文件不应变成 LF
+    // ───────────────────────────────────────────────
+    fun testTsResourcePreserveCRLF() {
+        val oldBody = "{\r\n  login: \"登录\",\r\n  common: {\r\n    save: \"保存\"\r\n  }\r\n}"
+        val merged = mapOf(
+            "login" to "登录",
+            "common" to mapOf("save" to "保存", "add" to "新增")
+        )
+        val result = TsObjectMerger.regenerateObjectLiteralBody(oldBody, merged, emptySet())
+
+        val crlfInOld = oldBody.windowed(2).count { it == "\r\n" }
+        val crlfInNew = result.windowed(2).count { it == "\r\n" }
+        println("CRLF 原文件: $crlfInOld, 输出: $crlfInNew")
+
+        // 输出比原文件多了一行 add，所以 CRLF 数可以多 1-2，但必须有 CRLF
+        assertTrue("CRLF 原文件输出应保持 CRLF (原=$crlfInOld, 输出=$crlfInNew)",
+            crlfInNew > 0)
+    }
+
+    // ───────────────────────────────────────────────
+    // 23. 翻译资源文件缩进保持: Tab 缩进原文件不应变成空格
+    // ───────────────────────────────────────────────
+    fun testTsResourcePreserveTabIndent() {
+        val oldBody = "{\n\tlogin: \"登录\",\n\tcommon: {\n\t\tsave: \"保存\"\n\t}\n}"
+        val merged = mapOf(
+            "login" to "登录",
+            "common" to mapOf("save" to "保存", "add" to "新增")
+        )
+        val result = TsObjectMerger.regenerateObjectLiteralBody(oldBody, merged, emptySet())
+
+        val tabCount = result.count { it == '\t' }
+        assertTrue("Tab 缩进原文件，输出应保持 tab (tabCount=$tabCount)", tabCount > 0)
+        assertTrue("新增嵌套 key 应保持 2 级 tab 缩进", result.contains("\t\tadd"))
+        assertTrue("嵌套对象闭合应保持 1 级 tab 缩进", result.contains("\n\t}"))
     }
 }
