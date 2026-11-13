@@ -339,6 +339,124 @@ const text = '点击' + btnName + " 按钮";
     }
 
     // ───────────────────────────────────────────────
+    // 🔍 Bug hunting: ${N0}${N0} 连续占位符
+    // 用户反馈有时会出现连续两个相同编号的占位符
+    // 测试各种可疑模式
+    // ───────────────────────────────────────────────
+    fun testDuplicatePlaceholder_ConcatWithSameVar() {
+        // 场景1: 同一个变量在拼接里出现两次 — 应该是 ${N0}中${N1}（两个参数）
+        // 但如果插件"聪明"地合并同一变量为一个参数，应该是 ${N0}中${N0}（参数复用）
+        // 不管怎样，连续两个 N0 本身不是 bug，要看 paramsObject 里是不是只有一个 N0
+        val content = "<script setup>\nconst msg = name + '你好' + name;\n</script>"
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== 同变量拼接 ===")
+        println(result)
+        // 简单检查：结果应该有 $t 调用
+        assertTrue("应有 \$t 调用: $result", result.contains("\$t("))
+    }
+
+    fun testDuplicatePlaceholder_TemplateInsideConcat() {
+        // 场景2: 拼接里包含模板字符串 — name + `测试${suffix}`
+        val content = """<script setup>
+const msg = name + `测试${'$'}{suffix}`;
+</script>"""
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== 模板串嵌拼接 ===")
+        println(result)
+        assertTrue("应有 \$t 调用", result.contains("\$t("))
+    }
+
+    fun testDuplicatePlaceholder_TemplateWithNestedTernary() {
+        // 场景3: 模板字符串里的三元 — `你好${isZn ? '测试' : 'test'}`
+        val content = """<script setup>
+const msg = `你好${'$'}{isZn ? '世界' : 'world'}`;
+</script>"""
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== 模板串含三元 ===")
+        println(result)
+        assertTrue("应有 \$t 调用", result.contains("\$t("))
+    }
+
+    fun testDuplicatePlaceholder_VueMustacheConcat() {
+        // 场景4: Vue mustache 里的拼接 — {{ msg + '你好' + suffix }}
+        val content = "<template>\n<div>{{ name + '你好' + suffix }}</div>\n</template>"
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== Vue mustache 拼接 ===")
+        println(result)
+        assertTrue("应有 \$t 调用", result.contains("\$t("))
+    }
+
+    fun testDuplicatePlaceholder_VueAttrTemplateWithVar() {
+        // 场景5: Vue 动态属性里的模板字符串 — :title="`${a}${b}`"
+        val content = """<template>
+<div :title="`你好${'$'}{name}${'$'}{suffix}`">test</div>
+</template>"""
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== Vue 动态属性模板 ===")
+        println(result)
+        assertTrue("应有 \$t 调用", result.contains("\$t("))
+    }
+
+    fun testNestedTemplateLiteralDirectly() {
+        // 场景6（极端）: 模板字符串里直接嵌套另一个模板字符串表达式
+        // `外层${`内层${x}`}外层` — 合法 JS，但 templateVarRegex 可能匹配失败
+        val content = """<script setup>
+const msg = `外层${'$'}{`内层${'$'}{x}`}外层`;
+</script>"""
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== 嵌套模板直接嵌入 ===")
+        println(result)
+        // 检查有没有畸形占位符格式
+        val hasMalformed = result.contains("{N0\$") || result.contains("${'$'}N0") || result.contains("{N0{N")
+        assertFalse("不应有畸形占位符: $result", hasMalformed)
+    }
+
+    fun testConcatWithMultiVarTemplate() {
+        // 场景7: 拼接 + 多变量模板
+        // name + `中${a}${b}${c}` + suffix
+        val content = """<script setup>
+const msg = name + `中${'$'}{a}${'$'}{b}${'$'}{c}` + suffix;
+</script>"""
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+        println("=== 拼接+多变量模板 ===")
+        println(result)
+        assertTrue("应有 \$t 调用", result.contains("\$t("))
+        // 检查编号连续性和无重复
+        val placeholderNums = Regex("""\{N(\d+)\}""").findAll(result).map { it.groupValues[1].toInt() }.toList()
+        println("占位符编号列表: $placeholderNums")
+        val hasDuplicate = placeholderNums.groupingBy { it }.eachCount().any { it.value > 1 }
+        assertFalse("不应有重复占位符编号: $placeholderNums (result=$result)", hasDuplicate)
+    }
+
+    // ───────────────────────────────────────────────
     // 20. 翻译资源文件格式保持: 引号风格不应漂移
     // 场景: 原 zh.ts 全用双引号，新增 key 也应用双引号
     // 核心: TsObjectMerger.quoteForTs 强制单引号 → 应检测原文件风格
