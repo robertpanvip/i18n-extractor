@@ -114,7 +114,8 @@ class I18nProcessor @JvmOverloads constructor(
             .firstOrNull { it.name == "script" }
     }
 
-    override val templateVarRegex = """\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
+    // 跳过 \${ 转义的 `${`（JS 模板字符串里反斜杠转义的 `\${` 是字面量，不是插值）
+    override val templateVarRegex = """(?<!\\)\$\{((?:[^{}]|\{(?:[^{}]|\{[^}]*\})*\})*)\}""".toRegex()
 
     override fun containsTargetLanguage(text: String, site: SiteKind): Boolean =
         I18nPsiTools.containsTargetLanguage(text, site)

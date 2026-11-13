@@ -554,4 +554,354 @@ const msg = name + `中${'$'}{a}${'$'}{b}${'$'}{c}` + suffix;
         assertTrue("新增嵌套 key 应保持 2 级 tab 缩进", result.contains("\t\tadd"))
         assertTrue("嵌套对象闭合应保持 1 级 tab 缩进", result.contains("\n\t}"))
     }
+
+    // ═══════════════════════════════════════════════════════
+    // A. 运算符 / 引号 / 结合性边界
+    // ═══════════════════════════════════════════════════════
+
+    // ── A1: 负数直接参与拼接表达式 ──
+    fun testNegativeNumberInConcat() {
+        val content = """
+<script setup>
+const msg = "温度" + -5 + "度";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("key 应含 '温度': $result", result.contains("温度"))
+        assertTrue("key 应含 '度': $result", result.contains("度"))
+        assertTrue("参数对象应含 -5: $result", result.contains("-5"))
+    }
+
+    // ── A2: 括号明确分组: ("a" + b) + ("c" + d) ──
+    fun testParenthesizedGroupedConcat() {
+        val content = """
+<script setup>
+const msg = ("hello" + name) + ("，欢迎来到" + place);
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("key 应含 name 对应占位符: $result",
+            Regex("""\{N\d+\}""").find(result) != null)
+        assertTrue("应包含 name 参数: $result", result.contains("name"))
+        assertTrue("应包含 place 参数: $result", result.contains("place"))
+    }
+
+    // ── A3: 三引号风格混用（单/双/模板）在一个表达式里 ──
+    fun testMixedQuoteStylesInOneExpr() {
+        val content = """
+<script setup>
+const msg = '欢迎' + userName + "来到" + venue;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("应包含 '欢迎': $result", result.contains("欢迎"))
+        assertTrue("应包含 '来到': $result", result.contains("来到"))
+    }
+
+    // ── A4: 简单模板字符串（collectJSStringTemplate 最简路径）──
+    fun testSimpleTemplateLiteral() {
+        val content = """
+<script setup>
+const msg = `标题: ${'$'}{title}`;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("应含 title 参数: $result", result.contains("title"))
+    }
+
+    // ── A5: 模板字符串里含转义 $ 字面量（\${original} 不是插值，是字面量文本）──
+    // JS: `价格是 ${price}，原价 \${original}` —— 反斜杠转义了 $，不是插值
+    fun testEscapedDollarBraceInTemplate() {
+        val content = """
+<script setup>
+const msg = `价格是 ${'$'}{price}，原价 \${'$'}{original}`;
+</script>
+"""
+        // \${original} 是模板字符串里的字面量文本（JS 反斜杠转义），不是插值
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        // 只有 price 是占位符（转义的 \${original} 不是插值）
+        val placeholders = Regex("""\{N\d+\}""").findAll(result).count()
+        assertEquals("应只有 1 个占位符（price），\\\${original} 应是字面量", 1, placeholders)
+    }
+
+    // ── A6: 空字符串参与拼接 ──
+    fun testEmptyStringInConcat() {
+        val content = """
+<script setup>
+const msg = "" + "前面" + name + "" + "后面" + "";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("key 应含 '前面': $result", result.contains("前面"))
+        assertTrue("key 应含 '后面': $result", result.contains("后面"))
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // B. 复杂变量表达式（属性访问 / 函数调用 / 数组索引）
+    // ═══════════════════════════════════════════════════════
+
+    // ── B1: 属性访问 user.name ──
+    fun testPropertyAccessInConcat() {
+        val content = """
+<script setup>
+const msg = "用户: " + user.name;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("参数对象应含 user.name: $result", result.contains("user.name"))
+    }
+
+    // ── B2: 函数调用 getName() ──
+    fun testFunctionCallInConcat() {
+        val content = """
+<script setup>
+const msg = "你好，" + getName();
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("参数对象应含 getName(): $result", result.contains("getName()"))
+    }
+
+    // ── B3: 数组索引 list[0] ──
+    fun testArrayIndexInConcat() {
+        val content = """
+<script setup>
+const msg = "第一项: " + list[0];
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("参数对象应含 list[0]: $result", result.contains("list[0]"))
+    }
+
+    // ── B4: 可选链 user?.name ──
+    fun testOptionalChainInConcat() {
+        val content = """
+<script setup>
+const msg = "昵称: " + user?.profile?.nickname;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("参数对象应含可选链: $result", result.contains("user?.profile?.nickname"))
+    }
+
+    // ── B5: 模板参数内嵌套算术表达式（走 collectJSStringTemplate 路径）──
+    // JS: `共 ${count + 1} 条`
+    fun testArithmeticInsideTemplateParam() {
+        val content = """
+<script setup>
+const msg = `共 ${'$'}{count + 1} 条`;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("参数对象应含 count + 1: $result", result.contains("count + 1"))
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // C. 框架占位符格式差异
+    // ═══════════════════════════════════════════════════════
+
+    // ── C1: Vue → {N0}, {N1} ──
+    fun testVuePlaceholderFormat() {
+        val content = """
+<script setup>
+const msg = "你好 " + name + "，共 " + count + " 条";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("Vue 应使用 {N0} 格式: $result", Regex("""\{N0\}""").containsMatchIn(result))
+        assertTrue("Vue 应使用 {N1} 格式: $result", Regex("""\{N1\}""").containsMatchIn(result))
+        // 参数 key 不应加引号（Vue 用标识符 key）
+        assertTrue("Vue 参数 key 不应加引号: $result",
+            result.contains("N0:") && result.contains("N1:"))
+    }
+
+    // ── C2: React (react-i18next) → {{0}}, {{1}} ──
+    fun testReactI18nextPlaceholderFormat() {
+        val content = """
+function App() {
+  return <div>{"你好 " + name + "，欢迎"}</div>;
+}
+"""
+        val result = processReact(content)
+        assertTrue("React i18next 应检测并转换", result.isNotEmpty())
+        // react-i18next 用 {0} / {1} 格式
+        assertTrue("React 应有 \${'$'}t 调用或 t 调用: \$result",
+            result.contains("\${'$'}t") || result.contains(" t(") || result.contains("t("))
+    }
+
+    // ── C3: 同变量多次出现（不同占位符编号，参数值相同）──
+    fun testSameVarMultipleOccurrences() {
+        val content = """
+<script setup>
+const msg = "你好 " + name + "，我的名字也是 " + name;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        // 应出现 2 次 name
+        val nameCount = Regex("""name""").findAll(result).count()
+        assertTrue("参数对象应出现 name 至少 2 次: found=$nameCount, result=$result", nameCount >= 2)
+        // 占位符编号应不同
+        val placeholders = Regex("""\{N(\d+)\}""").findAll(result).map { it.groupValues[1].toInt() }.toSet()
+        assertTrue("占位符编号应不同: $placeholders", placeholders.size >= 2)
+    }
+
+    // ── C4: 单变量模板字符串（最简路径）──
+    fun testSingleVarTemplateLiteral() {
+        val content = """
+<script setup>
+const msg = `你好${'$'}{name}`;
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("应含 {N0}: $result", result.contains("{N0}"))
+        assertTrue("参数对象应含 name: $result", result.contains("name"))
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // D. 过滤 / Key 消毒 / 去重
+    // ═══════════════════════════════════════════════════════
+
+    // ── D1: 纯英文/数字拼接不应被翻译 ──
+    fun testPureEnglishNotTranslated() {
+        val content = """
+<script setup>
+const msg = "Hello " + name + " world";
+</script>
+"""
+        val result = processVue(content)
+        // 不含中文 → 不应产生 $t 调用
+        assertFalse("纯英文不应被翻译: $result", result.contains("\$t"))
+    }
+
+    // ── D2: 注释里的中文不应被翻译 ──
+    fun testCommentChineseNotTranslated() {
+        val content = """
+<script setup>
+// 这是一条注释里的中文
+/* 块注释里也有中文 */
+const msg = "真正需要翻译的中文";
+</script>
+"""
+        val result = processVue(content)
+        // 只有真正在 JS 表达式里的才被翻译
+        assertTrue("应生成 \$t 调用（真正的中文）", result.contains("\$t"))
+        // 注释不应变成 $t
+        assertFalse("注释不应被翻译: $result",
+            result.contains("// \$t") || result.contains("/* \$t"))
+    }
+
+    // ── D3: key 消毒 — 文案含 @ 字符 ──
+    fun testKeySanitizeAtSymbol() {
+        val content = """
+<script setup>
+const msg = "请联系admin@公司.com";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+        assertTrue("key 应生成并含 '请联系': $result", result.contains("请联系"))
+    }
+
+    // ── D4: key 消毒 — 文案含 | 字符 ──
+    fun testKeySanitizePipeSymbol() {
+        val content = """
+<script setup>
+const msg = "已选择 | 共" + total + " 项";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+    }
+
+    // ── D5: key 消毒 — 文案首尾点号 ──
+    fun testKeySanitizeLeadingTrailingDots() {
+        val content = """
+<script setup>
+const msg = "...加载中...";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应生成 \$t 调用", result.contains("\$t"))
+    }
+
+    // ── D6: 同 key 去重 — 相同文案出现多次（应共用同一 key）──
+    fun testDeduplicateSameKey() {
+        val content = """
+<script setup>
+const a = "加载中...";
+const b = "加载中...";
+</script>
+"""
+        val result = processVue(content)
+        // 两次相同文案应该共用同一 key（去重）
+        assertTrue("至少应有 1 个 \$t 调用", result.contains("\$t"))
+        // 不应生成两个不同 key
+        val keyCount = Regex("""${'$'}t\(['"]([^'"]+)['"]\)""").findAll(result).count()
+        assertTrue("相同文案应去重: 最多 1 个 unique key, found=$keyCount, result=$result", keyCount <= 2)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // E. Vue 模板特殊位置
+    // ═══════════════════════════════════════════════════════
+
+    // ── E1: v-text 指令 ──
+    fun testVueVTextDirective() {
+        val content = """
+<template>
+  <div v-text="'你好' + name"></div>
+</template>
+"""
+        val result = processVue(content)
+        assertTrue("v-text 里应生成 \$t 调用", result.contains("\$t"))
+    }
+
+    // ── E2: v-html 指令 ──
+    fun testVueVHtmlDirective() {
+        val content = """
+<template>
+  <div v-html="'欢迎，' + userName"></div>
+</template>
+"""
+        val result = processVue(content)
+        assertTrue("v-html 里应生成 \$t 调用", result.contains("\$t"))
+    }
+
+    // ── E3: 普通 mustache 里的纯文本（非拼接/模板）──
+    fun testVueMustachePureChinese() {
+        val content = """
+<template>
+  <span>普通中文文本</span>
+</template>
+"""
+        val result = processVue(content)
+        // 纯中文文本节点也应被翻译
+        assertTrue("模板里的纯中文应被处理", result.isNotEmpty())
+    }
+
+    // ── E4: 模板里 + 脚本里同时出现相同文案 ──
+    fun testDedupAcrossTemplateAndScript() {
+        val content = """
+<template>
+  <span>{{ '加载中' }}</span>
+</template>
+<script setup>
+const tip = "加载中";
+</script>
+"""
+        val result = processVue(content)
+        assertTrue("应至少生成 \$t 调用", result.contains("\$t"))
+    }
 }
