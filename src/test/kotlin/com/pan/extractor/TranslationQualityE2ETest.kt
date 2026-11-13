@@ -311,4 +311,31 @@ const text = '点击' + btnName + " 按钮";
         assertTrue("应包含 点击: $result", result.contains("点击"))
         assertTrue("应包含 按钮: $result", result.contains("按钮"))
     }
+
+    // ───────────────────────────────────────────────
+    // 18. 格式保持: Windows \r\n 换行符不应被改成 \n
+    // ───────────────────────────────────────────────
+    fun testPreserveWindowsLineEndings() {
+        val content = "<script setup>\r\nconst msg = \"你好\";\r\n</script>\r\n"
+        val psiFile = myFixture.addFileToProject("test.vue", content) as PsiFile
+        val processor = I18nProcessor(project, psiFile)
+        processor.collect()
+        processor.runWithUndo()
+        val result = psiFile.text
+
+        val crlfBefore = content.count { it == '\r' }
+        val crlfAfter = result.count { it == '\r' }
+        assertEquals("原文件是 CRLF，改写后不应丢失 \\r (before=$crlfBefore, after=$crlfAfter)",
+            crlfBefore, crlfAfter)
+    }
+
+    // ───────────────────────────────────────────────
+    // 19. 格式保持: 文件尾随换行是否应保持一致
+    // ───────────────────────────────────────────────
+    fun testPreserveTrailingNewline() {
+        val withNL = "<script setup>\nconst msg = \"你好\";\n</script>\n"
+        val f1 = myFixture.addFileToProject("a.vue", withNL) as PsiFile
+        I18nProcessor(project, f1).let { it.collect(); it.runWithUndo() }
+        assertTrue("有尾换行的文件应保持有尾换行", f1.text.endsWith('\n'))
+    }
 }
