@@ -517,6 +517,59 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             rewritten.contains("{N1}") || rewritten.contains("{1}"))
     }
 
-    // ── 模板字符串 E2E 已由 TranslationQuality/testDuplicatePlaceholder_* 覆盖 ──
-    // （模板字符串 PSI 处理较复杂，此处用字符串拼接 E2E 已足够覆盖语义化 + fallback 共存）
+    /** 模板字符串（反引号）多变量全部语义化 */
+    fun testE2EVueTemplateLiteralAllSemantic() {
+        // JS: `你好${name}，共${count}个`
+        val rewritten = rewriteVue("""
+            <script setup>
+            const msg = `你好${'$'}{name}，共${'$'}{count}个`;
+            </script>
+        """)
+        assertTrue("name 语义化: $rewritten", rewritten.contains("{name}"))
+        assertTrue("count 语义化: $rewritten", rewritten.contains("{count}"))
+        // 必须有 $t 调用（走 collectJSStringTemplate 路径）
+        assertTrue("应有 \$t 调用: $rewritten", rewritten.contains("\$t("))
+    }
+
+    /** 模板字符串：一个语义化 + 一个 fallback（复杂表达式） */
+    fun testE2EVueTemplateLiteralMixed() {
+        // JS: `你好${name}，共${count + 1}个`
+        val rewritten = rewriteVue("""
+            <script setup>
+            const msg = `你好${'$'}{name}，共${'$'}{count + 1}个`;
+            </script>
+        """)
+        assertTrue("name 语义化: $rewritten", rewritten.contains("{name}"))
+        // name 占 rawIndex 0（语义化），(count+1) 占 rawIndex 1（复杂表达式 fallback N1）
+        assertTrue("复杂表达式 fallback 到 N1: $rewritten",
+            rewritten.contains("{N1}") || rewritten.contains("{1}"))
+        assertTrue("应有 \$t 调用: $rewritten", rewritten.contains("\$t("))
+    }
+
+    /** 模板字符串：全是 fallback（两个复杂表达式） */
+    fun testE2EVueTemplateLiteralAllFallback() {
+        // JS: `价格${base + tax}，数量${getCount()}个`
+        val rewritten = rewriteVue("""
+            <script setup>
+            const msg = `价格${'$'}{base + tax}，数量${'$'}{getCount()}个`;
+            </script>
+        """)
+        // 两个复杂表达式都 fallback 到 N0, N1（或 {0}, {1}）
+        assertTrue("应有两个 fallback 编号占位符: $rewritten",
+            rewritten.contains("{N0}") && rewritten.contains("{N1}"))
+        assertTrue("应有 \$t 调用: $rewritten", rewritten.contains("\$t("))
+    }
+
+    /** 模板字符串：三元表达式（保留字 + 复杂）都 fallback 到编号 */
+    fun testE2EVueTemplateLiteralTernaryFallback() {
+        // JS: `你好${isZn ? '欢迎' : 'Welcome'}`
+        val rewritten = rewriteVue("""
+            <script setup>
+            const msg = `你好${'$'}{isZn ? '欢迎' : 'Welcome'}`;
+            </script>
+        """)
+        assertTrue("三元表达式应 fallback 到 {N0}: $rewritten",
+            rewritten.contains("{N0}") || rewritten.contains("{0}"))
+        assertTrue("应有 \$t 调用: $rewritten", rewritten.contains("\$t("))
+    }
 }
