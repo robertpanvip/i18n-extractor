@@ -23,8 +23,8 @@ object GenericStrategy : I18nFramework {
 
     override val isFallback: Boolean get() = true
 
-    override fun placeholderFor(index: Int): String = "{$index}"
-    override fun paramKey(index: Int): String = index.toString()
+    override fun placeholderFor(key: String): String = "{$key}"
+    override fun paramKey(key: String): String = key
 
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
         ReactI18nextStrategy.interpolatePlaceholders(value, params)

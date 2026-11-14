@@ -37,8 +37,8 @@ object SvelteI18nStrategy : I18nFramework {
     override val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS + ".svelte"
 
     /** messageformat 位置占位符 `{0}` / `{1}`。 */
-    override fun placeholderFor(index: Int): String = "{$index}"
-    override fun paramKey(index: Int): String = index.toString()
+    override fun placeholderFor(key: String): String = "{$key}"
+    override fun paramKey(key: String): String = key
 
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
         ReactI18nextStrategy.interpolatePlaceholders(value, params)

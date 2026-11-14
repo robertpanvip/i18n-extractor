@@ -36,8 +36,8 @@ object SolidI18nStrategy : I18nFramework {
         com.pan.extractor.scanner.SolidScanner
     override fun matches(element: PsiElement): Boolean = Util.isSolid(element)
 
-    override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)
-    override fun paramKey(index: Int): String = ReactI18nextStrategy.paramKey(index)
+    override fun placeholderFor(key: String): String = ReactI18nextStrategy.placeholderFor(key)
+    override fun paramKey(key: String): String = ReactI18nextStrategy.paramKey(key)
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
         ReactI18nextStrategy.interpolatePlaceholders(value, params)
 

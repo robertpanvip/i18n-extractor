@@ -37,18 +37,27 @@ object VueI18nStrategy : I18nFramework {
     /** Vue 占位符前缀（默认 `N`）来自 [I18nSettings]，运行时读取以反映用户配置。 */
     private fun prefix(): String = I18nSettings.getInstance().vuePlaceholderPrefix()
 
-    override fun placeholderFor(index: Int): String = "{${prefix()}$index}"
-    override fun paramKey(index: Int): String = "${prefix()}$index"
+    /**
+     * 语义化 key（如 "price"、"user.name"）直接用；纯数字 key（fallback）加 Vue 前缀 → "N0"。
+     * 这样用户的语义化变量名不会丢掉，但复杂表达式仍有稳定编号。
+     */
+    override fun placeholderFor(key: String): String = "{${paramKey(key)}}"
+    override fun paramKey(key: String): String =
+        if (key.all { it.isDigit() }) "${prefix()}$key" else key
 
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
         if (params.isEmpty()) return value
         var result = value
-        // {{ }} 是字面花括号转义，先用占位符保护，只对单层 {N0}/{0} 做插值替换，最后还原
+        // {{ }} 是字面花括号转义，先用占位符保护，只对单层 {key} 做插值替换，最后还原
         result = result.replace("{{", "\u0000").replace("}}", "\u0001")
-        val re = Regex("""\{N?(\d+)\}""")
+        // 同时匹配命名占位符 {price}、编号占位符 {0} / Vue 前缀编号 {N0}
+        val re = Regex("""\{([^}]+)\}""")
         re.findAll(result).forEach { match ->
-            val index = match.groupValues[1]
-            val replacement = params[index] ?: return@forEach
+            val rawKey = match.groupValues[1].trim()
+            // 精确 key 匹配优先；如果带前缀（如 N0）找不到，再尝试裸数字 key（如 0）
+            val replacement = params[rawKey]
+                ?: rawKey.removePrefix(prefix()).toIntOrNull()?.let { params[it.toString()] }
+                ?: return@forEach
             result = result.replace(match.value, replacement)
         }
         result = result.replace("\u0000", "{").replace("\u0001", "}")

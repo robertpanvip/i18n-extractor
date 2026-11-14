@@ -78,9 +78,9 @@ class SvelteI18nProcessorTest : BasePlatformTestCase() {
     fun testSvelteStrategyPlaceholderShape() {
         val file = myFixture.configureByText("App.ts", "export const x = 1;")
         val strategy = I18nFrameworkRegistry.detect(file)
-        assertEquals("{0}", strategy.placeholderFor(0))
-        assertEquals("{1}", strategy.placeholderFor(1))
-        assertEquals("0", strategy.paramKey(0))
+        assertEquals("{0}", strategy.placeholderFor("0"))
+        assertEquals("{1}", strategy.placeholderFor("1"))
+        assertEquals("0", strategy.paramKey("0"))
         assertTrue("paramKeyNeedsQuote should be true", strategy.paramKeyNeedsQuote)
         assertEquals("svelte-i18n", strategy.bootstrapDeps.single())
     }
@@ -136,15 +136,15 @@ class SvelteI18nProcessorTest : BasePlatformTestCase() {
 
         val c = compact(file)
         val text = file.text
-        assertTrue("Should extract '共 {0} 个' as key, got: $text", text.contains("共 {0} 个"))
+        assertTrue("Should extract '共 {n} 个' as key, got: $text", text.contains("共 {n} 个"))
         assertTrue(
-            "Call should be \$t('共 {0} 个', ...), got:\n$text",
-            text.contains("\$t('共 {0} 个'")
+            "Call should be \$t('共 {n} 个', ...), got:\n$text",
+            text.contains("\$t('共 {n} 个'")
         )
-        // 参数 key 走 paramKeyNeedsQuote=true → `"0"`（引号 key，compact 后空格被移除）
+        // 参数 key 走 paramKeyNeedsQuote=true → `"n"`（引号 key，compact 后空格被移除）
         assertTrue(
-            "Param key should be quoted \"0\", got:\n$c",
-            c.contains("\$t('共{0}个',{\"0\":n})")
+            "Param key should be quoted \"n\", got:\n$c",
+            c.contains("\$t('共{n}个',{\"n\":n})")
         )
     }
 

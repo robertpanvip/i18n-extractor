@@ -61,6 +61,34 @@ class JsStringCollector(
      */
     internal fun vuePlaceholderKey(rawIndex: Int): String = "${I18nSettings.getInstance().vuePlaceholderPrefix()}$rawIndex"
 
+    /**
+     * 安全标识符正则：匹配纯标识符 / 属性访问链。
+     * - 合法：`price`, `user.name`, `user.profile.nickname`
+     * - 非法（fallback 到编号）：`count + 1`, `getName()`, `list[0]`, `user?.name`, `a ? b : c`
+     */
+    private val SAFE_SEMANTIC_KEY = Regex("""^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$""")
+
+    /**
+     * 从 `${}` 内部提取语义化 key，失败返回 null 调用方应 fallback 到编号。
+     * 只提取"简单标识符/属性访问"，复杂表达式（算术/三元/函数调用/数组/可选链）不用。
+     */
+    private fun extractSemanticKey(innerContent: String): String? {
+        val trimmed = innerContent.trim()
+        if (trimmed.isEmpty() || trimmed.length > 64) return null
+        if (!SAFE_SEMANTIC_KEY.matches(trimmed)) return null
+        // 排除 JS 保留字（极大概率不会出现在业务变量名里，但保险）
+        if (trimmed in JS_RESERVED) return null
+        return trimmed
+    }
+
+    private val JS_RESERVED = setOf(
+        "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+        "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
+        "function", "if", "import", "in", "instanceof", "new", "null", "return", "super",
+        "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while",
+        "with", "yield", "let", "static", "await", "async"
+    )
+
     fun collectJSStringTemplate(
         raw: String,
         ele: PsiElement,
@@ -85,8 +113,9 @@ class JsStringCollector(
                 return@replace pureString
             }
             val rawIndex = index++
-            val key = fw.paramKey(rawIndex)
-            val placeholder = fw.placeholderFor(rawIndex)
+            val semanticKey = extractSemanticKey(innerContent) ?: rawIndex.toString()
+            val key = fw.paramKey(semanticKey)
+            val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent
             placeholder
         }
@@ -194,8 +223,9 @@ class JsStringCollector(
             val pureString = processor.extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
             val rawIndex = index++
-            val key = fw.paramKey(rawIndex)
-            val placeholder = fw.placeholderFor(rawIndex)
+            val semanticKey = extractSemanticKey(innerContent) ?: rawIndex.toString()
+            val key = fw.paramKey(semanticKey)
+            val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent
             placeholder
         }

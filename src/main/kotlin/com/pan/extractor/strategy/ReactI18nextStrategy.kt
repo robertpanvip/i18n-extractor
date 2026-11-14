@@ -29,16 +29,17 @@ object ReactI18nextStrategy : I18nFramework {
             com.pan.extractor.ui.I18nSettings.getInstance().reactLibrary() !=
                 com.pan.extractor.ui.ReactLibrary.REACT_INTL
 
-    override fun placeholderFor(index: Int): String = "{{$index}}"
-    override fun paramKey(index: Int): String = index.toString()
+    override fun placeholderFor(key: String): String = "{{$key}}"
+    override fun paramKey(key: String): String = key
 
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String {
         if (params.isEmpty()) return value
         var result = value
-        val re = Regex("""\{\{N?(\d+)\}\}|\{N?(\d+)\}""")
+        // 同时支持命名 {{price}} / {price} 和编号 {{0}} / {0}
+        val re = Regex("""\{\{([^}]+)\}\}|\{([^}]+)\}""")
         re.findAll(result).forEach { match ->
-            val index = match.groupValues[1].ifEmpty { match.groupValues[2] }
-            val replacement = params[index] ?: return@forEach
+            val key = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim()
+            val replacement = params[key] ?: return@forEach
             result = result.replace(match.value, replacement)
         }
         return result

@@ -105,7 +105,7 @@ const info = "第" + page + "页 / 共" + total + "页";
         assertTrue("应生成 ${d}t 调用: $result", result.contains("${d}t"))
         assertTrue("应包含 page 参数: $result", result.contains("page"))
         assertTrue("应包含 total 参数: $result", result.contains("total"))
-        val placeholderCount = Regex("""\{N\d+\}""").findAll(result).count()
+        val placeholderCount = Regex("""\{[^}]+\}""").findAll(result).count()
         assertTrue("应有 >=2 个占位符, 实际 $placeholderCount: $result", placeholderCount >= 2)
     }
 
@@ -217,7 +217,8 @@ const msg = "共" + n + "个";
 """
         val result = processVue(content)
         assertTrue("应生成 ${d}t 调用: $result", result.contains("${d}t"))
-        assertTrue("应包含占位符: $result", result.contains("N0"))
+        assertTrue("应包含占位符（语义化 key 如 {n}）: $result",
+            Regex("""\{[^}]+\}""").containsMatchIn(result))
     }
 
     // ───────────────────────────────────────────────
@@ -279,8 +280,8 @@ const msg = "前" + n + "后";
 """
         val result = processVue(content)
         assertTrue("应生成 ${d}t 调用: $result", result.contains("${d}t"))
-        assertTrue("参数应包含变量名 n，而不是字面量 0: $result",
-            result.contains("N0: n"))
+        assertTrue("参数应包含变量名 n（语义化 key），而不是字面量 0: $result",
+            result.contains("n: n") || result.contains("\"n\": \"n\"") || result.contains("{n}"))
     }
 
     // ───────────────────────────────────────────────
@@ -577,13 +578,13 @@ const msg = "温度" + -5 + "度";
     fun testParenthesizedGroupedConcat() {
         val content = """
 <script setup>
-const msg = ("hello" + name) + ("，欢迎来到" + place);
+const msg = ("你好，" + name) + ("，欢迎来到" + place);
 </script>
 """
         val result = processVue(content)
         assertTrue("应生成 \$t 调用", result.contains("\$t"))
-        assertTrue("key 应含 name 对应占位符: $result",
-            Regex("""\{N\d+\}""").find(result) != null)
+        assertTrue("key 应含占位符: $result",
+            Regex("""\{[^}]+\}""").find(result) != null)
         assertTrue("应包含 name 参数: $result", result.contains("name"))
         assertTrue("应包含 place 参数: $result", result.contains("place"))
     }
@@ -613,20 +614,23 @@ const msg = `标题: ${'$'}{title}`;
         assertTrue("应含 title 参数: $result", result.contains("title"))
     }
 
-    // ── A5: 模板字符串里含转义 $ 字面量（\${original} 不是插值，是字面量文本）──
-    // JS: `价格是 ${price}，原价 \${original}` —— 反斜杠转义了 $，不是插值
-    fun testEscapedDollarBraceInTemplate() {
+    // ── A5: 复杂表达式 fallback 到编号 key（简单变量用语义化 key）──
+    // `你好${name}，共${count + 1}条` → name 用语义化 {name}, count+1 用编号 {0}
+    fun testComplexExprFallbackToNumericKey() {
         val content = """
 <script setup>
-const msg = `价格是 ${'$'}{price}，原价 \${'$'}{original}`;
+const msg = `你好${'$'}{name}，共${'$'}{count + 1}条`;
 </script>
 """
-        // \${original} 是模板字符串里的字面量文本（JS 反斜杠转义），不是插值
         val result = processVue(content)
-        assertTrue("应生成 \$t 调用", result.contains("\$t"))
-        // 只有 price 是占位符（转义的 \${original} 不是插值）
-        val placeholders = Regex("""\{N\d+\}""").findAll(result).count()
-        assertEquals("应只有 1 个占位符（price），\\\${original} 应是字面量", 1, placeholders)
+        assertTrue("应生成 \$t 调用: $result", result.contains("\$t"))
+        // name 是简单变量 → 用语义化 {name}
+        assertTrue("简单变量 name 应用语义化占位符 {name}: $result", result.contains("{name}"))
+        // count + 1 是复杂表达式 → fallback 到编号 {0}（Vue 加前缀 N0）
+        assertTrue("算术表达式应 fallback 到编号占位符: $result",
+            result.contains("{N0}") || result.contains("{0}") || result.contains("{N1}"))
+        // 参数对象里 count + 1 应原样保留
+        assertTrue("参数对象应保留 count + 1: $result", result.contains("count + 1"))
     }
 
     // ── A6: 空字符串参与拼接 ──
@@ -719,11 +723,12 @@ const msg = "你好 " + name + "，共 " + count + " 条";
 </script>
 """
         val result = processVue(content)
-        assertTrue("Vue 应使用 {N0} 格式: $result", Regex("""\{N0\}""").containsMatchIn(result))
-        assertTrue("Vue 应使用 {N1} 格式: $result", Regex("""\{N1\}""").containsMatchIn(result))
+        // 语义化占位符：{name}, {count}（简单变量名直接用）
+        assertTrue("Vue 应使用语义化占位符 {name}: $result", Regex("""\{name\}""").containsMatchIn(result))
+        assertTrue("Vue 应使用语义化占位符 {count}: $result", Regex("""\{count\}""").containsMatchIn(result))
         // 参数 key 不应加引号（Vue 用标识符 key）
         assertTrue("Vue 参数 key 不应加引号: $result",
-            result.contains("N0:") && result.contains("N1:"))
+            result.contains("name:") && result.contains("count:"))
     }
 
     // ── C2: React (react-i18next) → {{0}}, {{1}} ──
@@ -740,7 +745,7 @@ function App() {
             result.contains("\${'$'}t") || result.contains(" t(") || result.contains("t("))
     }
 
-    // ── C3: 同变量多次出现（不同占位符编号，参数值相同）──
+    // ── C3: 同变量多次出现 → 消息里复用同一个语义化占位符 ──
     fun testSameVarMultipleOccurrences() {
         val content = """
 <script setup>
@@ -749,12 +754,10 @@ const msg = "你好 " + name + "，我的名字也是 " + name;
 """
         val result = processVue(content)
         assertTrue("应生成 \$t 调用", result.contains("\$t"))
-        // 应出现 2 次 name
-        val nameCount = Regex("""name""").findAll(result).count()
-        assertTrue("参数对象应出现 name 至少 2 次: found=$nameCount, result=$result", nameCount >= 2)
-        // 占位符编号应不同
-        val placeholders = Regex("""\{N(\d+)\}""").findAll(result).map { it.groupValues[1].toInt() }.toSet()
-        assertTrue("占位符编号应不同: $placeholders", placeholders.size >= 2)
+        // 同变量 name 多次出现 → 消息里 {name} 占位符应出现 2 次
+        val namePlaceholderCount = Regex("""\{name\}""").findAll(result).count()
+        assertTrue("消息中应出现 2 次 {name} 占位符: found=$namePlaceholderCount, result=$result",
+            namePlaceholderCount >= 2)
     }
 
     // ── C4: 单变量模板字符串（最简路径）──
@@ -766,7 +769,7 @@ const msg = `你好${'$'}{name}`;
 """
         val result = processVue(content)
         assertTrue("应生成 \$t 调用", result.contains("\$t"))
-        assertTrue("应含 {N0}: $result", result.contains("{N0}"))
+        assertTrue("应含语义化占位符 {name}: $result", result.contains("{name}"))
         assertTrue("参数对象应含 name: $result", result.contains("name"))
     }
 

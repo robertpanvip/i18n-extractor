@@ -107,11 +107,11 @@ interface DetectionStrategy {
  * 对应原「耦合点 3」。
  */
 interface PlaceholderStrategy {
-    /** 资源文件中的占位符写法，如 Vue `{N0}`、React `{{0}}`、Generic `{0}`。 */
-    fun placeholderFor(index: Int): String
+    /** 资源文件中的占位符写法，如 Vue `{price}` / `{N0}`、React `{{price}}` / `{{0}}`。 */
+    fun placeholderFor(key: String): String
 
-    /** 调用侧参数对象的 key，如 Vue `N0`（标识符）、React `0`（数字字符串）。 */
-    fun paramKey(index: Int): String
+    /** 调用侧参数对象的 key，如 Vue `price` / `N0`（标识符）、React `"price"` / `"0"`（字符串）。 */
+    fun paramKey(key: String): String
 
     /** 参数对象 key 是否需要加引号：Vue=false（标识符）、React/Generic=true。 */
     val paramKeyNeedsQuote: Boolean

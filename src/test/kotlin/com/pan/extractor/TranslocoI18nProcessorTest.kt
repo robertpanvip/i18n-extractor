@@ -58,8 +58,8 @@ class TranslocoI18nProcessorTest : BasePlatformTestCase() {
 
     fun testTranslocoStrategyPlaceholderShape() {
         val strategy = I18nFrameworkRegistry.detect(myFixture.configureByText("App.ts", "export class App {}"))
-        assertEquals("{{0}}", strategy.placeholderFor(0))
-        assertEquals("0", strategy.paramKey(0))
+        assertEquals("{{0}}", strategy.placeholderFor("0"))
+        assertEquals("0", strategy.paramKey("0"))
         assertTrue("paramKeyNeedsQuote should be true", strategy.paramKeyNeedsQuote)
         assertEquals("@jsverse/transloco", strategy.bootstrapDeps.single())
     }

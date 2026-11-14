@@ -60,8 +60,8 @@ class AngularI18nProcessorTest : BasePlatformTestCase() {
 
     fun testAngularStrategyPlaceholderShape() {
         val strategy = I18nFrameworkRegistry.detect(myFixture.configureByText("App.ts", "export class App {}"))
-        assertEquals("{{0}}", strategy.placeholderFor(0))
-        assertEquals("0", strategy.paramKey(0))
+        assertEquals("{{0}}", strategy.placeholderFor("0"))
+        assertEquals("0", strategy.paramKey("0"))
         assertTrue("paramKeyNeedsQuote should be true", strategy.paramKeyNeedsQuote)
         assertEquals("@ngx-translate/core", strategy.bootstrapDeps.single())
     }

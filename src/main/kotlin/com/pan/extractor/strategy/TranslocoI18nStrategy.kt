@@ -37,8 +37,8 @@ object TranslocoI18nStrategy : I18nFramework {
     override val supportedFileSuffixes: Set<String> get() = BASE_JS_EXTENSIONS + ".html"
 
     /** Transloco 插值占位符 `{{0}}` / `{{1}}`（与 react-i18next / ngx-translate 一致）。 */
-    override fun placeholderFor(index: Int): String = ReactI18nextStrategy.placeholderFor(index)
-    override fun paramKey(index: Int): String = ReactI18nextStrategy.paramKey(index)
+    override fun placeholderFor(key: String): String = ReactI18nextStrategy.placeholderFor(key)
+    override fun paramKey(key: String): String = ReactI18nextStrategy.paramKey(key)
     override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
         ReactI18nextStrategy.interpolatePlaceholders(value, params)
 

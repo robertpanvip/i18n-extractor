@@ -47,8 +47,8 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
     // ── 7.1 Placeholder ─────────────────────────────────────────────
 
     fun testVuePlaceholderSyntax() {
-        assertEquals("Vue placeholderFor(2) 应为 {N2}", "{N2}", VueI18nStrategy.placeholderFor(2))
-        assertEquals("Vue paramKey(0) 应为 N0", "N0", VueI18nStrategy.paramKey(0))
+        assertEquals("Vue placeholderFor(\"2\") 应为 {N2}", "{N2}", VueI18nStrategy.placeholderFor("2"))
+        assertEquals("Vue paramKey(\"0\") 应为 N0", "N0", VueI18nStrategy.paramKey("0"))
         assertEquals("Vue paramKeyNeedsQuote 应为 false", false, VueI18nStrategy.paramKeyNeedsQuote)
     }
 
@@ -107,7 +107,7 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
     }
 
     fun testGenericPlaceholderSyntax() {
-        assertEquals("Generic placeholderFor(0) 应为 {0}", "{0}", GenericStrategy.placeholderFor(0))
+        assertEquals("Generic placeholderFor(\"0\") 应为 {0}", "{0}", GenericStrategy.placeholderFor("0"))
         assertEquals(
             "Generic 单括号占位插值",
             "加载 X",

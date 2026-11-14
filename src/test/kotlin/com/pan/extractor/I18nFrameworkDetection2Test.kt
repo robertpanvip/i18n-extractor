@@ -75,8 +75,8 @@ class I18nFrameworkDetection2Test : BasePlatformTestCase() {
             override val scanner: com.pan.extractor.scanner.SourceScanner =
                 com.pan.extractor.scanner.JsScanner
             override fun matches(element: PsiElement): Boolean = true
-            override fun placeholderFor(index: Int): String = "{$index}"
-            override fun paramKey(index: Int): String = index.toString()
+            override fun placeholderFor(key: String): String = "{$key}"
+            override fun paramKey(key: String): String = key
             override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
                 GenericStrategy.interpolatePlaceholders(value, params)
             override fun buildInitFile(defaultLocale: String, entryImport: String?): String = ""
@@ -114,8 +114,8 @@ class I18nFrameworkDetection2Test : BasePlatformTestCase() {
             override val scanner: com.pan.extractor.scanner.SourceScanner =
                 com.pan.extractor.scanner.JsScanner
             override fun matches(element: PsiElement): Boolean = true
-            override fun placeholderFor(index: Int): String = "{$index}"
-            override fun paramKey(index: Int): String = index.toString()
+            override fun placeholderFor(key: String): String = "{$key}"
+            override fun paramKey(key: String): String = key
             override fun interpolatePlaceholders(value: String, params: Map<String, String>): String =
                 GenericStrategy.interpolatePlaceholders(value, params)
             override fun buildInitFile(defaultLocale: String, entryImport: String?): String = ""
