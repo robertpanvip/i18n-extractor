@@ -572,4 +572,127 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             rewritten.contains("{N0}") || rewritten.contains("{0}"))
         assertTrue("应有 \$t 调用: $rewritten", rewritten.contains("\$t("))
     }
+
+    // ═══════════════════════════════════════════════
+    // 额外：模板字符串内部引号 / 嵌套边界场景
+    // ═══════════════════════════════════════════════
+
+    /** A1: `${'5元'}` —— 单引号字符串字面量应直接内联到 message */
+    fun testTplDollarSingleQuoteInline() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `价格${'$'}{'5元'}`;
+            </script>
+        """)
+        assertTrue("单引号字面量应内联：无占位符，message 为 '价格5元'",
+            r.contains("价格5元"))
+        assertFalse("不应产生占位符: $r", r.contains("{N") || r.contains("{price"))
+        assertTrue("应有 \$t 调用: $r", r.contains("\$t("))
+    }
+
+    /** A2: `${"5元"}` —— 双引号字符串字面量直接内联（与 A1 同 extractPureStringContent 路径） */
+    fun testTplDollarDoubleQuoteInline() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `价格${'$'}{"5元"}`;
+            </script>
+        """)
+        assertTrue("双引号字面量应内联: $r", r.contains("价格5元"))
+        assertFalse("不应产生占位符: $r", r.contains("{N"))
+    }
+
+    /** A3: `${'小明'}` 内联 + `${count}` 变量语义化 —— 同模板内两种路径 */
+    fun testTplLiteralInlinePlusVarSemantic() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `你好${'$'}{'小明'}，共${'$'}{count}个`;
+            </script>
+        """)
+        assertTrue("小明 应被内联到 message 中: $r", r.contains("你好小明"))
+        assertTrue("count 语义化占位符: $r", r.contains("{count}"))
+        assertFalse("'小明' 不该再作为 param key: $r",
+            Regex("""(N\d+|'小明')\s*:\s*'小明'""").containsMatchIn(r))
+    }
+
+    /** B1: 静态部分含双引号 —— `他说"你好${name}"` —— 静态引号保留原样 */
+    fun testTplStaticPartHasDoubleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `他说"你好${'$'}{name}"`;
+            </script>
+        """)
+        assertTrue("静态双引号应保留：message 里应有 你好 片段",
+            r.contains("""他说"你好""") || r.contains("""他说\"你好"""))
+        assertTrue("name 语义化占位符: $r", r.contains("{name}"))
+    }
+
+    /** B2: 静态部分含单引号 —— `他说'你好${name}'` —— $t 用单引号字符串时内部要转义 */
+    fun testTplStaticPartHasSingleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `他说'你好${'$'}{name}'`;
+            </script>
+        """)
+        // $t('他说\'你好{name}\'', ...) —— 单引号被转义
+        assertTrue("静态单引号应保留（需转义）",
+            r.contains("""\\'你好""") || r.contains("""'你好"""))
+        assertTrue("name 语义化占位符: $r", r.contains("{name}"))
+    }
+
+    /** B3: `${yes ? "是" : "否"}` —— 三元表达式含内嵌引号 —— 整个 fallback 到编号 */
+    fun testTplTernaryWithQuotedLiteralFallback() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `回答是${'$'}{yes ? "是" : "否"}`;
+            </script>
+        """)
+        // 三元含引号，但整体不是单一字符串字面量 → extractPureStringContent 返回 null
+        // → fallback 编号占位符
+        assertTrue("三元 fallback: message 里应无引号字面量 是/否: $r",
+            r.contains("{N0}") || r.contains("{0}"))
+        // params 里保留原三元表达式
+        assertTrue("params 应保留原三元表达式文本（含引号）: $r",
+            r.contains("yes ?") || r.contains("\"是\""))
+    }
+
+    /** C1: `` `${`内层`}` `` —— 纯反引号（不含 ${}）被 extractPureStringContent 当成纯字符串内联 */
+    fun testTplDollarBacktickInline() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `外层${'$'}{`内层`}外层`;
+            </script>
+        """)
+        assertTrue("纯反引号应内联: message 应为 '外层内层外层'",
+            r.contains("外层内层外层"))
+        assertFalse("不应产生占位符: $r", r.contains("{N"))
+    }
+
+    /** C2: 三层嵌套模板字符串 —— `` `外层${`内层${x}`}外层` ``
+     *  templateVarRegex 三层深可正确匹配；外层 N0 params 里嵌内层 $t 调用 */
+    fun testTplTripleNestedTemplate() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `外层${'$'}{`内层${'$'}{x}`}外层`;
+            </script>
+        """)
+        assertTrue("外层应 fallback 到 N0: $r", r.contains("{N0}"))
+        // 外层 paramsObject 里应该出现 buildNestedTExprFromText 生成的内层 $t 调用
+        assertTrue("params 里应有嵌套内层 \$t 调用: $r",
+            r.contains("\$t('内层") || r.contains("\$t(\"内层"))
+        assertTrue("内层 x 应被内层 \$t 处理为占位符: $r",
+            r.contains("{x}") || r.contains("{N0"))
+    }
+
+    /** D1: `价格 $5，数量${count}` —— 静态的 $5 不是插值 → 原样保留 */
+    fun testTplDollarSignPreservedNotInterpolation() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `价格 $5，数量${'$'}{count}`;
+            </script>
+        """)
+        assertTrue("静态 $5 应完整保留: $r", r.contains("$5"))
+        assertTrue("count 语义化: $r", r.contains("{count}"))
+        // $5 不会被当占位符插值
+        assertFalse("$5 不应触发错误的占位符: $r", r.contains("{5}"))
+    }
 }
