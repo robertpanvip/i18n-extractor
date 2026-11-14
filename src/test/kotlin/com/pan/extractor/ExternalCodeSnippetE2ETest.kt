@@ -78,13 +78,10 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        assertFalse(
-            "不应出现嵌套占位符（Vue 单花括号内再嵌 {）",
-            Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        )
+        assertNoNestedVuePlaceholder(result, "（Vue 动态属性 + 三元）")
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""").containsMatchIn(result)
+            zeroParamRegex.containsMatchIn(result)
         )
         assertTrue(
             "应提取中文 '文档贡献者：'，got:\n$result",
@@ -112,10 +109,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        assertFalse(
-            "不应出现嵌套占位符",
-            Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        )
+        assertNoNestedVuePlaceholder(result, "（mustache 三元 + 冒号）")
         assertTrue(
             "应提取中文 '最后更新'，got:\n$result",
             result.contains("$d t('最后更新'") || result.contains("${d}t('最后更新'")
@@ -141,13 +135,10 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        assertFalse(
-            "不应出现嵌套占位符",
-            Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        )
+        assertNoNestedVuePlaceholder(result, "（mustache 模板 + || 链）")
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""").containsMatchIn(result)
+            zeroParamRegex.containsMatchIn(result)
         )
     }
 
@@ -199,13 +190,10 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        assertFalse(
-            "不应出现嵌套占位符",
-            Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        )
+        assertNoNestedVuePlaceholder(result, "（脚本内三元 + 拼接）")
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*N\d+\s*:\s*0\s*\}""").containsMatchIn(result)
+            zeroParamRegex.containsMatchIn(result)
         )
     }
 
@@ -251,13 +239,10 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        assertFalse(
-            "不应出现嵌套占位符",
-            Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        )
+        assertNoNestedVuePlaceholder(result, "（脚本模板字符串 + 多插值）")
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*N\d+\s*:\s*0\s*\}""").containsMatchIn(result)
+            zeroParamRegex.containsMatchIn(result)
         )
     }
 
@@ -286,9 +271,23 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
     // 基础场景回归
     // ───────────────────────────────────────────────
 
-    private val nestedPlaceholderRegex = Regex("""\{[^{}]*\{""")
+    /**
+     * 只在 $t('翻译key', params) 或 t('翻译key', params) 的翻译 key 字符串
+     * 内部检测嵌套占位符（key 里的花括号再嵌花括号）。
+     * 不在 params 对象里误匹配嵌套的 $t() 调用。
+     */
+    private val nestedKeyInVueT = Regex("""\$\s*t\s*\(\s*['`][^'`]*\{[^{}]*\{""")
+    private val nestedKeyInReactT = Regex("""\bt\s*\(\s*['`][^'`]*\{\{[^{}]*\{""")
     private val zeroParamRegex = Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""")
     private val nestedReactRegex = Regex("""\{\{\{""")
+
+    private fun hasNestedVuePlaceholder(result: String): Boolean =
+        nestedKeyInVueT.containsMatchIn(result) || nestedKeyInReactT.containsMatchIn(result)
+
+    private fun assertNoNestedVuePlaceholder(result: String, label: String = "") {
+        val bad = hasNestedVuePlaceholder(result)
+        assertFalse("不应出现翻译 key 内嵌套占位符$label，got:\n$result", bad)
+    }
 
     fun testVueAttributeSimpleString() {
         val vue = """
@@ -299,7 +298,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         </template>
         """.trimIndent()
         val result = processVue(vue)
-        assertFalse(nestedPlaceholderRegex.containsMatchIn(result))
+        assertNoNestedVuePlaceholder(result)
         assertFalse(zeroParamRegex.containsMatchIn(result))
     }
 
@@ -311,7 +310,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         <script setup lang="ts">const page = 1</script>
         """.trimIndent()
         val result = processVue(vue)
-        assertFalse(nestedPlaceholderRegex.containsMatchIn(result))
+        assertNoNestedVuePlaceholder(result)
         assertFalse(zeroParamRegex.containsMatchIn(result))
     }
 
@@ -323,7 +322,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         <script setup lang="ts">const n = 10</script>
         """.trimIndent()
         val result = processVue(vue)
-        assertFalse(nestedPlaceholderRegex.containsMatchIn(result))
+        assertNoNestedVuePlaceholder(result)
         assertFalse(zeroParamRegex.containsMatchIn(result))
     }
 
@@ -335,7 +334,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         <script setup lang="ts">const show = true</script>
         """.trimIndent()
         val result = processVue(vue)
-        assertFalse(nestedPlaceholderRegex.containsMatchIn(result))
+        assertNoNestedVuePlaceholder(result)
     }
 
     fun testReactSimpleJSX() {

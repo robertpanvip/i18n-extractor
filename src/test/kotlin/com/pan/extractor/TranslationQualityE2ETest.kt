@@ -187,13 +187,11 @@ const msg = "前" + (isOk ? "中" : "间") + "后";
 </script>
 """
         val result = processVue(content)
-        // 通用嵌套占位符检测：
-        //   Vue/Generic: {key} 里不应再嵌 {  →  \{[^{}]*\{
-        //   React: {{key}} 里不应再嵌 {{ →  \{\{[^{}]*\{
-        val vueNested = Regex("""\{[^{}]*\{""").containsMatchIn(result)
-        val reactNested = Regex("""\{\{[^{}]*\{""").containsMatchIn(result)
-        assertFalse("不应有嵌套占位符（Vue/Generic 单花括号或 React 双花括号）: $result",
-            vueNested || reactNested)
+        // 只在 $t('翻译key') 或 t('翻译key') 的翻译 key 字符串内部检测嵌套占位符
+        // 不能用全文件正则，否则 params 对象里嵌套的 $t() 调用会被误匹配
+        val badVue = Regex("""\$\s*t\s*\(\s*['`][^'`]*\{[^{}]*\{""").containsMatchIn(result)
+        val badReact = Regex("""\bt\s*\(\s*['`][^'`]*\{\{[^{}]*\{""").containsMatchIn(result)
+        assertFalse("翻译 key 不应含嵌套占位符: $result", badVue || badReact)
     }
 
     // ───────────────────────────────────────────────
