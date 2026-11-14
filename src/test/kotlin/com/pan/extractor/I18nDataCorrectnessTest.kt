@@ -52,6 +52,66 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
         assertEquals("Vue paramKeyNeedsQuote 应为 false", false, VueI18nStrategy.paramKeyNeedsQuote)
     }
 
+    // ── 语义化 key 单元测试（7.1 补充）──
+
+    fun testVuePlaceholderSemanticKeyDirectPassthrough() {
+        // 简单标识符 price → 直接作为占位符 key（不加 N 前缀）
+        assertEquals("{price}", VueI18nStrategy.placeholderFor("price"))
+        assertEquals("price", VueI18nStrategy.paramKey("price"))
+        // 属性链 user.name 也直接透传
+        assertEquals("{user.name}", VueI18nStrategy.placeholderFor("user.name"))
+        assertEquals("user.name", VueI18nStrategy.paramKey("user.name"))
+        // 数字 fallback（复杂表达式）仍然加 N 前缀
+        assertEquals("{N0}", VueI18nStrategy.placeholderFor("0"))
+        assertEquals("N0", VueI18nStrategy.paramKey("0"))
+    }
+
+    fun testVuePlaceholderSemanticInterpolate() {
+        // 语义化 key 插值：{price}, {count}
+        assertEquals(
+            "语义化 key 单占位插值",
+            "当前价格 100 元",
+            VueI18nStrategy.interpolatePlaceholders("当前价格 {price} 元", mapOf("price" to "100"))
+        )
+        // 语义化 key 与编号 fallback 共存
+        assertEquals(
+            "语义化 + 编号 fallback 混合插值",
+            "你好小明，数量 5",
+            VueI18nStrategy.interpolatePlaceholders(
+                "你好{name}，数量 {N0}",
+                mapOf("name" to "小明", "0" to "5")
+            )
+        )
+        // 同语义化 key 多次出现
+        assertEquals(
+            "同语义化 key 全部替换",
+            "X和X",
+            VueI18nStrategy.interpolatePlaceholders("{name}和{name}", mapOf("name" to "X"))
+        )
+    }
+
+    fun testReactPlaceholderSemanticKey() {
+        // react-i18next 直接透传语义化 key
+        assertEquals("{{name}}", ReactI18nextStrategy.placeholderFor("name"))
+        assertEquals("name", ReactI18nextStrategy.paramKey("name"))
+        // 数字编号保持 {{0}}
+        assertEquals("{{0}}", ReactI18nextStrategy.placeholderFor("0"))
+        assertEquals("0", ReactI18nextStrategy.paramKey("0"))
+        // 语义化 key 插值
+        assertEquals(
+            "React 语义化 key 插值",
+            "a 世界 b",
+            ReactI18nextStrategy.interpolatePlaceholders("a {{name}} b", mapOf("name" to "世界"))
+        )
+    }
+
+    fun testGenericPlaceholderSemanticKey() {
+        // Generic 直接透传
+        assertEquals("{count}", GenericStrategy.placeholderFor("count"))
+        assertEquals("count", GenericStrategy.paramKey("count"))
+        assertEquals("加载 X", GenericStrategy.interpolatePlaceholders("加载 {count}", mapOf("count" to "X")))
+    }
+
     fun testVuePlaceholderSingle() {
         assertEquals(
             "Vue 单占位插值",

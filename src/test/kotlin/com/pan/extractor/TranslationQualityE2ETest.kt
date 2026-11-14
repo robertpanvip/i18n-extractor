@@ -187,8 +187,13 @@ const msg = "前" + (isOk ? "中" : "间") + "后";
 </script>
 """
         val result = processVue(content)
-        val nested = Regex("""\{N\{N\d+\}\}""").findAll(result).toList()
-        assertTrue("不应有嵌套占位符: $nested in $result", nested.isEmpty())
+        // 通用嵌套占位符检测：
+        //   Vue/Generic: {key} 里不应再嵌 {  →  \{[^{}]*\{
+        //   React: {{key}} 里不应再嵌 {{ →  \{\{[^{}]*\{
+        val vueNested = Regex("""\{[^{}]*\{""").containsMatchIn(result)
+        val reactNested = Regex("""\{\{[^{}]*\{""").containsMatchIn(result)
+        assertFalse("不应有嵌套占位符（Vue/Generic 单花括号或 React 双花括号）: $result",
+            vueNested || reactNested)
     }
 
     // ───────────────────────────────────────────────
@@ -280,8 +285,12 @@ const msg = "前" + n + "后";
 """
         val result = processVue(content)
         assertTrue("应生成 ${d}t 调用: $result", result.contains("${d}t"))
-        assertTrue("参数应包含变量名 n（语义化 key），而不是字面量 0: $result",
-            result.contains("n: n") || result.contains("\"n\": \"n\"") || result.contains("{n}"))
+        // 语义化重构后，简单变量 n 会被当作语义化 key：{n}，params 里 n: n
+        // 核心断言：不能丢成 N0/0 这类编号占位符
+        assertTrue("应出现语义化占位符 {n}，而不是编号占位符 {N0}/{0}: $result",
+            result.contains("{n}") && !Regex("""\{N0\}""").containsMatchIn(result))
+        assertTrue("参数对象应含 n 作为 key 且值为变量 n: $result",
+            Regex("""\bn\s*:\s*n\b""").containsMatchIn(result))
     }
 
     // ───────────────────────────────────────────────
@@ -450,11 +459,17 @@ const msg = name + `中${'$'}{a}${'$'}{b}${'$'}{c}` + suffix;
         println("=== 拼接+多变量模板 ===")
         println(result)
         assertTrue("应有 \$t 调用", result.contains("\$t("))
-        // 检查编号连续性和无重复
-        val placeholderNums = Regex("""\{N(\d+)\}""").findAll(result).map { it.groupValues[1].toInt() }.toList()
-        println("占位符编号列表: $placeholderNums")
-        val hasDuplicate = placeholderNums.groupingBy { it }.eachCount().any { it.value > 1 }
-        assertFalse("不应有重复占位符编号: $placeholderNums (result=$result)", hasDuplicate)
+        // 现在变量被语义化：name, a, b, c, suffix → 5 个语义化占位符（而非 N0-N4 编号）
+        // 同时覆盖 Vue 编号 fallback 占位符 {N\d+}
+        val allPlaceholders = Regex("""\{([^{}]+)\}""").findAll(result)
+            .map { it.groupValues[1].trim() }
+            .filter { it.isNotEmpty() && ':' !in it && '=' !in it && ' ' !in it }
+            .toList()
+        println("占位符列表: $allPlaceholders")
+        assertTrue("应有 >= 5 个占位符 (name,a,b,c,suffix), 实际 $allPlaceholders: $result",
+            allPlaceholders.size >= 5)
+        val hasDuplicate = allPlaceholders.groupingBy { it }.eachCount().any { it.value > 1 }
+        assertFalse("不应有重复占位符: $allPlaceholders (result=$result)", hasDuplicate)
     }
 
     // ───────────────────────────────────────────────

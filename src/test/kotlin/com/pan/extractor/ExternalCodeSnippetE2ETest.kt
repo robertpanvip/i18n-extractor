@@ -79,12 +79,12 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
         val result = processVue(vue)
 
         assertFalse(
-            "不应出现嵌套占位符 {N{N0}} 等",
-            Regex("""\{N\{N\d+\}\}""").containsMatchIn(result)
+            "不应出现嵌套占位符（Vue 单花括号内再嵌 {）",
+            Regex("""\{[^{}]*\{""").containsMatchIn(result)
         )
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*N\d+\s*:\s*0\s*\}""").containsMatchIn(result)
+            Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""").containsMatchIn(result)
         )
         assertTrue(
             "应提取中文 '文档贡献者：'，got:\n$result",
@@ -114,7 +114,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         assertFalse(
             "不应出现嵌套占位符",
-            Regex("""\{N\{N\d+\}\}""").containsMatchIn(result)
+            Regex("""\{[^{}]*\{""").containsMatchIn(result)
         )
         assertTrue(
             "应提取中文 '最后更新'，got:\n$result",
@@ -143,11 +143,11 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         assertFalse(
             "不应出现嵌套占位符",
-            Regex("""\{N\{N\d+\}\}""").containsMatchIn(result)
+            Regex("""\{[^{}]*\{""").containsMatchIn(result)
         )
         assertFalse(
             "不应出现参数值为字面量 0",
-            Regex("""\{\s*N\d+\s*:\s*0\s*\}""").containsMatchIn(result)
+            Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""").containsMatchIn(result)
         )
     }
 
@@ -201,7 +201,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         assertFalse(
             "不应出现嵌套占位符",
-            Regex("""\{N\{N\d+\}\}""").containsMatchIn(result)
+            Regex("""\{[^{}]*\{""").containsMatchIn(result)
         )
         assertFalse(
             "不应出现参数值为字面量 0",
@@ -253,7 +253,7 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         assertFalse(
             "不应出现嵌套占位符",
-            Regex("""\{N\{N\d+\}\}""").containsMatchIn(result)
+            Regex("""\{[^{}]*\{""").containsMatchIn(result)
         )
         assertFalse(
             "不应出现参数值为字面量 0",
@@ -286,8 +286,8 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
     // 基础场景回归
     // ───────────────────────────────────────────────
 
-    private val nestedPlaceholderRegex = Regex("""\{N\{N\d+\}\}""")
-    private val zeroParamRegex = Regex("""\{\s*N\d+\s*:\s*0\s*\}""")
+    private val nestedPlaceholderRegex = Regex("""\{[^{}]*\{""")
+    private val zeroParamRegex = Regex("""\{\s*(?:\w+|N\d+)\s*:\s*0\s*\}""")
     private val nestedReactRegex = Regex("""\{\{\{""")
 
     fun testVueAttributeSimpleString() {
