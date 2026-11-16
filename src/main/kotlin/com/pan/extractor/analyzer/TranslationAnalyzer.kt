@@ -172,32 +172,34 @@ object TranslationAnalyzer {
         // 本身已是 i18n 资源，直接跳过，避免被再次 $t 包装。
         if (isReactIntlStructuredPosition(stringExpr)) return StringContext.DIRECT_TRANSLATION_ARG
 
-        val parent = stringExpr.parent
-        val directCall = when {
-            parent is JSCallExpression -> parent
-            parent.parent is JSCallExpression -> parent.parent as JSCallExpression
-            else -> null
-        }
+        // 找最近的翻译调用祖先（对模板字符串 JSStringTemplateExpression 也一样生效，
+        // 因为 IntelliJ JS PSI 里它继承自 JSLiteralExpression）。
+        // 用 PsiTreeUtil 代替直接 .parent，中间可能有 JSArgumentList / JSNamedArgument 等节点。
+        val nearestCall = com.intellij.psi.util.PsiTreeUtil.getParentOfType(
+            stringExpr, JSCallExpression::class.java, false
+        )
+        val nearestIsTranslation = nearestCall != null && statusOf(nearestCall) == TranslationCallStatus.TRANSLATION
 
-        // 直接参数是 UNKNOWN 调用且**名字是翻译候选**（t/tc/\$t/\$tc）→ 三态核心：无法证明来源，
-        // 保守跳过（零误改）。非候选名（console.log / alert / foo 等普通方法调用）即使无法证明
-        // 也按普通调用处理 → 参数中的中文正常进入提取（宁多提不漏提）。
-        if (directCall != null && statusOf(directCall) == TranslationCallStatus.UNKNOWN &&
-            isTranslationCandidateName(directCall)
-        ) {
-            return StringContext.INSIDE_UNKNOWN_CALL
-        }
-        // 直接参数是已证明的翻译调用 → 完全跳过（已有完整 $t('x')）
-        if (directCall != null && statusOf(directCall) == TranslationCallStatus.TRANSLATION) {
+        // 直接参数：stringExpr 就是最近翻译调用的**第一个实参本身** → 完全跳过。
+        // 注意：不使用 isAncestor，三元表达式内部的 '取消置顶' 虽然在第一个实参（三元表达式）
+        // 内部，但那是 INSIDE_TRANSLATION_EXPRESSION（需要自己处理），不是 DIRECT。
+        // 模板字符串 $t(`你好`) 里模板本身就是第一个实参 → isFirstArg=true → DIRECT ✅
+        if (nearestIsTranslation && nearestCall!!.arguments.firstOrNull() === stringExpr) {
             return StringContext.DIRECT_TRANSLATION_ARG
         }
 
+        // 最近的调用是 UNKNOWN 但名字是翻译候选 → 保守跳过
+        if (nearestCall != null && statusOf(nearestCall) == TranslationCallStatus.UNKNOWN &&
+            isTranslationCandidateName(nearestCall)
+        ) {
+            return StringContext.INSIDE_UNKNOWN_CALL
+        }
+
         // 祖先链：字面量嵌套在某个已证明翻译调用的参数表达式里（如 $t(isPinned ? 'a' : 'b')）
-        var cursor: PsiElement? = stringExpr.parent
+        // 包括 nearestCall（内部字符串虽然不是直接第一个实参，但在其参数表达式里）
+        var cursor: com.intellij.psi.PsiElement? = stringExpr.parent
         while (cursor != null) {
-            if (cursor is JSCallExpression && cursor !== directCall &&
-                statusOf(cursor) == TranslationCallStatus.TRANSLATION
-            ) {
+            if (cursor is JSCallExpression && statusOf(cursor) == TranslationCallStatus.TRANSLATION) {
                 return StringContext.INSIDE_TRANSLATION_EXPRESSION
             }
             cursor = cursor.parent

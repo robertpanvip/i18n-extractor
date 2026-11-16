@@ -383,7 +383,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertEquals(1, processor.analyzer.extractedStrings.size)
-        assertEquals("你好{0}", processor.analyzer.extractedStrings.values.first())
+        // 语义化占位符：简单标识符 name 直接透传为 {name}
+        assertEquals("你好{name}", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -419,7 +420,8 @@ class I18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertEquals(1, processor.analyzer.extractedStrings.size)
-        assertEquals("{0}，你好，今天是{1}", processor.analyzer.extractedStrings.values.first())
+        // 语义化占位符：name / day 直接透传
+        assertEquals("{name}，你好，今天是{day}", processor.analyzer.extractedStrings.values.first())
     }
 
     /**
@@ -494,15 +496,15 @@ class I18nProcessorTest : BasePlatformTestCase() {
             "提取结果应包含中文\"文件！\"，但 got: $extracted",
             extracted.contains("文件！")
         )
-        // 占位符应为 {0}（Generic 框架单花括号），不应出现 {{{{0}}}} 四重花括号
+        // 语义化占位符：types 直接透传，不应出现四重花括号
         assertFalse(
             "提取结果不应出现四重花括号 {{{{0}}}}, but got: $extracted",
             extracted.contains("{{{{")
         )
-        // 占位符应为 {0} 格式（Generic 框架）
+        // 语义化占位符：简单标识符 types → {types}
         assertEquals(
-            "提取结果应为\"只能上传{0}文件！\", but got: $extracted",
-            "只能上传{0}文件！",
+            "提取结果应为语义化占位符 {types}, but got: $extracted",
+            "只能上传{types}文件！",
             extracted
         )
     }
@@ -533,9 +535,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
             "提取结果不应出现四重花括号, but got: $extracted",
             extracted.contains("{{{{")
         )
+        // 语义化占位符：types / size 直接透传
         assertEquals(
-            "提取结果应为\"只能上传{0}文件，大小{1}MB\", but got: $extracted",
-            "只能上传{0}文件，大小{1}MB",
+            "提取结果应为语义化占位符 {types}{size}, but got: $extracted",
+            "只能上传{types}文件，大小{size}MB",
             extracted
         )
     }
@@ -585,9 +588,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
+        // 语义化占位符：简单标识符 name → {name}
         assertTrue(
-            "extractedStrings should contain '你好{0}', got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("你好{0}")
+            "extractedStrings should contain '你好{name}', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{name}")
         )
     }
 
@@ -605,9 +609,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
+        // 语义化占位符：简单标识符 name → {name}
         assertTrue(
-            "extractedStrings should contain '{0}你好', got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("{0}你好")
+            "extractedStrings should contain '{name}你好', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("{name}你好")
         )
     }
 
@@ -645,9 +650,10 @@ class I18nProcessorTest : BasePlatformTestCase() {
         val processor = I18nProcessor(project, file)
         processor.collect()
 
+        // 语义化占位符：简单标识符 count → {count}
         assertTrue(
-            "extractedStrings should contain '共{0}条记录', got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("共{0}条记录")
+            "extractedStrings should contain '共{count}条记录', got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("共{count}条记录")
         )
     }
 

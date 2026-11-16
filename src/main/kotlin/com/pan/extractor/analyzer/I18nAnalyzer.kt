@@ -465,10 +465,15 @@ class I18nAnalyzer(
                 // 因为 JSStringTemplateExpressionImpl 继承自 JSLiteralExpressionImpl，
                 // when 匹配是按顺序的，否则模板字符串会被 JSLiteralExpression 分支先吃掉。
                 is JSStringTemplateExpression -> {
-                    // 跳过已翻译的 $t() 调用参数，避免重复提取
-                    val parent = element.parent
-                    if (parent is JSCallExpression && parent.arguments.firstOrNull() === element &&
-                        TranslationAnalyzer.analyzeCall(parent).status == TranslationCallStatus.TRANSLATION
+                    // 跳过已翻译的 $t() 调用参数，避免重复提取。
+                    // 用 PsiTreeUtil.getParentOfType 代替直接 .parent，
+                    // 中间可能隔着 JSArgumentList / JSNamedArgument 等节点。
+                    // 注意：只跳过「模板字符串本身就是第一个实参」的情况 —
+                    // $t(`你好`) 跳过，但三元表达式里的模板字符串仍会走祖先链处理。
+                    val nearestCall = PsiTreeUtil.getParentOfType(element, JSCallExpression::class.java, false)
+                    if (nearestCall != null &&
+                        TranslationAnalyzer.statusOf(nearestCall) == TranslationCallStatus.TRANSLATION &&
+                        nearestCall.arguments.firstOrNull() === element
                     ) {
                         return@handle
                     }

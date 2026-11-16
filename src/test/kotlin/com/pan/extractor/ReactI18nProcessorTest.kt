@@ -537,8 +537,8 @@ class ReactI18nProcessorTest : BasePlatformTestCase() {
 
         // 模板字面量变量插值应使用 React 的双括号格式 {{0}}
         assertTrue(
-            "React 项目中 .ts 文件的模板字面量插值应使用双括号格式 {{0}}, got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("你好{{0}}")
+            "React 项目中 .ts 文件的模板字面量插值应使用语义化双括号 {{name}}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{{name}}")
         )
         assertFalse(
             "React 项目中 .ts 文件的模板字面量插值不应使用单括号格式 {0}, got: ${processor.analyzer.extractedStrings}",

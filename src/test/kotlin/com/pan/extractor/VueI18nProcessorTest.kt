@@ -454,12 +454,12 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         processor.collect()
 
         assertTrue(
-            "extractedStrings should contain '你好{N0}'（vue-i18n 不支持 {0} 数字占位）but got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("你好{N0}")
+            "extractedStrings should contain '你好{name}'（语义化占位符：简单标识符 name 透传）but got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{name}")
         )
-        // 不应当出现旧格式 {0}
+        // 不应当出现旧格式 {0} 或 {N0}（已语义化）
         assertFalse(
-            "extractedStrings 不应出现 Vue 不支持的数字占位 {0}, got: ${processor.analyzer.extractedStrings}",
+            "extractedStrings 不应出现旧占位格式 {0}/{N0}, got: ${processor.analyzer.extractedStrings}",
             processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
     }
@@ -738,11 +738,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         // 模板字面量变量插值应使用 Vue 的单括号命名格式 {N0}，而不是 React 的 {{0}}
         // vue-i18n 不支持 `$t('{0}', { '0': val })`，必须是命名占位 + 标识符 key。
         assertTrue(
-            "Vue 项目中 TSX 的模板字面量插值应使用单括号命名格式 {N0}, got: ${processor.analyzer.extractedStrings}",
-            processor.analyzer.extractedStrings.containsValue("你好{N0}")
+            "Vue 项目中 TSX 的模板字面量插值应使用语义化单括号 {name}, got: ${processor.analyzer.extractedStrings}",
+            processor.analyzer.extractedStrings.containsValue("你好{name}")
         )
         assertFalse(
-            "Vue 项目中 TSX 的模板字面量插值不应使用 Vue 不支持的数字占位 {0}, got: ${processor.analyzer.extractedStrings}",
+            "Vue 项目中 TSX 的模板字面量插值不应使用旧占位 {0}/{N0}, got: ${processor.analyzer.extractedStrings}",
             processor.analyzer.extractedStrings.containsValue("你好{0}")
         )
         assertFalse(
@@ -2257,14 +2257,14 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             badMsg.isEmpty()
         )
 
-        // ② 资源文案：应当包含命名占位 {N0}、{N1}
+        // ② 资源文案：语义化占位符直接透传（简单标识符 greeting/model/suffix）
         assertTrue(
-            "应提取出带 {N0} 命名占位的拼接/模板文案，got: ${processor.analyzer.extractedStrings}",
-            extractedValues.any { it.contains("{N0}") }
+            "应提取出带语义化 {greeting} 的拼接文案，got: ${processor.analyzer.extractedStrings}",
+            extractedValues.any { it.contains("{greeting}") }
         )
         assertTrue(
-            "多占位符的拼接/模板文案里应出现 {N1}，got: ${processor.analyzer.extractedStrings}",
-            extractedValues.any { it.contains("{N1}") }
+            "模板文案应出现 {model} 或 {suffix}，got: ${processor.analyzer.extractedStrings}",
+            extractedValues.any { it.contains("{model}") } && extractedValues.any { it.contains("{suffix}") }
         )
 
         // ③ run 后检查替换结果：不能出现 `"0":` / `'0':` / `"1":` / `'1':`
@@ -2279,26 +2279,26 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             badMatches.isEmpty()
         )
 
-        // ④ run 后必须出现：{ N0: greeting … } / "{ N0: model … }" 这种标识符 key
+        // ④ run 后必须出现语义化 key（greeting/model/suffix，不带引号）
         assertTrue(
-            "Vue 调用侧参数对象应使用标识符 key（N0:、N1:，不带引号），got:\n$result",
-            Regex("""\{\s*N0\s*:""").containsMatchIn(result)
-                && Regex("""N1\s*:""").containsMatchIn(result)
+            "Vue 调用侧参数对象应使用语义化 key（greeting:/model:/suffix:），got:\n$result",
+            Regex("""\{\s*greeting\s*:""").containsMatchIn(result)
+        )
+        assertTrue(
+            "Vue 调用侧参数对象应包含 model/suffix，got:\n$result",
+            Regex("""model\s*:""").containsMatchIn(result) && Regex("""suffix\s*:""").containsMatchIn(result)
         )
 
-        // ⑤ 新文案开头不应出现错误的数字占位
-        assertFalse(
-            "提取文案里不应包含「默认模型配置{0}子{N1}」（应当是 N 前缀命名占位），got: ${processor.analyzer.extractedStrings}",
-            extractedValues.contains("默认模型配置{0}子{N1}")
-        )
+        // ⑤ 验证不应该再出现旧格式裸数字 key 或硬编码 N0/N1
+        // ⑤ 模板字面量形式：`默认模型配置${model}子${suffix}` → {model}默认模型配置子{suffix}
         assertTrue(
-            "提取文案里应包含「默认模型配置{N0}子{N1}」（模板字面量两变量插值），got: ${processor.analyzer.extractedStrings}",
-            extractedValues.contains("默认模型配置{N0}子{N1}")
+            "模板字面量应提取出 {model}/{suffix}，got: ${processor.analyzer.extractedStrings}",
+            extractedValues.any { it.contains("{model}") && it.contains("{suffix}") && it.contains("默认模型配置") }
         )
-        // 拼接形式：greeting + "默认模型配置" + suffix → {N0}默认模型配置{N1}
+        // 拼接形式：greeting + "默认模型配置" + suffix → {greeting}默认模型配置{suffix}
         assertTrue(
-            "字符串拼接的两占位拼接场景应提取出「{N0}默认模型配置{N1}」，got: ${processor.analyzer.extractedStrings}",
-            extractedValues.contains("{N0}默认模型配置{N1}")
+            "字符串拼接应提取出 {greeting}/{suffix}，got: ${processor.analyzer.extractedStrings}",
+            extractedValues.any { it.contains("{greeting}") && it.contains("{suffix}") && it.contains("默认模型配置") }
         )
     }
 
@@ -2311,26 +2311,29 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
                 "src/prefix.ts",
                 """
                 function demo(model: string, suffix: string): string {
-                    return "默认模型配置" + model + suffix
+                    // 用复杂表达式让 SAFE_SEMANTIC_KEY 不匹配 → fallback 纯数字编号
+                    return "默认模型配置" + (model + 1) + suffix
                 }
                 """.trimIndent()
             )
             val processor = I18nProcessor(project, file)
             processor.collect()
             val extractedValues: Collection<String> = processor.analyzer.extractedStrings.values
+            // (model + 1) 是复杂表达式 → fallback 编号 arg0（因为前缀配置了 arg）
+            // suffix 是简单标识符 → 语义化透传 {suffix}
             assertTrue(
-                "使用配置前缀 arg 后应提取出 {arg0}/{arg1} 命名占位，got: ${processor.analyzer.extractedStrings}",
-                extractedValues.any { it.contains("{arg0}") && it.contains("{arg1}") }
+                "复杂表达式 fallback 应使用配置前缀 arg0，got: ${processor.analyzer.extractedStrings}",
+                extractedValues.any { it.contains("{arg0}") }
             )
-            assertFalse(
-                "不应再出现默认前缀 {N0}/{N1}，got: ${processor.analyzer.extractedStrings}",
-                extractedValues.any { it.contains("{N0}") || it.contains("{N1}") }
+            assertTrue(
+                "语义化 key suffix 应直接透传，got: ${processor.analyzer.extractedStrings}",
+                extractedValues.any { it.contains("{suffix}") }
             )
             processor.runWithUndo()
             val result = file.text
             assertTrue(
-                "Vue 调用侧参数对象应使用配置前缀 arg0:/arg1:（不带引号）",
-                Regex("""\{\s*arg0\s*:""").containsMatchIn(result) && Regex("""arg1\s*:""").containsMatchIn(result)
+                "Vue 调用侧参数对象应包含 arg0 和 suffix",
+                Regex("""\{\s*arg0\s*:""").containsMatchIn(result) && Regex("""suffix\s*:""").containsMatchIn(result)
             )
         } finally {
             settings.setVuePlaceholderPrefix(savedPrefix)
@@ -2920,8 +2923,8 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         val result = file.text
         // 资源文案应含命名占位 {N0}
         assertTrue(
-            "应生成 \$t('第{N0}版', ...) 含命名占位 {N0}，got:\n$result",
-            result.contains("第{N0}版")
+            "应生成 \$t('第{record.versionNum}版', ...) 含语义化属性链占位，got:\n$result",
+            result.contains("第{record.versionNum}版")
         )
         // 不应出现嵌套占位符 {N{N0}}
         assertFalse(
@@ -2930,16 +2933,16 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         // 参数值应是变量表达式 record.versionNum，而不是字面量 0
         assertTrue(
-            "参数对象应含 N0: record.versionNum，got:\n$result",
-            result.contains("N0: record.versionNum")
+            "参数对象应含语义化 key record.versionNum: record.versionNum，got:\n$result",
+            result.contains("record.versionNum: record.versionNum")
         )
 
         // mustache 整体应被替换为 $t('第{N0}版', { N0: record.versionNum })，且子字面量
         // "第"/"版" 不应被重复提取（否则会残留 $t('第') / $t('版') 或嵌套替换）
         val c = result.replace("\\s+".toRegex(), "")
         assertTrue(
-            "mustache 应整体替换为 {{ \$t('第{N0}版', { N0: record.versionNum }) }}，got:\n$result",
-            c.contains("{{\$t('第{N0}版',{N0:record.versionNum})}}")
+            "mustache 应整体替换为语义化占位 {{ \$t('第{record.versionNum}版', { record.versionNum: record.versionNum }) }}，got:\n$result",
+            c.contains("{{\$t('第{record.versionNum}版',{record.versionNum:record.versionNum})}}")
         )
         assertFalse(
             "子字面量不应被单独重复提取，got:\n$result",
