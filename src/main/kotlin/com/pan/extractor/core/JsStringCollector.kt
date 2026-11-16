@@ -121,9 +121,17 @@ class JsStringCollector(
         }
 
 
-        // 步骤4：检查 message 是否包含中文，不含中文则跳过
-        if (!processor.containsTargetLanguage(message, SiteKind.JS_TEMPLATE)) {
-            return
+        // 步骤4：检查是否需要翻译。模板字符串的中文可能出现在三处：
+        //   a) 静态部分（反引号里的纯文本）→ 替换 ${} 后 message 里
+        //   b) ${} 内联的纯字符串字面量 → extractPureStringContent 内联进 message
+        //   c) ${} 复杂表达式 fallback params → message 只剩 {N0}，但 params 里的表达式含中文
+        // (a)(b) → message 直接含中文；(c) → message 不含但 params 里有中文表达式
+        val hasChineseInMessage = processor.containsTargetLanguage(message, SiteKind.JS_TEMPLATE)
+        val hasChineseInParams = params.values.any { v ->
+            processor.containsTargetLanguage(v, SiteKind.JS_TEMPLATE)
+        }
+        if (!hasChineseInMessage && !hasChineseInParams) {
+            return // 整体都不含中文，跳过
         }
 
         // 步骤5：保存提取的message（按trim后的value去重）
@@ -404,19 +412,35 @@ class JsStringCollector(
         }
 
         // 跳过模板字面量内部的字符串字面量（如 `${'中文'}` 中的 '中文'），
-        // 因为外层模板字面量的处理逻辑会统一处理——但仅限「外层模板的静态部分（非 ${}）
-        // 含中文」的情况。如果外层模板的中文全在 ${} 内部（如 `${cond ? '中文' : 'EN'}`），
-        // 外层 collectJSStringTemplate 会把 ${} 整体替换成占位符，导致 message 无中文而跳过，
-        // 此时内层字面量必须自己处理，否则两边落空（rewrites = 0）。
+        // 因为外层模板字面量的处理逻辑会统一处理。
+        //
+        // 跳过条件（任一满足即跳过）：
+        //   1) 模板的「静态部分」（去掉 ${...} 后的残留）含中文 —— collectJSStringTemplate
+        //      会把所有 ${} 替换成占位符后整体产出 message（含静态中文），登记 JS_TEMPLATE rewrite；
+        //   2) 模板里有「fallback 的 ${}」（复杂表达式：三元/拼接/函数调用等，extractPureStringContent
+        //      返回 null）—— 即使 message 只剩 {N0}，外层也会把整个 ${} 包成占位符，
+        //      内层字面量单独跑出来会导致「内层被包 $t()、外层模板丢失」的拆穿问题；
+        //   3) 静态部分无中文但所有 ${} 都是内联的纯字符串字面量 —— 整体 message 仍然含中文
+        //      （如 `${"他说'你好'"}` → message = 他说'你好'），外层模板会登记 JS_TEMPLATE rewrite，
+        //      内层不应再单独登记 JS_LITERAL。
         val parentTpl = PsiTreeUtil.getParentOfType(ele, JSStringTemplateExpression::class.java)
         if (parentTpl != null) {
             val tplContent = parentTpl.text.substring(1, parentTpl.text.length - 1)
-            // 去掉所有 ${...} 插值后，看剩余的静态部分是否含中文
+            // 条件 1：静态部分含中文
             val staticPart = templateVarRegex.replace(tplContent, "")
             if (processor.containsTargetLanguage(staticPart, SiteKind.JS_TEMPLATE)) {
                 return // 外层模板有静态中文，交给它统一处理
             }
-            // 否则：外层模板的中文全在 ${} 内部，继续处理内层字面量
+            // 条件 2 + 3：跑一次 message 预计算，看是否整体含中文 / 有 fallback
+            var anyFallback = false
+            val hasChinese = templateVarRegex.replace(tplContent) { m ->
+                val inner = m.groupValues[1].trim()
+                val pure = processor.extractPureStringContent(inner)
+                if (pure != null) pure else { anyFallback = true; "{SKIP_PLACEHOLDER}" }
+            }.let { processor.containsTargetLanguage(it, SiteKind.JS_TEMPLATE) }
+            if (anyFallback || hasChinese) {
+                return // 外层模板会整体接管，内层字面量跳过
+            }
         }
 
         if (processor.isJSTemplateLiteral(raw)) {

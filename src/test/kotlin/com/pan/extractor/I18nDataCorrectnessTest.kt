@@ -727,8 +727,9 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             const msg = `${'$'}{"他说'你好'"}`;
             </script>
         """)
-        // 同上，单引号保留
-        assertTrue("单引号应保留在 message 中: $r", r.contains("'你好'"))
+        // 同上，单引号保留（$t 用单引号包裹时内部单引号会被转义为 \'）
+        assertTrue("单引号应保留在 message 中（原始或转义形式）: $r",
+            r.contains("'你好'") || r.contains("\\'你好\\'"))
         assertFalse("不应出现占位符: $r", r.contains("{$"))
     }
 
@@ -848,7 +849,8 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
             const msg = `${'$'}{"他说'你好'"}`;
             </script>
         """)
-        assertTrue("单引号应完整保留: $r", r.contains("'你好'"))
+        assertTrue("单引号应完整保留（原始或转义形式）: $r",
+            r.contains("'你好'") || r.contains("\\'你好\\'"))
         assertTrue("中文完整: $r", r.contains("你好"))
         assertFalse("不应出现占位符（纯内联）: $r", r.contains("{$"))
     }
