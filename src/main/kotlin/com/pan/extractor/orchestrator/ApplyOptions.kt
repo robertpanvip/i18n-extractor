@@ -19,4 +19,10 @@ data class ApplyOptions(
     val outputMode: OutputDestination,
     val entryFile: VirtualFile?,
     val clipboardJson: String? = null,
+    /**
+     * 剪贴板模式下是否与本地入口文件去重。
+     * 为 true 且 [entryFile] 非空时，先读取入口文件已有 keys，
+     * 只把提取结果里**新增**的 key 复制到剪贴板。
+     */
+    val clipboardDedup: Boolean = false,
 )

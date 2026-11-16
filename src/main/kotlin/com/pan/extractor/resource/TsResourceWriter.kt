@@ -232,6 +232,32 @@ object TsResourceWriter {
     }
 
     /**
+     * 读取 TS/JS 入口文件并提取所有已有扁平 key（用于剪贴板去重场景）。
+     * 解析失败或文件不存在返回 null（调用方降级为不去重）。
+     * 支持 spread 路由（会把 spread 目标文件里的 key 也算进去）。
+     */
+    fun extractExistingKeys(project: Project, entryVf: VirtualFile): Set<String>? {
+        flushDocumentToVfs(entryVf)
+        val entryText = Util.readVirtualFileText(project, entryVf) ?: return null
+        val info = StaticObjectParser.parseTsExportedObject(entryText) ?: return null
+        val result = LinkedHashSet<String>(info.staticKV.keys)
+        // spread 引用目标的 key 也算"已存在"（避免 spread 里已有的 key 被重复粘贴）
+        val objBody = entryText.substring(info.objectRange.first, info.objectRange.last + 1)
+        val spreadRefs = TsObjectMerger.findSpreadRefs(objBody, emptyList())
+        val visited = HashSet<String>()
+        for (ref in spreadRefs) {
+            val target = TsObjectMerger.resolveSpreadTarget(
+                project, entryVf, entryText, ref.varName, ref.path, visited
+            ) ?: continue
+            // 只有可写目标的 key 算"已有"；node_modules 只读目标里的 key 也算（但不会尝试写入）
+            for (k in target.existingKeys.keys) {
+                result.add(TsObjectMerger.joinPath(ref.path, k))
+            }
+        }
+        return result
+    }
+
+    /**
      * 把 VirtualFile 内容替换为新文本（Write 安全封装）。
      * 迁移自 [com.pan.extractor.editor.TsObjectMerger.writeVirtualFileText]（实现体 1:1）。
      * 调用方需要自己包裹在 WriteCommandAction / invokeAndWait 中。

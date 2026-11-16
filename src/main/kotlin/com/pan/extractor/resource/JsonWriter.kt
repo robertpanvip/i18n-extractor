@@ -111,6 +111,43 @@ object JsonWriter {
         return result
     }
 
+    /**
+     * 读取入口文件并提取所有已有扁平 key（用于剪贴板去重场景）。
+     * 解析失败或文件不存在返回 null（调用方降级为不去重）。
+     */
+    fun extractExistingKeys(entryVf: VirtualFile): Set<String>? {
+        flushDocumentToVfs(entryVf)
+        val content = try {
+            String(entryVf.contentsToByteArray(), StandardCharsets.UTF_8)
+        } catch (_: Exception) {
+            return null
+        }
+        val body = if (content.startsWith("\uFEFF")) content.removePrefix("\uFEFF") else content
+        val rootJson: JsonElement = try {
+            JsonParser.parseString(body)
+        } catch (_: Exception) {
+            return null
+        }
+        val nested = jsonElementToNestedMap(rootJson)
+        val flat = LinkedHashSet<String>()
+        flattenKeys(nested, "", flat)
+        return flat
+    }
+
+    /** 递归展开嵌套 Map：点式连接路径，如 { "a": { "b": "v" } } → "a.b"。 */
+    private fun flattenKeys(map: Map<String, Any?>, prefix: String, out: MutableSet<String>) {
+        for ((k, v) in map) {
+            val path = if (prefix.isEmpty()) k else "$prefix.$k"
+            when (v) {
+                is Map<*, *> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    flattenKeys(v as Map<String, Any?>, path, out)
+                }
+                else -> out.add(path) // 叶子节点（含 null / String / Boolean / Number / List）都算已存在
+            }
+        }
+    }
+
     private fun jsonElementToKotlin(el: JsonElement): Any? {
         return when {
             el.isJsonNull -> null

@@ -23,6 +23,24 @@ object ResourceApplier {
     private val LOG = Logger.getInstance(ResourceApplier::class.java)
 
     /**
+     * 读取入口文件并提取所有已有扁平 key（剪贴板去重场景）。
+     * json → [JsonWriter.extractExistingKeys]；ts/js → [TsResourceWriter.extractExistingKeys]；
+     * 不支持的后缀或解析失败返回 null（调用方降级为不去重）。
+     */
+    fun extractExistingKeys(project: Project, entryVf: VirtualFile): Set<String>? {
+        return try {
+            when (entryVf.extension?.lowercase()) {
+                "json" -> JsonWriter.extractExistingKeys(entryVf)
+                "ts", "tsx", "js", "jsx" -> TsResourceWriter.extractExistingKeys(project, entryVf)
+                else -> null
+            }
+        } catch (t: Throwable) {
+            PluginLogBuffer.warn(LOG, "ResourceApplier: extractExistingKeys 异常，返回 null（降级为不去重）", t)
+            null
+        }
+    }
+
+    /**
      * 把写回意图组装为 [ResourcePlan]。
      *
      * @param format 目标格式：`json` / `ts` / `tsx` / `js` / `jsx`。
