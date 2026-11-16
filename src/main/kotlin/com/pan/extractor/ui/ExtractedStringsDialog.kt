@@ -11,6 +11,7 @@ import com.pan.extractor.locate.EntryFileLocator
 import com.pan.extractor.bootstrap.I18nBootstrap
 import com.pan.extractor.bootstrap.I18nBootstrapSupport
 import com.pan.extractor.editor.TsFileEditor
+import com.pan.extractor.resource.ResourceApplier
 import com.pan.extractor.*
 import com.pan.extractor.messages.I18nExtractorBundle
 import com.pan.extractor.analyzer.*
@@ -56,6 +57,9 @@ class ExtractedStringsDialog(
     private val LOG = Logger.getInstance(ExtractedStringsDialog::class.java)
 
     private var editor: Editor? = null
+    /** 原始提取结果（供去重前回退 / 重新计算） */
+    private val originalExtracted: LinkedHashMap<String, String> = LinkedHashMap(extracted)
+    /** 当前实际在预览里展示（且最终会被拷贝/输出）的 JSON —— 可能是去重后的子集 */
     var json: String? = null
     var mergePlan: MergePlan = MergePlan(emptyList(), emptyList())
         private set
@@ -83,6 +87,8 @@ class ExtractedStringsDialog(
     private lateinit var entryPathField: JTextField
     private lateinit var btnPickEntry: JButton
     private lateinit var lblEntryStatus: JLabel
+    /** 剪贴板模式下「与本地入口文件去重」勾选框（仅剪贴板模式启用） */
+    private lateinit var chkDedupExisting: JCheckBox
 
     // Swing 默认列：Boolean / String / String / String / String / Int / String
     private class AffixModel(rows: Vector<Vector<Any?>>, cols: Vector<String>) : DefaultTableModel(rows, cols) {
@@ -121,8 +127,9 @@ class ExtractedStringsDialog(
     override fun createCenterPanel(): JComponent {
         val prettyJson = GsonBuilder()
             .setPrettyPrinting()
+            .disableHtmlEscaping()
             .create()
-            .toJson(extracted)
+            .toJson(originalExtracted)
         json = prettyJson
         val editorFactory = EditorFactory.getInstance()
         val document = editorFactory.createDocument(prettyJson)
@@ -196,58 +203,62 @@ class ExtractedStringsDialog(
         val panel = JPanel(GridBagLayout())
         panel.border = BorderFactory.createTitledBorder(I18nExtractorBundle.message("output.panel.title"))
 
-        val gbc0 = GridBagConstraints().apply {
-            gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST
-            insets = Insets(4, 8, 4, 8)
-        }
-        val gbc1 = GridBagConstraints().apply {
-            gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; fill = GridBagConstraints.HORIZONTAL
-            weightx = 1.0; insets = Insets(4, 0, 4, 4)
-        }
-        val gbc2 = GridBagConstraints().apply {
-            gridx = 2; gridy = 0; anchor = GridBagConstraints.WEST
-            insets = Insets(4, 0, 4, 8)
-        }
-        val gbcStatus = GridBagConstraints().apply {
-            gridx = 0; gridy = 1; gridwidth = 3; anchor = GridBagConstraints.WEST
-            fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
-            insets = Insets(0, 8, 6, 8)
-        }
-        val gbcBootstrap = GridBagConstraints().apply {
-            gridx = 0; gridy = 2; gridwidth = 3; anchor = GridBagConstraints.WEST
-            fill = GridBagConstraints.HORIZONTAL; weightx = 1.0
-            insets = Insets(0, 8, 6, 8)
-        }
+        // ═══════════════════════════════════════════════════════════
+        // 用户要求：入口文件路径 + Pick 按钮放「输出方式」前面
+        // 最终布局：
+        //   Row 0 (入口文件)：[Label "入口文件"] [EntryPathField ......] [Pick...]
+        //   Row 1 (去重选项)：  [ 与本地入口文件去重 checkbox ]
+        //   Row 2 (输出方式)：  [Clipboard radio]  [Overwrite radio]
+        //   Row 3 (状态)：      [Entry 状态 label]
+        //   Row 4 (bootstrap)：  (自动初始化 i18n —— 按需显示)
+        // ═══════════════════════════════════════════════════════════
 
-        // 行 0 左：单选按钮组
+        fun gbc(gridx: Int, gridy: Int, gridwidth: Int = 1, fill: Int = GridBagConstraints.NONE,
+                anchor: Int = GridBagConstraints.WEST, weightx: Double = 0.0): GridBagConstraints =
+            GridBagConstraints().apply {
+                this.gridx = gridx; this.gridy = gridy; this.gridwidth = gridwidth
+                this.fill = fill; this.anchor = anchor; this.weightx = weightx
+                this.insets = Insets(4, 8, 4, 4)
+            }
+
+        // ── Row 0：入口文件路径（用户说的「入口文件做到输出方式前面」） ──
+        val lblEntryFile = JLabel(I18nExtractorBundle.message("entry.file.label"))
+        panel.add(lblEntryFile, gbc(gridx = 0, gridy = 0))
+        entryPathField = JTextField()
+        entryPathField.toolTipText = I18nExtractorBundle.message("entry.file.tooltip")
+        panel.add(entryPathField, gbc(gridx = 1, gridy = 0, fill = GridBagConstraints.HORIZONTAL, weightx = 1.0))
+        btnPickEntry = JButton(I18nExtractorBundle.message("button.pick.entry"))
+        btnPickEntry.addActionListener { onPickEntryFile() }
+        panel.add(btnPickEntry, gbc(gridx = 2, gridy = 0))
+
+        // ── Row 1：去重 checkbox ──
+        chkDedupExisting = JCheckBox(I18nExtractorBundle.message("radio.clipboard.dedup"))
+        chkDedupExisting.addActionListener { onDedupToggle() }
+        panel.add(chkDedupExisting, gbc(gridx = 0, gridy = 1, gridwidth = 3,
+            fill = GridBagConstraints.HORIZONTAL, weightx = 1.0).apply { this.insets = Insets(6, 8, 4, 8) })
+
+        // ── Row 2：输出方式单选（一行横排） ──
         val radioPanel = JPanel()
-        radioPanel.layout = BoxLayout(radioPanel, BoxLayout.Y_AXIS)
+        radioPanel.layout = BoxLayout(radioPanel, BoxLayout.X_AXIS)
         val group = ButtonGroup()
         radioClipboard = JRadioButton(I18nExtractorBundle.message("radio.clipboard"))
         radioOverwrite = JRadioButton(I18nExtractorBundle.message("radio.overwrite"))
         group.add(radioClipboard); group.add(radioOverwrite)
         radioPanel.add(radioClipboard)
+        radioPanel.add(Box.createHorizontalStrut(16))
         radioPanel.add(radioOverwrite)
-        radioClipboard.addActionListener { syncEntryControlsEnabled() }
-        radioOverwrite.addActionListener { syncEntryControlsEnabled() }
-        panel.add(radioPanel, gbc0)
+        radioClipboard.addActionListener { syncOutputModeControls() }
+        radioOverwrite.addActionListener { syncOutputModeControls() }
+        panel.add(radioPanel, gbc(gridx = 0, gridy = 2, gridwidth = 3,
+            fill = GridBagConstraints.HORIZONTAL, weightx = 1.0).apply { this.insets = Insets(0, 8, 6, 8) })
 
-        // 行 0 中：入口文件路径文本框
-        entryPathField = JTextField()
-        entryPathField.toolTipText = I18nExtractorBundle.message("entry.file.tooltip")
-        panel.add(entryPathField, gbc1)
-
-        // 行 0 右：选择文件按钮
-        btnPickEntry = JButton(I18nExtractorBundle.message("button.pick.entry"))
-        btnPickEntry.addActionListener { onPickEntryFile() }
-        panel.add(btnPickEntry, gbc2)
-
-        // 行 1：状态/提示 Label
+        // Row 3：状态提示 label
         lblEntryStatus = JLabel()
         lblEntryStatus.putClientProperty("html.disable", null)
-        panel.add(lblEntryStatus, gbcStatus)
+        panel.add(lblEntryStatus, gbc(gridx = 0, gridy = 3, gridwidth = 3,
+            fill = GridBagConstraints.HORIZONTAL, weightx = 1.0).apply { this.insets = Insets(0, 8, 6, 8) })
 
-        // 行 2：项目缺 i18n 初始化时，展示“自动初始化 i18n”勾选框由用户选择
+        // ── Row 4：bootstrap checkbox（仅项目缺 i18n 初始化时展示） ──
         val missing = bootstrapMissing
         if (missing != null) {
             val frameworkLabel = when (missing.framework.id) {
@@ -255,8 +266,6 @@ class ExtractedStringsDialog(
                 VueI18nStrategy.id -> "Vue（vue-i18n）"
                 else -> missing.framework.id
             }
-            // JCheckBox / JRadioButton 在 IntelliJ LAF 下不渲染 HTML，`&nbsp;`/`&lt;` 会按字面显示。
-            // 故勾选框用纯文本短句，完整说明放到只读 JEditorPane（text/html）里展示。
             val chk = JCheckBox(I18nExtractorBundle.message("bootstrap.checkbox.toggle"))
             chk.isSelected = true
             chkI18nBootstrap = chk
@@ -280,7 +289,8 @@ class ExtractedStringsDialog(
             box.alignmentX = java.awt.Component.LEFT_ALIGNMENT
             box.add(chk)
             box.add(detail)
-            panel.add(box, gbcBootstrap)
+            panel.add(box, gbc(gridx = 0, gridy = 4, gridwidth = 3,
+                fill = GridBagConstraints.HORIZONTAL, weightx = 1.0).apply { this.insets = Insets(0, 8, 6, 8) })
         }
 
         return panel
@@ -307,21 +317,98 @@ class ExtractedStringsDialog(
         if (candidate != null) {
             entryPathField.text = candidate.path
             lblEntryStatus.text = I18nExtractorBundle.message("status.auto.found", candidate.name, candidate.extension?.uppercase().orEmpty())
+            // 自动找到入口文件 → 默认勾上"去重"，对用户最友好
+            chkDedupExisting.isSelected = true
         } else {
             lblEntryStatus.text = I18nExtractorBundle.message("status.no.entry")
             if (radioOverwrite.isSelected) {
                 // 没找到入口 → 自动退回 clipboard，避免用户误选覆盖
                 radioClipboard.isSelected = true
             }
+            // 没入口文件 → dedup 没意义
+            chkDedupExisting.isSelected = false
         }
 
-        syncEntryControlsEnabled()
+        syncOutputModeControls()
+        // 初始根据 dedup checkbox 状态刷新 preview
+        refreshPreviewJson()
     }
 
-    private fun syncEntryControlsEnabled() {
-        val enable = radioOverwrite.isSelected
-        entryPathField.isEnabled = enable
-        btnPickEntry.isEnabled = enable
+    /**
+     * 根据输出方式同步各控件的启用状态：
+     *   - FILE 模式：入口文件路径 + Pick 启用；dedup checkbox 禁用（FILE 模式本身就做 merge）
+     *   - CLIPBOARD 模式：dedup checkbox 启用；入口文件路径/按钮也启用（去重时要读入口）
+     */
+    private fun syncOutputModeControls() {
+        val isFile = radioOverwrite.isSelected
+        entryPathField.isEnabled = true  // 两种模式都需要读入口：FILE 写回 + CLIPBOARD 去重
+        btnPickEntry.isEnabled = true
+        // dedup checkbox 只在 CLIPBOARD 模式下有意义
+        chkDedupExisting.isEnabled = !isFile
+        if (isFile && chkDedupExisting.isSelected) {
+            // 切到 FILE 模式时自动取消 dedup，然后刷新 preview 恢复完整 JSON
+            chkDedupExisting.isSelected = false
+            refreshPreviewJson()
+        }
+    }
+
+    /** dedup checkbox 勾选变化 → 刷新预览 JSON */
+    private fun onDedupToggle() {
+        refreshPreviewJson()
+    }
+
+    /**
+     * 根据 dedup checkbox 状态重新计算 JSON 并刷新 preview editor。
+     * 勾上且有可用入口文件 → 过滤掉已有 key，只展示新增 key；
+     * 取消或读不到入口 → 回退为原始 extracted 全量展示。
+     * 最终 [json] 字段也同步更新（orchestrator 用它作为 clipboard 输出）。
+     */
+    private fun refreshPreviewJson() {
+        val filtered: Map<String, String> = if (chkDedupExisting.isSelected) {
+            val entryFile = resolveEntryFile()
+            val existingKeys = if (entryFile != null) {
+                try {
+                    com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction<Set<String>?> {
+                        ResourceApplier.extractExistingKeys(project, entryFile)
+                    }
+                } catch (t: Throwable) {
+                    null
+                }
+            } else null
+
+            if (existingKeys != null && existingKeys.isNotEmpty()) {
+                originalExtracted.filterKeys { it !in existingKeys }
+            } else {
+                originalExtracted  // 解析失败或没 entry → 降级为全量
+            }
+        } else {
+            originalExtracted
+        }
+
+        val pretty = GsonBuilder()
+            .setPrettyPrinting()
+            .disableHtmlEscaping()
+            .create()
+            .toJson(LinkedHashMap(filtered))
+        json = pretty
+
+        // 刷新 editor document
+        val ed = editor
+        if (ed != null) {
+            val doc = ed.document
+            doc.setText(pretty)
+        }
+    }
+
+    /** 从 entryPathField 解析 VirtualFile（内部 helper） */
+    private fun resolveEntryFile(): VirtualFile? {
+        val path = entryPathField.text?.trim().orEmpty()
+        if (path.isEmpty()) return null
+        val f = LocalFileSystem.getInstance().findFileByPath(path) ?: return null
+        if (!f.isValid || f.isDirectory) return null
+        val ext = f.extension?.lowercase() ?: return null
+        if (ext !in setOf("ts", "tsx", "js", "jsx", "json")) return null
+        return f
     }
 
     /** 用户手动选入口文件。 */
@@ -355,6 +442,8 @@ class ExtractedStringsDialog(
             } else {
                 I18nExtractorBundle.message("status.unsupported.extension", chosen.extension.orEmpty())
             }
+            // 切入口文件后刷新去重 preview
+            refreshPreviewJson()
         }
     }
 
