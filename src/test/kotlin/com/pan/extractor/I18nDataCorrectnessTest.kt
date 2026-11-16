@@ -882,9 +882,9 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
     /** F2: interpolate 中占位符 key 本身含引号（罕见但健壮） */
     fun testVueInterpolateKeyContainingQuote() {
         val result = VueI18nStrategy.interpolatePlaceholders(
-            '你好{"user"}\'',
+            """你好{"user"}世界""",
             mapOf("\"user\"" to "小明")
         )
-        assertEquals("key 含引号应精确匹配", "你好小明'", result)
+        assertEquals("key 含引号应精确匹配", "你好小明世界", result)
     }
 }
