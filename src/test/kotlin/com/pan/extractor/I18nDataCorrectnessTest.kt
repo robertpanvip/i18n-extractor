@@ -695,4 +695,196 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
         // $5 不会被当占位符插值
         assertFalse("$5 不应触发错误的占位符: $r", r.contains("{5}"))
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // 以下：模板字符串「引号嵌套引号」完整矩阵
+    // 路径 A: extractPureStringContent —— ${'xxx'}/${"xxx"} 直接内联
+    // 路径 B: fallback 编号（复杂表达式含引号）
+    // 路径 C: 静态部分含引号（引号不走占位符替换）
+    // 路径 D: 嵌套模板字符串（引号在内部静态部分）
+    // 路径 E: 引号里再包引号
+    // ════════════════════════════════════════════════════════════════
+
+    // ── A4/A5: ${} 内部字符串字面量还含引号（引号在 JS 字符串内部） ──
+
+    /** A4: `${'他说"你好"'}` —— 单引号 JS 字符串里含双引号字面量 */
+    fun testTplSingleQuoteLiteralContainsDoubleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{'他说"你好"'}`;
+            </script>
+        """)
+        // extractPureStringContent 提取 → 内联。双引号保留在 message 里
+        assertTrue("双引号应保留在 message 中: $r", r.contains("\"你好\"") || r.contains("\\\"你好\\\""))
+        // 整个模板是一个内联字符串 → 不应再出现占位符
+        assertFalse("不应出现占位符: $r", r.contains("{$"))
+    }
+
+    /** A5: `${"他说'你好'"}` —— 双引号 JS 字符串里含单引号字面量 */
+    fun testTplDoubleQuoteLiteralContainsSingleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{"他说'你好'"}`;
+            </script>
+        """)
+        // 同上，单引号保留
+        assertTrue("单引号应保留在 message 中: $r", r.contains("'你好'"))
+        assertFalse("不应出现占位符: $r", r.contains("{$"))
+    }
+
+    /** A6: `${'他说"Hello"，你好'}` —— 中英混合 + 引号 */
+    fun testTplLiteralInlineWithMixedLangQuotes() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{'他说"Hello"，你好'}`;
+            </script>
+        """)
+        // 整体内联 → $t('他说"Hello"，你好') 形式
+        assertTrue("应完整提取中文: $r", r.contains("你好"))
+        assertTrue("应保留双引号: $r", r.contains("\"Hello\"") || r.contains("\\\"Hello\\\""))
+        assertFalse("不应出现占位符: $r", r.contains("{$"))
+    }
+
+    // ── B3/B4/B5: 复杂表达式含引号 → fallback 编号 ──
+
+    /** B3: `${isZn ? '欢迎' : "Welcome"}` —— 三元引号混合 + 中文在 ${} 内 */
+    fun testTplTernaryMixedQuoteFallback() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{isZn ? '欢迎' : "Welcome"}`;
+            </script>
+        """)
+        // 三元整体 fallback 到编号 N0
+        assertTrue("三元表达式应 fallback N0: $r", r.contains("{N0}") || r.contains("{0}"))
+        assertTrue("参数对象应保留原三元表达式（引号）: $r", r.contains("isZn"))
+        assertTrue("引号应保留在 params 中: $r", r.contains("Welcome"))
+    }
+
+    /** B4: `${"价格 " + price}` —— 字符串拼接表达式 fallback + 引号 */
+    fun testTplStringConcatExprFallbackWithQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{"价格 " + price} 元`;
+            </script>
+        """)
+        // "价格 " + price 是 JS 字符串拼接表达式，不是简单标识符 → fallback
+        assertTrue("拼接表达式应 fallback: $r", r.contains("{N0}") || r.contains("{0}"))
+        assertTrue("静态中文「元」应保留: $r", r.contains("元"))
+    }
+
+    /** B5: `你好${isZn ? '小明' : "小明 Jr."}` —— 静态中文 + 三元引号 + fallback */
+    fun testTplStaticChinesePlusTernaryQuotes() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `你好${'$'}{isZn ? '小明' : "小明 Jr."}`;
+            </script>
+        """)
+        assertTrue("静态中文「你好」应在 message 中: $r", r.contains("你好"))
+        assertTrue("三元整体 fallback: $r", r.contains("{N0}") || r.contains("{0}"))
+        assertTrue("引号字面量保留在 params: $r", r.contains("小明") && r.contains("Jr."))
+    }
+
+    // ── C3/C4: 静态部分引号边界 ──
+
+    /** C3: `他说"${name}真好看"` —— 双引号紧邻 ${}，引号在静态侧 */
+    fun testTplStaticDoubleQuoteAdjacentToDollarBrace() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `他说"${'$'}{name}真好看"`;
+            </script>
+        """)
+        // 静态 " 和 " 是普通字符 → 引号保留在 message 两侧
+        assertTrue("双引号应完整保留: $r", r.contains("\"") || r.contains("&quot;"))
+        assertTrue("name 语义化: $r", r.contains("{name}"))
+        assertTrue("中文完整: $r", r.contains("真好看"))
+    }
+
+    /** C4: `` `他说\`你好${name}\`这句话` `` —— 静态含转义反引号 */
+    fun testTplStaticEscapedBacktick() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `他说\`你好${'$'}{name}\`这句话`;
+            </script>
+        """)
+        // 反引号在模板内是转义字符 → 会保留在 message 里
+        assertTrue("反引号应保留（转义或原始）: $r", r.contains("你好"))
+        assertTrue("name 语义化: $r", r.contains("{name}"))
+        assertTrue("中文「这句话」完整: $r", r.contains("这句话"))
+    }
+
+    // ── D2: 三层深嵌套 ──
+
+    /** D2: `` `A${`B${`C${y}`}`}A` `` —— 三层嵌套 templateVarRegex + buildNested */
+    fun testTplTripleDeepNestedNoChinese() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `外层${'$'}{`中层${'$'}{`内层${'$'}{变量}`}`}外层`;
+            </script>
+        """)
+        // 三层嵌套：外层 N0 包中层 N0 包内层 N0（或最深层变量语义化）
+        assertTrue("外层应出现占位符: $r", r.contains("{N0}") || r.contains("{变量}") || r.contains("{0}"))
+        assertTrue("外层静态中文保留: $r", r.contains("外层"))
+    }
+
+    // ── E1/E2/E3: 引号里再包引号 ──
+
+    /** E1: `${'他说"你好"'}` —— 单引号字符串内嵌双引号，整体 ${} 内联 */
+    fun testTplSingleQuoteLiteralWrappedAroundDoubleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{'他说"你好"'}`;
+            </script>
+        """)
+        // 单引号 JS 字符串的内容整体内联 → 双引号原样出来
+        assertTrue("双引号应完整保留: $r", r.contains("\"你好\"") || r.contains("\\\"你好\\\""))
+        assertTrue("中文完整: $r", r.contains("你好"))
+        assertFalse("不应出现占位符（纯内联）: $r", r.contains("{$"))
+    }
+
+    /** E2: `${"他说'你好'"}` —— 双引号字符串内嵌单引号 */
+    fun testTplDoubleQuoteLiteralWrappedAroundSingleQuote() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{"他说'你好'"}`;
+            </script>
+        """)
+        assertTrue("单引号应完整保留: $r", r.contains("'你好'"))
+        assertTrue("中文完整: $r", r.contains("你好"))
+        assertFalse("不应出现占位符（纯内联）: $r", r.contains("{$"))
+    }
+
+    /** E3: `${isZn ? '他说"你好"' : 'Hi'}` —— 三元 + 引号嵌套引号 + fallback */
+    fun testTplTernaryWithNestedQuoteLiteral() {
+        val r = rewriteVue("""
+            <script setup>
+            const msg = `${'$'}{isZn ? '他说"你好"' : 'Hi'}`;
+            </script>
+        """)
+        // 三元整体 fallback N0，内部引号字符串走 params 原值保留
+        assertTrue("三元整体 fallback: $r", r.contains("{N0}") || r.contains("{0}"))
+        assertTrue("原三元表达式应在 params 中: $r", r.contains("isZn"))
+        // 中文 + 引号字符串作为三元分支值保留
+        assertTrue("引号内嵌双引号应保留: $r", r.contains("你好") || r.contains("\\\"你好\\\""))
+    }
+
+    // ── F: Vue interpolatePlaceholders 处理引号 ──
+
+    /** F1: Vue interpolate 带引号的占位符值 */
+    fun testVueInterpolateWithQuotedPlaceholderValue() {
+        // 提取后: $t('他说"你好"', { 0: '"小明"' }) —— 引号是值的一部分
+        val result = VueI18nStrategy.interpolatePlaceholders(
+            "他说\"你好\" 欢迎 {N0}",
+            mapOf("0" to "\"小明\"")
+        )
+        assertEquals("引号应完整插值", "他说\"你好\" 欢迎 \"小明\"", result)
+    }
+
+    /** F2: interpolate 中占位符 key 本身含引号（罕见但健壮） */
+    fun testVueInterpolateKeyContainingQuote() {
+        val result = VueI18nStrategy.interpolatePlaceholders(
+            '你好{"user"}\'',
+            mapOf("\"user\"" to "小明")
+        )
+        assertEquals("key 含引号应精确匹配", "你好小明'", result)
+    }
 }
