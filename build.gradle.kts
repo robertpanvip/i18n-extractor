@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.2"
+version = "1.16.3"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.3</h4>
+            <ul>
+                <li>Fix: translatable string literals inside template-interpolation fallback params (e.g. <code>\${'$'}{cond ? '中文' : 'Other'}</code>) are now extracted into <code>\${'$'}t()</code> calls and registered in the resource dictionary, instead of being left raw inside the named-param object. Guards prevent double-wrapping existing <code>\${'$'}t()</code> arguments, object-key literals, and literals whose key sanitization would be lossy (trailing dot / @ / escapes)</li>
+                <li>Test: the env-dependent Top100 complex-file scan now skips when its manually-prepared path list is absent, restoring a meaningful CI test signal</li>
+            </ul>
             <h4>1.13.0</h4>
             <ul>
                 <li>Fix: toggling the folding switch (or the display language) in Settings now immediately refreshes all open editors — <code>\${'$'}t()</code> folds and toggle affordances disappear/rebuild on the spot, no longer waiting for the file to be closed and reopened</li>
