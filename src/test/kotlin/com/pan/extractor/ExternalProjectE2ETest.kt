@@ -506,7 +506,12 @@ class ExternalProjectE2ETest : BasePlatformTestCase() {
 
     fun testTop100Complex() {
         val topPathsFile = File("/tmp/top100_paths.txt")
-        assertTrue("/tmp/top100_paths.txt 不存在，先跑 python3 挑选", topPathsFile.exists())
+        // 前置文件需手工挑选生成（python3 脚本），CI / 干净环境不存在 → 跳过而非失败。
+        // 避免环境依赖型用例让 test 工作流长期标红、掩盖真实回归信号。
+        if (!topPathsFile.exists()) {
+            println("[skip] testTop100Complex: /tmp/top100_paths.txt 不存在（需手工挑选生成），跳过")
+            return
+        }
         val relPaths = topPathsFile.readLines().filter { it.isNotBlank() }
         println("\n==============================================")
         println(" 🔬 Top 100 复杂文件扫描")
