@@ -123,22 +123,25 @@ class JsStringCollector(
     )
 
     /**
-     * 判断 BinaryExpression (+) 链上是否有 ≥2 个含中文的字符串字面量操作数。
-     * 用于决定内层字面量是交给外层统一处理（多骨架拼接）还是自己单独提取。
+     * 内层字符串字面量是否会被外层整条 `+` 拼接统一提取（[collectJSBinaryExpressionChange]）。
+     *
+     * 判定：自 [parentBin] 向上找最顶层的 `+` 链（遇到非 `+` 的父表达式即停止），若该顶层表达式
+     * 整体含目标语言，外层就会把整条拼接合成一个带占位符的 message（`'你好，' + name` →
+     * `你好，{name}`），内层字面量再单独提取只会产生重复 key（多余的 `你好，`）。
+     *
+     * 纯字面量拼接（`'你好' + '世界'`）同样落在这里：多个字面量时内层原本就该让位，
+     * 现在统一由「整条拼接是否被提取」这一条规则覆盖，避免两套判定互相打架。
      */
-    private fun hasMultipleChineseStringOperands(bin: JSBinaryExpression): Boolean {
-        val literals = mutableListOf<JSLiteralExpression>()
-        fun walk(e: PsiElement) {
-            when (e) {
-                is JSBinaryExpression -> { walk(e.lOperand!!); walk(e.rOperand!!) }
-                is JSLiteralExpression -> if (e !is JSStringTemplateExpression) literals.add(e)
-            }
+    private fun isHandledByWholeConcat(parentBin: JSBinaryExpression): Boolean {
+        if (parentBin.operationSign != JSTokenTypes.PLUS) return false
+        var top: PsiElement = parentBin
+        while (true) {
+            val p = top.parent
+            if (p is JSBinaryExpression && p.operationSign == JSTokenTypes.PLUS) top = p else break
         }
-        walk(bin)
-        val chineseCount = literals.count {
-            processor.containsTargetLanguage(it.text.trim('"', '\''), SiteKind.JS_STRING)
-        }
-        return chineseCount >= 2
+        val bin = top as JSBinaryExpression
+        // 顶层 `+` 链整体不含目标语言 → 外层不会登记 key，内层字面量必须自己处理。
+        return processor.containsTargetLanguage(bin.text, SiteKind.JS_CONCAT)
     }
 
     fun collectJSStringTemplate(
@@ -484,15 +487,12 @@ class JsStringCollector(
 // JS 字符串字面量
 // ───────────────────────────────────────────────
     internal fun collectJSStringChange(ele: JSLiteralExpression) {
-        // 如果字面量在 JSBinaryExpression (+) 里，判断是否交给外层 collectJSBinaryExpressionChange
-        // 统一处理整条表达式：
-        //   条件：这条 BinaryExpression 链上有 ≥2 个含中文的字符串字面量操作数 —— 此时拼接
-        //   左右都是"中文骨架"，中间夹变量（如 `"第" + item.versionNum + "版"`），应整体处理。
-        //   如果只有 1 个含中文的字面量（如 `prefix.value + "正在执行操作，请稍候"`），让内层
-        //   字面量单独提取即可 —— 这样能产生纯中文 key（`"正在执行操作，请稍候"`），
-        //   而不是带占位符的整句。
+        // 如果字面量是 `+` 拼接的直接操作数，先判断整条拼接是否由外层
+        // collectJSBinaryExpressionChange 统一提取：只要是，内层字面量就必须让位，
+        // 否则同一个字符串会被提两次（例如 '你好，' + name 同时产出 `你好，{name}` 和多余的
+        // `你好，`；`"你好" + name` 同时产出 `你好{name}` 和 `你好`）。
         val parentBin = ele.parent as? JSBinaryExpression
-        if (parentBin != null && hasMultipleChineseStringOperands(parentBin)) return
+        if (parentBin != null && isHandledByWholeConcat(parentBin)) return
 
         // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
         // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、

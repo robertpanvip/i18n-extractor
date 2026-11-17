@@ -2421,13 +2421,15 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
             "hintTip 提示： 应提取",
             processor.analyzer.extractedStrings.containsValue("提示：")
         )
+        // `prefix + "..."` 现在整条拼接提取 1 次（带 {prefix} 占位的整句），
+        // 不再额外单独提取内层字面量（修复：拼接重复提取）。
         assertTrue(
-            "hintTip 修改后记得点保存按钮 应提取",
-            processor.analyzer.extractedStrings.containsValue("修改后记得点保存按钮")
+            "hintTip 拼接（提示：+ 修改后记得点保存按钮）应整条提取",
+            processor.analyzer.extractedStrings.values.any { it.endsWith("修改后记得点保存按钮") }
         )
         assertTrue(
-            "hintTip 点击右上角编辑按钮开始修改 应提取",
-            processor.analyzer.extractedStrings.containsValue("点击右上角编辑按钮开始修改")
+            "hintTip 拼接（提示：+ 点击右上角编辑按钮开始修改）应整条提取",
+            processor.analyzer.extractedStrings.values.any { it.endsWith("点击右上角编辑按钮开始修改") }
         )
 
         processor.runWithUndo()
@@ -2663,18 +2665,20 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val processor = I18nProcessor(project, file)
         processor.collect()
-        // actual: 8 个提取（除了预期的 7 条，还单独把拼接表达式的整体骨架按 Vue 模板字面量合成规则提了 1 次
-        //          或把 computed 中 prefix.value + 字符串 先被按字符串 + 字符串合成 1 条；
-        //          不管具体哪条多提，只要我们明确指定的 7 条中文都存在，且总量 == 8 即可）。
+        // 拼接 `prefix.value + "正在执行操作，请稍候"` 现在整条只提取 1 次（带占位符的整句），
+        // 不再同时把内层字面量再提一遍（修复：拼接重复提取）。
         assertTrue("okText 默认 立即执行 应提取", processor.analyzer.extractedStrings.containsValue("立即执行"))
         assertTrue("cancelText 默认 再想想 应提取", processor.analyzer.extractedStrings.containsValue("再想想"))
         assertTrue("prefix 提示： 应提取", processor.analyzer.extractedStrings.containsValue("提示："))
-        assertTrue("msg computed 正在执行操作，请稍候 应提取", processor.analyzer.extractedStrings.containsValue("正在执行操作，请稍候"))
+        assertTrue(
+            "msg computed 拼接应整条提取（含 正在执行操作，请稍候）",
+            processor.analyzer.extractedStrings.values.any { it.endsWith("正在执行操作，请稍候") }
+        )
         assertTrue("actionLabels.retry 重试一下 应提取", processor.analyzer.extractedStrings.containsValue("重试一下"))
         assertTrue("stop(ok=true) 操作完成提示 应提取", processor.analyzer.extractedStrings.containsValue("操作完成提示"))
         assertTrue("stop(ok=false) 操作已取消提示 应提取", processor.analyzer.extractedStrings.containsValue("操作已取消提示"))
-        // 兼容：7 条明确指定 + 1 条 computed 拼接骨架 = 总共 8 条
-        assertEquals(8, processor.analyzer.extractedStrings.size)
+        // 7 条文案 = 7 个 key（拼接不再重复提取内层字面量）
+        assertEquals(7, processor.analyzer.extractedStrings.size)
 
         processor.runWithUndo()
         val result = file.text

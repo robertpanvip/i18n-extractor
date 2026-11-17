@@ -166,12 +166,19 @@ object CommonPrefixSuffixFactorizer {
         // 一次不可忽略的查找/反序列化；桶内两两比较达上万次时，重复读取会显著拖慢单页转换）。
         val minAffix = minAffixChar()
 
+        // 【同一文本同命运】先按 originalMessage 归并：完全相同的文本只取一个「代表站点」参与
+        // 分组计算，命中后把该文本的**所有**站点一起纳入变体并一起消费。
+        // 否则同一句文本可能出现"在 A 处被拆成骨架嵌套、在 B 处保持整句 $t(...)"的两种产物
+        // （Bug：同一字符串 inconsistent），而 exact-dup 提示组又不参与重写，无法自愈。
+        val sitesByText: Map<String, List<SiteRef>> = allSites.groupBy { it.originalMessage }
+
         // 简单算法：对原消息先按首字符分桶（对 ASCII/中文前导字足够），再在桶内做相似度比较，
         // 避免 1e4 条全量两两比较的灾难退化。桶大小为 k 时，本实现为 O(k^2)。
         val buckets: MutableMap<Char, MutableList<SiteRef>> = mutableMapOf()
-        for (s in allSites) {
-            val first = s.originalMessage.firstOrNull() ?: continue
-            buckets.getOrPut(first) { mutableListOf() }.add(s)
+        for (group in sitesByText.values) {
+            val rep = group.first()
+            val first = rep.originalMessage.firstOrNull() ?: continue
+            buckets.getOrPut(first) { mutableListOf() }.add(rep)
         }
 
         // 用"引用相等"的集合做成员判断。SiteRef 是 data class，默认 hashCode/equals 要遍历 7 个字段
@@ -281,14 +288,30 @@ object CommonPrefixSuffixFactorizer {
                 ) continue
 
                 val variants = mutableMapOf<String, MutableList<SiteRef>>()
-                variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor); consumed.add(anchor)
-                val toRemove = mutableSetOf<SiteRef>()
+                variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor)
                 for ((sref, _) in candidates) {
                     // 按最终 prefix/suffix 重新切 diff（避免中间交集缩小后不再对应）
                     val msg = sref.originalMessage
                     if (!msg.startsWith(maxPrefix) || !msg.endsWith(maxSuffix) || msg.length <= maxPrefix.length + maxSuffix.length) continue
                     val diff = msg.substring(maxPrefix.length, msg.length - maxSuffix.length)
-                    variants.getOrPut(diff) { mutableListOf() }.add(sref); consumed.add(sref); toRemove.add(sref)
+                    variants.getOrPut(diff) { mutableListOf() }.add(sref)
+                }
+                // 【防呆·语义差异】差异段必须含「语义字符」（汉字/字母/数字）。纯标点/空白的差异
+                // 不构成合并，例："你好世界" 与 "你好，" 共享前缀 "你好"，差异只剩 "，"，会产出
+                // 无意义的 你好{N0} + {N0:'，'}，且把固定短语 "你好世界" 硬拆成 "你好"+"世界"。
+                val semantic = variants.filterKeys { isSemanticDiff(it) }
+                // 【防呆·至少两变体】组内至少要 2 个不同差异段才算「合并」；只剩 1 个差异段时
+                // 重新拆分毫无收益（只是给单句换个 key），且常常是上面那种垃圾组的残骸。
+                if (semantic.size < 2) continue
+
+                // 通过校验后才消费站点（校验失败时站点保持未消费，仍可参与其它合法组）。
+                // 同文本的所有站点一并消费，保证「同一字符串只有一种产物」。
+                val toRemove = mutableSetOf<SiteRef>()
+                for (refs in semantic.values) {
+                    for (r in refs) {
+                        consumed.add(r)
+                        if (r !== anchor) toRemove.add(r)
+                    }
                 }
                 // 【性能】批量收集后一次性 removeAll（单遍 O(k)），替代逐条 list.remove(sref) 的 O(k)
                 // 线性扫描 —— 原来累加会把桶内算法从 O(k^2) 恶化成 O(k^3)，大桶（上千条同首字符）
@@ -301,7 +324,10 @@ object CommonPrefixSuffixFactorizer {
                     skeleton = skeleton,
                     prefix = maxPrefix,
                     suffix = maxSuffix,
-                    variants = variants.map { (d, ss) -> AffixVariant(d, ss.toList()) },
+                    // 变体站点展开为「该文本的全部站点」：同一文本无论在哪些位置出现，都被同一骨架承载。
+                    variants = semantic.map { (d, reps) ->
+                        AffixVariant(d, reps.flatMap { sitesByText[it.originalMessage].orEmpty() })
+                    },
                     skeletonKey = skeleton
                 )
             }
@@ -481,6 +507,13 @@ object CommonPrefixSuffixFactorizer {
         }
         return s.substring(cut)
     }
+
+    /**
+     * 差异段是否「有语义」：至少含一个汉字/字母/数字。
+     * 纯标点与空白的差异（"，" "！" " "）不能作为合并占位符的取值 —— 否则固定短语会被
+     * 无意义地拆成「前缀 + 标点」，例如 "你好世界" 与 "你好，" 生成 你好{N0}。
+     */
+    private fun isSemanticDiff(diff: String): Boolean = diff.any { it.isLetterOrDigit() }
 
     private fun extractFullNumberAt(s: String, pos: Int): String {
         if (pos < 0 || pos >= s.length || !s[pos].isDigit()) return ""
