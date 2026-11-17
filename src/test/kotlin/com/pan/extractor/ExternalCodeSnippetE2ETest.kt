@@ -90,6 +90,38 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
     }
 
     // ───────────────────────────────────────────────
+    // 回归：属性模板插值内的三元分支已含 $t('中文') → 不得双重包裹
+    // （配套 testVueAttributeTemplateConcatTernaryVar 的参数表达式内字面量提取修复）
+    // ───────────────────────────────────────────────
+
+    fun testVueAttributeTernaryExistingTCallNoDoubleWrap() {
+        val vue = """
+        <template>
+          <div>
+            <a-tooltip :title="`${d}{isZn ? ${d}t('文档贡献者：') : 'Contributor: '}${d}{item.login}`">
+              <a :href="item.url">{{ item.login }}</a>
+            </a-tooltip>
+          </div>
+        </template>
+        <script setup lang="ts">
+          const isZn = true
+          const item = { login: 'test', url: '#' }
+        </script>
+        """.trimIndent()
+
+        val result = processVue(vue)
+
+        assertFalse(
+            "已是 \$t() 的分支不应被双重包裹，got:\n$result",
+            result.contains("${d}t(${d}t(")
+        )
+        assertTrue(
+            "应保留已有的 \$t('文档贡献者：')，got:\n$result",
+            result.contains("${d}t('文档贡献者：')")
+        )
+    }
+
+    // ───────────────────────────────────────────────
     // Bug 模式 2: Vue mustache 三元表达式含中文 + 冒号拼接
     // ───────────────────────────────────────────────
 

@@ -168,7 +168,7 @@ class JsStringCollector(
             val paramExpr = if (processor.isJSTemplateLiteral(v)) {
                 buildNestedTExprFromText(v, ele)
             } else {
-                v
+                wrapTranslatableLiteralsInParamExpr(v, fw, ele)
             }
             if (paramKeyNeedsQuote) "\"$k\": $paramExpr" else "$k: $paramExpr"
         }
@@ -270,6 +270,56 @@ class JsStringCollector(
         }
 
         return buildTFunctionExpr(fw, key, paramsObject)
+    }
+
+    /** 参数表达式文本中的单/双引号字符串字面量（不含反引号模板）。 */
+    private val quotedLiteralInExprRegex =
+        Regex("""'[^'\\\n]*(?:\\.[^'\\\n]*)*'|"[^"\\\n]*(?:\\.[^"\\\n]*)*"""")
+
+    /** 字面量前缀以翻译调用开参结尾（t( / $t( / tc( / $tc( / i18n[.global].t(）→ 已是翻译实参。 */
+    private val translationCallArgPrefixRegex =
+        Regex("""(?:(?<![\w$])\$?tc?|\.t)\(\s*$""")
+
+    /** 对象字面量键位置的前缀（`{` 或 `,` 结尾）。 */
+    private val objectKeyPrefixRegex = Regex("""[{,]\s*$""")
+
+    /** 对象字面量键位置的后缀（紧跟 `:`）。 */
+    private val objectKeySuffixRegex = Regex("""^\s*:""")
+
+    /**
+     * 模板插值 fallback 参数表达式（三元/拼接/调用等复杂表达式）内部的字符串字面量提取。
+     *
+     * 背景：`${isZn ? '文档贡献者：' : 'Contributor: '}` 这类插值会整体成为命名参数
+     * （`{ N0: isZn ? '文档贡献者：' : ... }`），内层字面量在 collectJSStringChange 里
+     * 因「外层模板接管」被跳过，导致中文永远留在参数值里、进不了资源字典。
+     * 这里在**外层模板生成参数对象文本时**就地处理：把含目标语言的字面量登记进
+     * extractedStrings 并替换为 $t('key')，不产生独立 PSI rewrite，避免与外层替换冲突。
+     */
+    internal fun wrapTranslatableLiteralsInParamExpr(
+        expr: String,
+        fw: I18nFramework,
+        ele: PsiElement,
+    ): String = quotedLiteralInExprRegex.replace(expr) { m ->
+        val literal = m.value
+        val inner = literal.substring(1, literal.length - 1)
+        if (inner.isEmpty() || !processor.containsTargetLanguage(inner, SiteKind.JS_STRING)) {
+            return@replace literal
+        }
+        val before = expr.substring(0, m.range.first)
+        val after = expr.substring(m.range.last + 1)
+        // 已是翻译调用的直接实参（$t('中文')）→ 保持原样，避免 $t($t(...)) 双重包裹
+        if (translationCallArgPrefixRegex.containsMatchIn(before)) return@replace literal
+        // 对象字面量键位置（{ '中文': ... }）→ 键不能被替换成调用表达式
+        if (objectKeyPrefixRegex.containsMatchIn(before) && objectKeySuffixRegex.containsMatchIn(after)) {
+            return@replace literal
+        }
+        // 含转义符的字面量：raw 文本与运行时值不一致，包裹需先解码，保守保留原样
+        if ('\\' in inner) return@replace literal
+        // key 消毒有损（句末点被裁 / @ 被替换等）→ 包裹会改变运行时文案，保留原样
+        val key = generateKey(inner, ele)
+        if (key != inner.trim()) return@replace literal
+        state.extractedStrings.putIfAbsent(key, inner.trim())
+        buildTFunctionExpr(fw, key, "{}")
     }
 
     fun createStringExpressionNode(text: String, context: PsiElement): PsiElement =
