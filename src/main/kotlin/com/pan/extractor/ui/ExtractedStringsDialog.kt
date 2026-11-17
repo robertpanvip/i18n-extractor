@@ -145,6 +145,17 @@ class ExtractedStringsDialog(
         editor.component.preferredSize = Dimension(900, 560)
         this.editor = editor
 
+        // 如果 initOutputByDestination → initConfigControls 里根据 dedup 勾选框
+        // 预计算了新的 json 字符串（json 字段已更新），但此时 this.editor 还没赋值，
+        // refreshPreviewJson 只会标记 refreshPending=true。现在 editor 就绪了，
+        // 在 WriteAction 里同步刷新 document。
+        if (refreshPending) {
+            com.intellij.openapi.application.ApplicationManager.getApplication().runWriteAction {
+                editor.document.setText(json ?: "")
+            }
+            refreshPending = false
+        }
+
         val tabs = JTabbedPane()
         tabs.addTab(I18nExtractorBundle.message("tab.json.preview"), editor.component)
         tabs.addTab(I18nExtractorBundle.message("tab.merge.suggestions"), buildMergeTab())
@@ -357,6 +368,8 @@ class ExtractedStringsDialog(
         refreshPreviewJson()
     }
 
+    private var refreshPending = false  // 构造阶段标记：doc 会在 createCenterPanel 里初始化
+
     /**
      * 根据 dedup checkbox 状态重新计算 JSON 并刷新 preview editor。
      * 勾上且有可用入口文件 → 过滤掉已有 key，只展示新增 key；
@@ -392,11 +405,17 @@ class ExtractedStringsDialog(
             .toJson(LinkedHashMap(filtered))
         json = pretty
 
-        // 刷新 editor document
+        // 刷新 editor document —— Document.setText 必须在 WriteAction 里
         val ed = editor
         if (ed != null) {
             val doc = ed.document
-            doc.setText(pretty)
+            com.intellij.openapi.application.ApplicationManager.getApplication().runWriteAction {
+                doc.setText(pretty)
+            }
+        } else {
+            // editor 还没初始化（构造阶段：createCenterPanel 之后才会赋值 this.editor）。
+            // 标记一下，createCenterPanel 末尾会再调一次。
+            refreshPending = true
         }
     }
 
