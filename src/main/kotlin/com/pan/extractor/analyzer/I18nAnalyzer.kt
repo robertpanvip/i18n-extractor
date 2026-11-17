@@ -608,11 +608,23 @@ class I18nAnalyzer(
 
         var newText = originalText
 
-        if (!(isDirective && !originalText.startsWith("\"")
+        // 指令值以引号开头时，未必是「整个值就是一个字符串字面量」。拼接表达式
+        // （如 :label="'你好，' + name"、:tip="'你好' + '世界'"）同样以引号开头，
+        // 但应交给 JS 表达式路径 collectJSBinaryExpressionChange 统一提取成
+        // `你好，{name}` 这样的占位符文案。若这里整条当文本提取，会产生带代码的
+        // 垃圾 key（`'你好，' + name`）并用它覆盖正确产物。
+        // 判据：去掉成对引号后内部仍含非转义引号 → 说明是拼接/调用等复合表达式。
+        // 纯字面量（:title="'中文'"）去掉外层引号后内部无引号，仍走下面的整条提取。
+        val literalCandidate = I18nPsiTools.stripSurroundingQuotes(originalText)
+        val innerWithoutEscaped = literalCandidate.replace("\\'", "").replace("\\\"", "")
+        val directiveValueIsExpression = isDirective &&
+            innerWithoutEscaped.any { it == '\'' || it == '"' || it == '`' }
+
+        if (!directiveValueIsExpression && !(isDirective && !originalText.startsWith("\"")
                     && !originalText.startsWith("'")
                     && !originalText.startsWith("`"))
         ) {
-            val literal = I18nPsiTools.stripSurroundingQuotes(originalText)
+            val literal = literalCandidate
             val extracted = collectExtractedStrings(literal, attrValue)
             if (extracted != null) {
                 val escaped = if (extracted.contains("\n")) {
