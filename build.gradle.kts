@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.3"
+version = "1.16.4"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.4</h4>
+            <ul>
+                <li>Fix: interpolations whose value is a dotted property chain (e.g. <code>\${'$'}{item.versionNum}</code>) no longer produce an illegal unquoted object key <code>{ item.versionNum: ... }</code> (invalid JS that vue-i18n cannot resolve either); Vue-style frameworks fall back to numbered <code>{N0}</code> placeholders while the full variable expression is kept as the param value</li>
+                <li>Fix: merge suggestions no longer cut i18n placeholders across prefix/suffix boundaries (previously produced broken skeletons like <code>第{{N0}.versionNum}版</code> with <code>{N0: 'item'}</code> quoting a variable into a string literal); whole-placeholder diffs are no longer suggested for merging</li>
+            </ul>
             <h4>1.16.3</h4>
             <ul>
                 <li>Fix: translatable string literals inside template-interpolation fallback params (e.g. <code>\${'$'}{cond ? '中文' : 'Other'}</code>) are now extracted into <code>\${'$'}t()</code> calls and registered in the resource dictionary, instead of being left raw inside the named-param object. Guards prevent double-wrapping existing <code>\${'$'}t()</code> arguments, object-key literals, and literals whose key sanitization would be lossy (trailing dot / @ / escapes)</li>
