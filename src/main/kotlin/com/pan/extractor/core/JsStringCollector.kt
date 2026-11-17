@@ -89,6 +89,25 @@ class JsStringCollector(
         "with", "yield", "let", "static", "await", "async"
     )
 
+    /**
+     * 判断 BinaryExpression (+) 链上是否有 ≥2 个含中文的字符串字面量操作数。
+     * 用于决定内层字面量是交给外层统一处理（多骨架拼接）还是自己单独提取。
+     */
+    private fun hasMultipleChineseStringOperands(bin: JSBinaryExpression): Boolean {
+        val literals = mutableListOf<JSLiteralExpression>()
+        fun walk(e: PsiElement) {
+            when (e) {
+                is JSBinaryExpression -> { walk(e.lOperand!!); walk(e.rOperand!!) }
+                is JSLiteralExpression -> if (e !is JSStringTemplateExpression) literals.add(e)
+            }
+        }
+        walk(bin)
+        val chineseCount = literals.count {
+            processor.containsTargetLanguage(it.text.trim('"', '\''), SiteKind.JS_STRING)
+        }
+        return chineseCount >= 2
+    }
+
     fun collectJSStringTemplate(
         raw: String,
         ele: PsiElement,
@@ -378,12 +397,15 @@ class JsStringCollector(
 // JS 字符串字面量
 // ───────────────────────────────────────────────
     internal fun collectJSStringChange(ele: JSLiteralExpression) {
-        // 【Bug A1 修复】仅当字面量位于「纯字符串拼接」(`"a" + "b" + ...`，所有操作数都是字符串字面量)
-        // 中时，其提取交由 collectJSBinaryExpressionChange 统一合并成一个 key，这里必须跳过，
-        // 否则操作数会被重复提取，且 binary change 先替换整节点后操作数 change 会作用在失效 PSI 上。
-        // 注意：若拼接中有变量/引用（如 `prefix.value + "正在执行操作，请稍候"`），则该字面量仍需单独提取，
-        // 不能被跳过（collectJSBinaryExpressionChange 会把它包进 \${}，语义不同）。
-        if (ele.parent is JSBinaryExpression && isWithinPureStringConcat(ele)) return
+        // 如果字面量在 JSBinaryExpression (+) 里，判断是否交给外层 collectJSBinaryExpressionChange
+        // 统一处理整条表达式：
+        //   条件：这条 BinaryExpression 链上有 ≥2 个含中文的字符串字面量操作数 —— 此时拼接
+        //   左右都是"中文骨架"，中间夹变量（如 `"第" + item.versionNum + "版"`），应整体处理。
+        //   如果只有 1 个含中文的字面量（如 `prefix.value + "正在执行操作，请稍候"`），让内层
+        //   字面量单独提取即可 —— 这样能产生纯中文 key（`"正在执行操作，请稍候"`），
+        //   而不是带占位符的整句。
+        val parentBin = ele.parent as? JSBinaryExpression
+        if (parentBin != null && hasMultipleChineseStringOperands(parentBin)) return
 
         // 索引键位置的字符串字面量 → 不翻译（与 collectJSBinaryExpressionChange /
         // collectJSStringTemplate 的入口检查保持一致）。例如 P['中文'] 里的 '中文'、
@@ -526,7 +548,6 @@ class JsStringCollector(
             return
         }
         val template = convertConcatTextToTemplate(binaryExpr)
-        //println("template${template}${binaryExpr.text}")
         collectJSStringTemplate(template, binaryExpr) { value -> value }
     }
 
