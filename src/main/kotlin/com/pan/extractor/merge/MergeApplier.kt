@@ -222,6 +222,24 @@ object MergeApplier {
         proc: I18nProcessor,
         finalExtracted: MutableMap<String, String>,
     ) {
+        // 【P1 站点级隔离】骨架重写的任何失败（参数映射非法、XML 写入异常、PSI 替换异常等）
+        // 只跳过本站点，不得穿透 applyPlan/apply 中止整个合并、留下半应用状态。
+        try {
+            doRewriteSiteToSkeleton(rootPsi, site, skeletonValue, skeletonKey, paramPairs, proc, finalExtracted)
+        } catch (e: Throwable) {
+            PluginLogBuffer.warn(LOG, "MergeApplier: 骨架重写失败，跳过该站点（站点级隔离）", e)
+        }
+    }
+
+    private fun doRewriteSiteToSkeleton(
+        rootPsi: PsiElement,
+        site: com.pan.extractor.model.ExtractionSite,
+        skeletonValue: String,
+        skeletonKey: String,
+        paramPairs: List<Pair<String, String>>,
+        proc: I18nProcessor,
+        finalExtracted: MutableMap<String, String>,
+    ) {
         val placeholderMap = buildPlaceholderRewrite(site.isVue, site.isReact, paramPairs)
         val rewrittenSkeleton = paramPairs.fold(skeletonValue) { acc, (k, _) ->
             val (ph, _) = placeholderMap[k] ?: error("placeholder missing for $k")
@@ -269,17 +287,17 @@ object MergeApplier {
                 false
             )?.psi
         }
-        if (replacement != null) {
-            try {
-                rootPsi.replace(replacement)
-            } catch (e: Throwable) {
-                PluginLogBuffer.warn(LOG,"MergeApplier: 替换源码片段失败，跳过该站点应用", e)
-                // P0：替换失败时不再登记 finalExtracted —— 否则源码未改，但资源文件仍为它写入 key，
-                // 造成源码/资源不一致、运行时查不到翻译。失败即视为该站点未应用。
-                return
-            }
+        // 【P1】表达式解析失败（tryCreateExpressionFromText 返回 null，如骨架以反斜杠
+        // 结尾导致字符串未闭合）→ 源码未改，不得登记资源 key，与替换异常同语义。
+        if (replacement == null || com.intellij.psi.util.PsiTreeUtil.hasErrorElements(replacement)) {
+            // null：无法创建表达式；含 PsiErrorElement：JS 解析器宽容解析，如骨架以反斜杠
+            // 结尾导致字符串未闭合时仍产出带错误的 PSI —— 直接替换会把语法错误的代码写进源码。
+            // 两者都视为失败：源码不改、资源 key 不登记。
+            LOG.warn("MergeApplier: 骨架表达式解析失败（null 或含语法错误），跳过该站点")
+            return
         }
-
+        // 替换异常由外层站点级隔离包装捕获，同样不登记 finalExtracted。
+        rootPsi.replace(replacement)
         finalExtracted[rewrittenSkeletonKey] = rewrittenSkeleton.trim()
     }
 }

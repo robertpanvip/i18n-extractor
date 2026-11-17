@@ -266,6 +266,20 @@ object CommonPrefixSuffixFactorizer {
                 }
                 if (!meaningful) continue
 
+                // 【占位符边界保护·先判定后消费】diff 含花括号（占位符整体或残缺落入 diff）时，
+                // apply 只有「数字/带引号字面量」渲染、无法保留变量表达式 → 丢弃该组。
+                // 必须在 consumed.add / list.removeAll 之前判定：否则站点被消费并移出候选池，
+                // 之后再也无法组成其他合法组（合并建议静默变少）。
+                if ('{' in anchorDiff || '}' in anchorDiff) continue
+                if (candidates.any { (sref, _) ->
+                        val msg = sref.originalMessage
+                        msg.startsWith(maxPrefix) && msg.endsWith(maxSuffix) &&
+                            msg.length > maxPrefix.length + maxSuffix.length &&
+                            msg.substring(maxPrefix.length, msg.length - maxSuffix.length)
+                                .let { '{' in it || '}' in it }
+                    }
+                ) continue
+
                 val variants = mutableMapOf<String, MutableList<SiteRef>>()
                 variants.getOrPut(anchorDiff) { mutableListOf() }.add(anchor); consumed.add(anchor)
                 val toRemove = mutableSetOf<SiteRef>()
@@ -281,9 +295,6 @@ object CommonPrefixSuffixFactorizer {
                 // 时正是单页转换卡到 20s+ 的根因。
                 if (toRemove.isNotEmpty()) list.removeAll(toRemove)
                 if (toRemove.isNotEmpty()) remaining.removeAll(toRemove)
-                // 差异段含花括号（占位符整体或残缺落入 diff）时，参数渲染只有「数字/带引号
-                //   字面量」两种形态，无法保留变量表达式 → 放弃该组，各句保持独立 $t（保守零误改）。
-                if (variants.keys.any { '{' in it || '}' in it }) continue
                 val skeleton = "$maxPrefix{N0}$maxSuffix"
                 results += AffixGroupCandidate(
                     id = "AG${++idSeq}",
