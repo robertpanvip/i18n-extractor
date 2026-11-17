@@ -81,22 +81,39 @@ class JsStringCollector(
         return trimmed
     }
 
-    /** 合法裸对象键 / vue-i18n 具名插值参数名（纯标识符）。 */
-    private val PLAIN_IDENTIFIER = Regex("""^[A-Za-z_$][\w$]*$""")
-
     /**
-     * 计算模板插值的语义参数键。
+     * 预计算模板内容中所有「复杂表达式」占位符（非纯字符串字面量）的最终语义参数键。
      *
-     * Vue 系框架（[I18nFramework.paramKeyNeedsQuote]=false）参数对象裸写 key：
-     * 含点的属性链（item.versionNum）会产生非法 JS 对象键 `{ item.versionNum: ... }`，
-     * 且 vue-i18n 具名插值不认点号名 → 回退编号占位（N0），参数值保留完整变量表达式。
+     * owner 行为需求（2026-11）：属性链插值取最后一段作占位 key（`${item.versionNum}` →
+     * `versionNum`）。尾段经 [SAFE_SEMANTIC_KEY] 校验必为纯标识符，可直接作不加引号的
+     * 对象键与 vue-i18n 具名插值名；参数值保留完整变量表达式。
+     * 同一 message 内多个占位符尾段 key 相同且绑定不同表达式（如 `item.versionNum` 与
+     * `user.versionNum` 都取 `versionNum`）时，冲突键全部回退编号（rawIndex → N0/N1）；
+     * 同一表达式重复出现共享尾段 key，不算冲突。
+     *
+     * 返回列表按占位符出现顺序（与 lambda 内 index++ 同步消费）；
+     * 复杂表达式（extractSemanticKey 返回 null）项已预置为编号字符串。
      */
-    private fun semanticKeyForParam(innerContent: String, fw: I18nFramework, rawIndex: Int): String {
-        val sk = extractSemanticKey(innerContent) ?: return rawIndex.toString()
-        if (!fw.paramKeyNeedsQuote && !PLAIN_IDENTIFIER.matches(sk)) return rawIndex.toString()
-        return sk
+    private fun planPlaceholderSemanticKeys(content: String): List<String> {
+        class Slot(val inner: String, var key: String, val rawIndex: Int)
+        val slots = mutableListOf<Slot>()
+        var idx = 0
+        for (m in templateVarRegex.findAll(content)) {
+            val inner = m.groupValues[1].trim()
+            if (processor.extractPureStringContent(inner) != null) continue
+            val rawIndex = idx++
+            val lastSegment = extractSemanticKey(inner)?.substringAfterLast('.')
+            slots += Slot(inner, lastSegment ?: rawIndex.toString(), rawIndex)
+        }
+        // 冲突 = 同一 key 绑定到不同表达式（参数对象会相互覆盖）。
+        // 同一表达式重复出现（如 `你好 {name}，也是 {name}`）共享尾段 key 是预期行为，不算冲突。
+        for ((_, group) in slots.groupBy { it.key }) {
+            if (group.size >= 2 && group.map { it.inner }.distinct().size >= 2) {
+                group.forEach { it.key = it.rawIndex.toString() }
+            }
+        }
+        return slots.map { it.key }
     }
-
     private val JS_RESERVED = setOf(
         "break", "case", "catch", "class", "const", "continue", "debugger", "default",
         "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
@@ -140,6 +157,8 @@ class JsStringCollector(
         // 占位符策略由 I18nFramework 决定（Vue {N0} / React {{0}} / Generic {0}），
         // 框架检测委托 I18nFrameworkRegistry.detect，行为与原 isVue/isReact 判定一致。
         val fw = I18nFrameworkRegistry.detect(ele)
+        val plannedKeys = planPlaceholderSemanticKeys(content)
+        var keyCursor = 0
         val message = templateVarRegex.replace(content) { match ->
             val innerContent = match.groupValues[1].trim()
             // 如果 ${} 内是纯字符串字面量（如 `测试`、'测试'、"测试"），直接内联到 message 中
@@ -148,7 +167,7 @@ class JsStringCollector(
                 return@replace pureString
             }
             val rawIndex = index++
-            val semanticKey = semanticKeyForParam(innerContent, fw, rawIndex)
+            val semanticKey = plannedKeys.getOrElse(keyCursor++) { rawIndex.toString() }
             val key = fw.paramKey(semanticKey)
             val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent
@@ -261,12 +280,14 @@ class JsStringCollector(
         var index = 0
         val fw = I18nFrameworkRegistry.detect(ele)
 
+        val plannedKeys = planPlaceholderSemanticKeys(content)
+        var keyCursor = 0
         val message = templateVarRegex.replace(content) { match ->
             val innerContent = match.groupValues[1].trim()
             val pureString = processor.extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
             val rawIndex = index++
-            val semanticKey = semanticKeyForParam(innerContent, fw, rawIndex)
+            val semanticKey = plannedKeys.getOrElse(keyCursor++) { rawIndex.toString() }
             val key = fw.paramKey(semanticKey)
             val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent

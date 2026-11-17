@@ -191,14 +191,14 @@ class ExternalCodeSnippetE2ETest : BasePlatformTestCase() {
 
         val result = processVue(vue)
 
-        // record.versionNum 是属性访问链 → 用语义化 key {record.versionNum}
+        // record.versionNum 是属性访问链 → 尾段语义 key {versionNum}（owner 需求 2026-11）
         assertFalse(
             "不应出现嵌套占位符，got:\n$result",
             Regex("""\{\w+\{""").containsMatchIn(result)
         )
         assertTrue(
-            "应生成占位符 {record.versionNum}，got:\n$result",
-            result.contains("{record.versionNum}") || result.contains("{N0}")
+            "应生成尾段语义 key 占位符 {versionNum}，got:\n$result",
+            result.contains("{versionNum}")
         )
         assertTrue(
             "参数值应包含 record.versionNum 表达式，got:\n$result",

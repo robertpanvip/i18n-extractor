@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 /**
  * 点号语义键（item.versionNum）两层 bug 复现：
  *  1) 提取层：Vue 参数对象裸键不允许点号（非法 JS），vue-i18n 具名插值也不支持点号名
+ *     （2026-11 行为升级：尾段语义键 versionNum 替代编号回退，见 LastSegmentPlaceholderKeyTest）
  *  2) 合并层：公共前后缀把占位符拦腰切开 → 骨架 {{N0}.versionNum} 破碎 + 变量被引号字面量化
  */
 class DotChainPlaceholderRegressionTest : BasePlatformTestCase() {
@@ -44,7 +45,7 @@ class DotChainPlaceholderRegressionTest : BasePlatformTestCase() {
     }
 
     // ── 层1：提取 ──
-    fun testExtractDotChainParamMustFallBackToNumberedPlaceholder() {
+    fun testExtractDotChainParamMustUseTailSegmentKey() {
         val psiFile = myFixture.addFileToProject(
             "Demo.vue",
             """
@@ -68,7 +69,7 @@ class DotChainPlaceholderRegressionTest : BasePlatformTestCase() {
         )
         assertTrue(
             "应回退编号占位 N0 且参数值为变量表达式，got:\n$result",
-            result.contains("N0: item.versionNum")
+            result.contains("versionNum: item.versionNum")
         )
     }
 
