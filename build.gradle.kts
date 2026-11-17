@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.5"
+version = "1.16.6"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.6</h4>
+            <ul>
+                <li>Fix: Vue directive values that are string concatenations (e.g. <code>:label="'你好，' + name"</code>) no longer produce junk translation keys containing raw code; they are now extracted as semantic placeholder messages (<code>你好，{name}</code>) just like concatenations in script code</li>
+                <li>Fix: merge output is now consistent between identical template-literal and string-concat texts - the same text no longer yields a nested skeleton in one place and a plain key in another; duplicate literal operands in a concatenation are no longer extracted twice; and punctuation-only diffs no longer split fixed phrases into meaningless skeletons (e.g. <code>你好{N0}</code>)</li>
+                <li>Fix: the <code>useI18n()</code> const is now injected after the import in Vue <code>&lt;script setup&gt;</code> instead of above it; newly injected imports are recognized via a PSI anchor so the hook always lands below the import</li>
+            </ul>
             <h4>1.16.5</h4>
             <ul>
                 <li>Feature: interpolations whose value is a dotted property chain now use the chain's tail segment as the placeholder key (e.g. <code>\${'$'}{item.versionNum}</code> extracts to <code>{versionNum}</code>) while the full expression stays as the param value; when different expressions collide on the same tail key within one message they fall back to numbered <code>{N0}</code>/<code>{N1}</code></li>
