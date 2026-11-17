@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.4"
+version = "1.16.5"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.5</h4>
+            <ul>
+                <li>Feature: interpolations whose value is a dotted property chain now use the chain's tail segment as the placeholder key (e.g. <code>\${'$'}{item.versionNum}</code> extracts to <code>{versionNum}</code>) while the full expression stays as the param value; when different expressions collide on the same tail key within one message they fall back to numbered <code>{N0}</code>/<code>{N1}</code></li>
+                <li>Fix: merge skeleton rewriting is now site-isolated - a broken expression (null or containing syntax errors, e.g. backslash-terminated skeletons) is no longer written into source nor registered as a translation key, and a single failing site no longer aborts the whole merge leaving half-applied state</li>
+                <li>Fix: merge suggestions no longer silently shrink - placeholder-diff groups are rejected before their sites are consumed, so remaining sites can still form valid groups</li>
+            </ul>
             <h4>1.16.4</h4>
             <ul>
                 <li>Fix: interpolations whose value is a dotted property chain (e.g. <code>\${'$'}{item.versionNum}</code>) no longer produce an illegal unquoted object key <code>{ item.versionNum: ... }</code> (invalid JS that vue-i18n cannot resolve either); Vue-style frameworks fall back to numbered <code>{N0}</code> placeholders while the full variable expression is kept as the param value</li>
