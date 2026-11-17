@@ -197,8 +197,11 @@ object ImportRewriter : SourceRewriter {
             }
         }
         // 3) hooks
+        // 注意：新注入的 import 是文本 Leaf（尚未 reparse 成 ES6ImportDeclaration），
+        // 若 Vue SFC 的 const 注入仅靠 findChildrenOfType 定位会查不到它、误判为「无 import」
+        // 而插到最前面（const 跑到 import 上方）。故把 imports 阶段的锚点透传下去兜底。
         for (hook in plan.hooks) {
-            injectHook(processor, psiFile, hook)
+            injectHook(processor, psiFile, hook, lastInjectedImport)
         }
     }
 
@@ -260,14 +263,17 @@ object ImportRewriter : SourceRewriter {
         return lastStatement
     }
 
-    /** 依 [hook] 类型定位目标并注入 [HookInjectPlan.statement]。 */
+    /** 依 [hook] 类型定位目标并注入 [HookInjectPlan.statement]。
+     *  [lastImportAnchor] 为 imports 阶段刚注入的 import 锚点（可能是尚未 reparse 的文本 Leaf），
+     *  供 SFC const 注入在查不到原生 import 时兜底定位，避免 const 跑到 import 上方。 */
     private fun injectHook(
         processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         hook: HookInjectPlan,
+        lastImportAnchor: PsiElement? = null,
     ) {
         when (hook.target) {
-            HookTarget.VUE_SFC_SCRIPT -> injectVueSfcScriptConst(processor, psiFile, hook.statement)
+            HookTarget.VUE_SFC_SCRIPT -> injectVueSfcScriptConst(processor, psiFile, hook.statement, lastImportAnchor)
             HookTarget.VUE_HOOK -> injectIntoFunctionBodies(
                 processor, psiFile,
                 ProjectStructure.findHookFunctions(psiFile.containingFile).filterIsInstance<JSFunction>(),
@@ -284,11 +290,15 @@ object ImportRewriter : SourceRewriter {
         }
     }
 
-    /** Vue .vue <script> 顶层注入一次 `const { t: \$t } = useI18n()`（镜像 ensureVueI18nImported 的 const 分支）。 */
+    /** Vue .vue <script> 顶层注入一次 `const { t: \$t } = useI18n()`（镜像 ensureVueI18nImported 的 const 分支）。
+     *  [lastImportAnchor] 是 applyImportPlan 刚注入的 import 锚点：新注入的 import 是文本 Leaf，
+     *  尚未 reparse 成 ES6ImportDeclaration，findChildrenOfType 查不到，故需据此兜底定位，
+     *  保证 const 始终落在 import 之后（而非被误投到 script 首位）。 */
     private fun injectVueSfcScriptConst(
         processor: com.pan.extractor.core.I18nProcessor,
         psiFile: PsiElement,
         statement: String,
+        lastImportAnchor: PsiElement? = null,
     ) {
         val scriptContent = getScriptContent(processor, psiFile) ?: return
         val injector = processor.injector
@@ -296,14 +306,27 @@ object ImportRewriter : SourceRewriter {
             return
         }
         val constNode = processor.createStringExpressionNode(statement, psiFile)
-        // 保持 ensureVueI18nImported 的投放：优先在最后一个 import 之后；无 import 时首位 + 换行。
         val importStatements = PsiTreeUtil.findChildrenOfType(scriptContent, ES6ImportDeclaration::class.java)
-        if (importStatements.isEmpty()) {
-            val added = scriptContent.addAfter(constNode, scriptContent.firstChild)
-            scriptContent.addAfter(processor.createStringExpressionNode("\n", psiFile), added)
-        } else {
-            val lastImport = importStatements.last()
-            lastImport.parent.addAfter(constNode, lastImport)
+        when {
+            importStatements.isNotEmpty() -> {
+                // 原生 import（reparse 过）：放最后一个之后
+                val lastImport = importStatements.last()
+                lastImport.parent.addAfter(constNode, lastImport)
+            }
+            lastImportAnchor != null -> {
+                // 刚注入的 import 还是文本 Leaf：锚点即该 import 语句节点（不含换行）。
+                // 先在锚点后补换行分隔，再在其后插 const——镜像 aliases 阶段的成熟做法，
+                // 避免 `import...;const...;` 粘成一行。
+                val parent = lastImportAnchor.parent ?: scriptContent
+                val newline = processor.createStringExpressionNode("\n", psiFile)
+                val addedNewline = parent.addAfter(newline, lastImportAnchor)
+                parent.addAfter(constNode, addedNewline ?: newline)
+            }
+            else -> {
+                // 真·无 import：首位 + 换行
+                val added = scriptContent.addAfter(constNode, scriptContent.firstChild)
+                scriptContent.addAfter(processor.createStringExpressionNode("\n", psiFile), added)
+            }
         }
     }
 
