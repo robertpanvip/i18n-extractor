@@ -393,12 +393,13 @@ class CommonPrefixSuffixFactorizerTest {
         // {N0} 和 {N1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
         val sites = siteRefs("超过{N0}%的智能体", "超过{N1}%的智能体")
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
-        // 应该产生一个合并组，但 {N0}/{N1} 不应被拆入前缀/后缀
-        val group = affix.firstOrNull { it.skeleton.startsWith("超过{N0}") }
-        assertNotNull("Vue 占位符 {N0}/{N1} 应产生合并组，实际: $affix", group)
-        // 前缀应为 "超过" 而非 "超过{"（{N0} 整体保留在差异段中）
-        assertEquals("占位符不应被拆入前缀", "超过", group!!.prefix)
-        assertEquals("占位符不应被拆入后缀", "%的智能体", group.suffix)
+        // 行为修正（owner 占位符拦腰切开 bug，2026-11）：前后缀不再切入占位符后，
+        // diff 即整体占位符 {N0}/{N1}，而 apply 只有「数字/带引号字面量」两种渲染、
+        // 无法还原原参数表达式 → 不提供合并建议（保守零误改，句子保持独立 $t）。
+        assertTrue(
+            "diff 为整体占位符时不应提供合并建议（apply 会渲染成破碎字面量），实际: $affix",
+            affix.isEmpty()
+        )
     }
 
     /**
@@ -412,12 +413,11 @@ class CommonPrefixSuffixFactorizerTest {
         // {0} 和 {1} 是占位符不应被拆分，前缀扫描遇到 { 应停止。
         val sites = siteRefs("超过{0}%的智能体", "超过{1}%的智能体")
         val (affix, _) = CommonPrefixSuffixFactorizer.factorize(sites)
-        // 应该产生一个合并组，但 {0}/{1} 不应被拆入前缀/后缀
-        val group = affix.firstOrNull { it.skeleton.startsWith("超过{N0}") }
-        assertNotNull("Generic 占位符 {0}/{1} 应产生合并组，实际: $affix", group)
-        // 前缀应为 "超过" 而非 "超过{"（{0} 整体保留在差异段中）
-        assertEquals("占位符不应被拆入前缀", "超过", group!!.prefix)
-        assertEquals("占位符不应被拆入后缀", "%的智能体", group.suffix)
+        // 同 Vue 占位符用例：diff 为整体占位符时 apply 无法安全渲染 → 不提供合并建议。
+        assertTrue(
+            "Generic 占位符 diff 不应提供合并建议，实际: $affix",
+            affix.isEmpty()
+        )
     }
 
     /**

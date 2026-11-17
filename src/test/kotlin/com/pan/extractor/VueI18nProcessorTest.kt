@@ -2922,9 +2922,11 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
 
         val result = file.text
         // 资源文案应含命名占位 {N0}
+        //（owner bug 报告 2026-11：点号裸键 `{ record.versionNum: ... }` 是非法 JS 对象键，
+        //  vue-i18n 具名插值也不认点号名 → 回退编号占位，doc 注释原意即为此形态）
         assertTrue(
-            "应生成 \$t('第{record.versionNum}版', ...) 含语义化属性链占位，got:\n$result",
-            result.contains("第{record.versionNum}版")
+            "应生成 \$t('第{N0}版', ...) 编号占位形态，got:\n$result",
+            result.contains("第{N0}版")
         )
         // 不应出现嵌套占位符 {N{N0}}
         assertFalse(
@@ -2933,16 +2935,16 @@ class VueI18nProcessorTest : BasePlatformTestCase() {
         )
         // 参数值应是变量表达式 record.versionNum，而不是字面量 0
         assertTrue(
-            "参数对象应含语义化 key record.versionNum: record.versionNum，got:\n$result",
-            result.contains("record.versionNum: record.versionNum")
+            "参数值应是变量表达式 N0: record.versionNum，got:\n$result",
+            result.contains("N0: record.versionNum")
         )
 
         // mustache 整体应被替换为 $t('第{N0}版', { N0: record.versionNum })，且子字面量
         // "第"/"版" 不应被重复提取（否则会残留 $t('第') / $t('版') 或嵌套替换）
         val c = result.replace("\\s+".toRegex(), "")
         assertTrue(
-            "mustache 应整体替换为语义化占位 {{ \$t('第{record.versionNum}版', { record.versionNum: record.versionNum }) }}，got:\n$result",
-            c.contains("{{\$t('第{record.versionNum}版',{record.versionNum:record.versionNum})}}")
+            "mustache 应整体替换为编号占位 {{ \$t('第{N0}版', { N0: record.versionNum }) }}，got:\n$result",
+            c.contains("{{\$t('第{N0}版',{N0:record.versionNum})}}")
         )
         assertFalse(
             "子字面量不应被单独重复提取，got:\n$result",

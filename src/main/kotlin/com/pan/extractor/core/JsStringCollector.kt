@@ -81,6 +81,22 @@ class JsStringCollector(
         return trimmed
     }
 
+    /** 合法裸对象键 / vue-i18n 具名插值参数名（纯标识符）。 */
+    private val PLAIN_IDENTIFIER = Regex("""^[A-Za-z_$][\w$]*$""")
+
+    /**
+     * 计算模板插值的语义参数键。
+     *
+     * Vue 系框架（[I18nFramework.paramKeyNeedsQuote]=false）参数对象裸写 key：
+     * 含点的属性链（item.versionNum）会产生非法 JS 对象键 `{ item.versionNum: ... }`，
+     * 且 vue-i18n 具名插值不认点号名 → 回退编号占位（N0），参数值保留完整变量表达式。
+     */
+    private fun semanticKeyForParam(innerContent: String, fw: I18nFramework, rawIndex: Int): String {
+        val sk = extractSemanticKey(innerContent) ?: return rawIndex.toString()
+        if (!fw.paramKeyNeedsQuote && !PLAIN_IDENTIFIER.matches(sk)) return rawIndex.toString()
+        return sk
+    }
+
     private val JS_RESERVED = setOf(
         "break", "case", "catch", "class", "const", "continue", "debugger", "default",
         "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
@@ -132,7 +148,7 @@ class JsStringCollector(
                 return@replace pureString
             }
             val rawIndex = index++
-            val semanticKey = extractSemanticKey(innerContent) ?: rawIndex.toString()
+            val semanticKey = semanticKeyForParam(innerContent, fw, rawIndex)
             val key = fw.paramKey(semanticKey)
             val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent
@@ -250,7 +266,7 @@ class JsStringCollector(
             val pureString = processor.extractPureStringContent(innerContent)
             if (pureString != null) return@replace pureString
             val rawIndex = index++
-            val semanticKey = extractSemanticKey(innerContent) ?: rawIndex.toString()
+            val semanticKey = semanticKeyForParam(innerContent, fw, rawIndex)
             val key = fw.paramKey(semanticKey)
             val placeholder = fw.placeholderFor(semanticKey)
             params[key] = innerContent

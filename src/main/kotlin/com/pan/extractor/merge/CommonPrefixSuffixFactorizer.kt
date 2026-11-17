@@ -224,7 +224,7 @@ object CommonPrefixSuffixFactorizer {
                 }
                 if (candidates.isEmpty()) continue
                 // 选 anchor 的 (p,s)：所有 candidates 中最大交 (prefix,suffix) 对（第一个就是最长）
-                val (maxPrefix, maxSuffix, anchorDiff) = candidates.maxBy { it.second.first.length + it.second.second.length }.second.let { c0 ->
+                val (rawMaxPrefix, rawMaxSuffix, _) = candidates.maxBy { it.second.first.length + it.second.second.length }.second.let { c0 ->
                     var p = c0.first; var s = c0.second
                     // 交集遍历**所有**候选：与 c0 自身相交是 no-op，但避免按迭代位置 drop 掉
                     // 恰好排在首位的候选 —— 那会让"仅部分候选共享的后缀"（如 AX测试3XZ 不共享的 XY）
@@ -237,6 +237,17 @@ object CommonPrefixSuffixFactorizer {
                     val end = if (s.isNotEmpty()) a.length - s.length else a.length
                     Triple(p, s, a.substring(p.length, end))
                 }
+                // 【占位符边界保护】公共前后缀不得把占位符 `{...}` 拦腰切开：
+                //   `第{item.x}版` 与 `第{user.x}版` 纯字符匹配会得到前缀 `第{` + 后缀 `.x}版`，
+                //   切出破碎骨架 `第{{N0}.x}版`、且占位符内变量被引号字面量化（'item'）。
+                //   含未闭合 `{` 的前缀截到该 `{` 前；后缀从自身未配对 `}` 之后起。
+                val maxPrefix = trimPrefixOutOfPlaceholder(rawMaxPrefix)
+                val maxSuffix = trimSuffixOutOfPlaceholder(rawMaxSuffix)
+                val affixAnchorMsg = anchor.originalMessage
+                if (!affixAnchorMsg.startsWith(maxPrefix) || !affixAnchorMsg.endsWith(maxSuffix)
+                    || affixAnchorMsg.length <= maxPrefix.length + maxSuffix.length
+                ) continue
+                val anchorDiff = affixAnchorMsg.substring(maxPrefix.length, affixAnchorMsg.length - maxSuffix.length)
                 // 如果交集前后缀太短（合并过程中缩小），放弃这个分组
                 val pLen = maxPrefix.codePointCount(0, maxPrefix.length)
                 val sLen = maxSuffix.codePointCount(0, maxSuffix.length)
@@ -270,6 +281,9 @@ object CommonPrefixSuffixFactorizer {
                 // 时正是单页转换卡到 20s+ 的根因。
                 if (toRemove.isNotEmpty()) list.removeAll(toRemove)
                 if (toRemove.isNotEmpty()) remaining.removeAll(toRemove)
+                // 差异段含花括号（占位符整体或残缺落入 diff）时，参数渲染只有「数字/带引号
+                //   字面量」两种形态，无法保留变量表达式 → 放弃该组，各句保持独立 $t（保守零误改）。
+                if (variants.keys.any { '{' in it || '}' in it }) continue
                 val skeleton = "$maxPrefix{N0}$maxSuffix"
                 results += AffixGroupCandidate(
                     id = "AG${++idSeq}",
@@ -430,6 +444,33 @@ object CommonPrefixSuffixFactorizer {
      * 用于后缀扫描的数字边界保护：当两个字符串在相同位置都遇到数字字符时，
      * 判断它们是否属于同一个完整数字（如 "30" == "30"），否则不应计入公共后缀。
      */
+    /** 前缀内含未闭合 `{`（切在占位符内部）→ 截到最后一个未闭合 `{` 之前，循环至平衡。 */
+    private fun trimPrefixOutOfPlaceholder(p: String): String {
+        var s = p
+        while (true) {
+            if (s.count { it == '{' } <= s.count { it == '}' }) return s
+            val cut = s.lastIndexOf('{')
+            if (cut < 0) return ""
+            s = s.substring(0, cut)
+        }
+    }
+
+    /** 后缀以未配对 `}` 开头（起点在占位符内部）→ 从该 `}` 之后起。 */
+    private fun trimSuffixOutOfPlaceholder(s: String): String {
+        var depth = 0
+        var cut = 0
+        for (i in s.indices) {
+            when (s[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth < 0) { cut = i + 1; depth = 0 }
+                }
+            }
+        }
+        return s.substring(cut)
+    }
+
     private fun extractFullNumberAt(s: String, pos: Int): String {
         if (pos < 0 || pos >= s.length || !s[pos].isDigit()) return ""
         val m = DIGIT_TOKEN_RE.findAll(s).firstOrNull { it.range.contains(pos) }

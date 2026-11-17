@@ -440,14 +440,18 @@ class I18nDataCorrectnessTest : BasePlatformTestCase() {
         assertTrue("应用语义化 key {price}: $rewritten", rewritten.contains("{price}"))
     }
 
-    /** 属性链 user.name → 语义化占位符 {user.name} */
+    /** 属性链 user.name：点号键作 Vue 对象裸键非法（owner bug 报告 2026-11），
+     *  且 vue-i18n 具名插值不支持点号名 → 回退编号 {N0}，参数值保留变量表达式 */
     fun testE2EVuePropertyChainSemantic() {
         val rewritten = rewriteVue("""
             <script setup>
             const msg = "你好" + user.name;
             </script>
         """)
-        assertTrue("应用语义化 key {user.name}: $rewritten", rewritten.contains("{user.name}"))
+        assertTrue("应回退编号占位 {N0}: $rewritten", rewritten.contains("{N0}"))
+        assertTrue("参数值应是变量表达式 user.name: $rewritten", rewritten.contains("N0: user.name"))
+        assertTrue("点号裸键 { user.name: 非法 JS 不应出现: $rewritten",
+            !Regex("""\{\s*user\.name\s*:""").containsMatchIn(rewritten))
     }
 
     /** 含数字的变量名 item1 → 语义化（不是 fallback 编号） */
