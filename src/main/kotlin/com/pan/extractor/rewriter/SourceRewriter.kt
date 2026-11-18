@@ -121,10 +121,24 @@ object JsRewriter : SourceRewriter {
     }
 
     /**
-     * 用纯文本 LeafPsiElement 替换 [element]（保留原始文本，无语法解析）。
-     * 迁移自 JsStringCollector.collectJSStringTemplate 的 recordChange 闭包。
+     * 替换 JS 拼接串 / 模板串节点为完整的翻译调用表达式（[text] 形如 `$t('key', {...})`）。
+     *
+     * 历史实现用纯文本 LeafPsiElement（[I18nPsiTools.createStringExpressionNode]）替换，
+     * 虽然源码文本正确，但 PSI 树里那块只是未解析的 STRING_LITERAL 文本节点，不是真正的
+     * JSCallExpression。后果：二次翻译（同一会话内、用户删掉资源 key 后再翻译）时，
+     * I18nAnalyzer.collectExistingTKeys 依赖 `findChildrenOfType(root, JSCallExpression)`
+     * 遍历，找不到这些纯文本形态的 `$t(...)`，导致已有 key 收集不到、无法补回资源文件。
+     *
+     * 修复：与 [rewriteLiteral] 一样优先用 [JSChangeUtil.tryCreateExpressionFromText]
+     * 把 [text] 解析成完整 PSI（真正的 JSCallExpression），确保改写后立即可被遍历收集；
+     * 仅当解析失败（极端转义 / 上下文异常）时回退到纯文本节点，保证源码文本仍正确。
      */
     fun rewriteWithStringNode(element: PsiElement, text: String) {
+        val newExpr = JSChangeUtil.tryCreateExpressionFromText(element.project, text, null, false)
+        if (newExpr != null) {
+            element.replace(newExpr.psi)
+            return
+        }
         val newElement = I18nPsiTools.createStringExpressionNode(text, element)
         element.replace(newElement)
     }
