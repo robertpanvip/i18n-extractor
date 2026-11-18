@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.7"
+version = "1.16.8"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.8</h4>
+            <ul>
+                <li>Fix: re-translating an already translated file no longer loses keys such as <code>第{versionNum}版</code>. The symbol-analysis cache generation now includes the PSI Document stamp in addition to the VFS stamp; plugin rewrites only bump the Document stamp, so the previous VFS-only key reused a stale, offset-keyed call analysis within the same IDE session and classified the rewritten <code>${'$'}t(...)</code> as non-translation. Restarting the IDE cleared the static cache, which is why a restart appeared to fix it</li>
+                <li>Fix: string-concatenation/template rewrites now generate a complete <code>JSCallExpression</code> PSI instead of a bare text leaf, so an injected <code>${'$'}t('第{versionNum}版', {...})</code> is recognized on the next collection pass and its key can be written back</li>
+            </ul>
             <h4>1.16.7</h4>
             <ul>
                 <li>Fix: pre-existing translation keys in the resource file are no longer silently deleted during merge. Sentences whose diff contains sentence/label punctuation (e.g. <code>发布的版本：</code>) are no longer over-merged with unrelated short-prefix siblings (e.g. <code>发布成功</code>); previously both full sentences were marked as consumed and <code>dropExistingKeys</code> removed the user's existing <code>发布成功:'发布成功'</code> entry</li>
