@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.6"
+version = "1.16.7"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.7</h4>
+            <ul>
+                <li>Fix: pre-existing translation keys in the resource file are no longer silently deleted during merge. Sentences whose diff contains sentence/label punctuation (e.g. <code>发布的版本：</code>) are no longer over-merged with unrelated short-prefix siblings (e.g. <code>发布成功</code>); previously both full sentences were marked as consumed and <code>dropExistingKeys</code> removed the user's existing <code>发布成功:'发布成功'</code> entry</li>
+            </ul>
             <h4>1.16.6</h4>
             <ul>
                 <li>Fix: Vue directive values that are string concatenations (e.g. <code>:label="'你好，' + name"</code>) no longer produce junk translation keys containing raw code; they are now extracted as semantic placeholder messages (<code>你好，{name}</code>) just like concatenations in script code</li>
