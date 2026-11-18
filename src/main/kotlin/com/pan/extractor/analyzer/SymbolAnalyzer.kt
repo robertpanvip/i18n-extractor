@@ -16,6 +16,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -170,10 +171,26 @@ object SymbolAnalyzer {
     /** #2 barrel/re-export 跟随结果缓存：key = "$path#$stamp#$localName"，跨调用复用，赢在消除对同一 barrel 链的重复递归。 */
     private val reexportCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
-    /** 取 [file] 对应缓存代。公式变时（WriteAction bump modificationStamp）整代重建，杜绝读陈旧 PSI。 */
+    /**
+     * 取 [file] 对应缓存代。公式变时整代重建，杜绝读陈旧 PSI。
+     *
+     * 缓存代必须同时含 **Document.modificationStamp**：插件在一次 IDE 会话内的改写
+     * 走 `Document.setText`（WriteCommandAction），此时 **VirtualFile.modificationStamp 不变**
+     * （实测改写前后 vf stamp 恒为 8，而 doc stamp 8→10/167）。若只用 vf stamp，改写后的新
+     * 公式会复用改写前的旧 [FileScanMemo]——其 [FileScanMemo.scanData] 与按**纯 offset** 索引的
+     * [FileScanMemo.calleeAnalysis]/[FileScanMemo.resolveResult] 全是旧公式的产物。
+     *
+     * 典型故障：第一次翻译把 `foo()`（offset X，判为 NON_TRANSLATION）改写成
+     * `$t('第{versionNum}版')`（同一 offset X）；二次翻译时 `analyze` 命中 `calleeAnalysis[X]`
+     * 的旧 NON_TRANSLATION，导致该 key 不被收集、无法写回语言包；只有重启 IDEA 清空 object
+     * 级静态缓存 [fileScanMemo] 才恢复——正是「重启后翻译才正常」的根因。
+     *
+     * 与 `LocaleMessages.loadCached` 的缓存代口径保持一致（那里同样用 PSI Document stamp
+     * 而非 VFS stamp，注释：确保未保存变更也能让缓存失效）。
+     */
     private fun fileScanGen(file: PsiFile): FileScanMemo? {
         val vf = file.virtualFile
-        if (vf != null) return memoOf(file, vf.path, vf.modificationStamp)
+        if (vf != null) return memoOf(file, vf.path, cacheStamp(file, vf.modificationStamp))
         // 注入片段（Vue mustache 等）：无 VFS 文件 → 回退「宿主文件路径 + 片段起始偏移」为键。
         // 这样注入 PSI 也走 FileScanMemo 缓存（analyze/resolve/shadow 等按 offset 复用），
         // 消除「注入片段每次都全量无缓存分析」的准平方级成本。scanData 仍按注入片段自身
@@ -181,7 +198,24 @@ object SymbolAnalyzer {
         val host = InjectedLanguageManager.getInstance(file.project).getInjectionHost(file) ?: return null
         val hostVf = host.containingFile?.virtualFile ?: return null
         val key = "${hostVf.path}#inj@${host.textRange.startOffset}"
-        return memoOf(file, key, hostVf.modificationStamp)
+        // 宿主文件可能被 language injection 包装成不同 PsiFile，统一用宿主 VFS stamp + 宿主文档 stamp。
+        val hostPsi = PsiManager.getInstance(file.project).findFile(hostVf)
+        return memoOf(file, key, cacheStamp(hostPsi, hostVf.modificationStamp))
+    }
+
+    /**
+     * 缓存代 = VFS stamp（磁盘变更失效）+ PSI Document stamp（会话内未保存改写失效）的组合。
+     * 任一变化即视为公式改变，整代重建。Document 不可得时退化为仅 VFS stamp（旧行为）。
+     */
+    private fun cacheStamp(file: PsiFile?, vfStamp: Long): Long {
+        val docStamp = try {
+            file?.let { PsiDocumentManager.getInstance(it.project).getDocument(it)?.modificationStamp }
+        } catch (_: Throwable) {
+            null
+        }
+        return if (docStamp == null) vfStamp
+        // 两个 stamp 都是非负长整型；用字符串拼接后取 hash，避免简单相加/异或的碰撞。
+        else ("$vfStamp#$docStamp").hashCode().toLong()
     }
 
     private fun memoOf(file: PsiFile, key: String, stamp: Long): FileScanMemo {
