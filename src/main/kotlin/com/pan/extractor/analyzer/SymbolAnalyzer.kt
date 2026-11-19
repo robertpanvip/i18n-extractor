@@ -92,6 +92,30 @@ data class CalleeAnalysis(
  * val baseOrigin = SymbolAnalyzer.resolveOrigin(baseRef) // 只分析某个引用
  * ```
  */
+
+/**
+ * 熔断 IntelliJ 平台内部的引用解析崩溃，返回 [fallback] 让上层走文件级结构证明回退。
+ *
+ * 平台 bug（已实测）：TS 模块解析在 `JSDefaultFileReferenceContext.actualDirectory` 里
+ * 对空目录调用 `Objects.requireNonNull` 抛 NPE，经 `ref.resolve()` 冒泡。插件在 inlay
+ * 更新的 UI 线程上调用 resolve，若不拦截会让异常冲到 IdeEventQueue，弹出 IDE 错误通知。
+ * 这类崩溃来自平台自身（索引/tsconfig 瞬间不一致），重试无意义，安全降级即可。
+ *
+ * 保留传播的两类：
+ * - [ProcessCanceledException]：用户主动取消 / 平台超时须交回 [SymbolAnalyzer.resolvedOf]
+ *   既有策略（区分取消 vs 超时熔断），不能被当作普通解析失败吞掉；
+ * - [VirtualMachineError] / [ThreadDeath]：OOM、线程终止等致命错误不得吞。
+ * 其余 [Throwable]（含平台 NPE、AssertionError、IllegalStateException）一律降级。
+ */
+internal fun <T> safeResolveOr(fallback: T, block: () -> T): T = try {
+    block()
+} catch (pce: ProcessCanceledException) {
+    throw pce
+} catch (fatal: Throwable) {
+    if (fatal is VirtualMachineError || fatal is ThreadDeath) throw fatal
+    fallback
+}
+
 object SymbolAnalyzer {
 
     /** 提供翻译函数（t/tc/\$t）的 i18n 框架包名。命中说明该 import 是"真实 i18n 框架"。 */
@@ -315,7 +339,10 @@ object SymbolAnalyzer {
         // 避免 TypeScript resolve 引擎中的 runBlockingCancellable 因缺少进度上下文而抛
         // "There is no ProgressIndicator or Job in this thread" 异常。
         fun resolveInReadAction(): PsiElement? = try {
-            ReadAction.compute<PsiElement?, Throwable> { ref.resolve() }
+            // 平台内部解析（TS 模块解析等）可能抛 NPE/AssertionError 等，不能冒泡到
+            // inlay 更新的 UI 线程导致 IDE 错误通知。降级为 null → 文件级结构证明回退。
+            // PCE 仍由此处 catch 保留既有「用户取消传播 / 平台超时熔断」语义。
+            safeResolveOr<PsiElement?>(null) { ReadAction.compute<PsiElement?, Throwable> { ref.resolve() } }
         } catch (pce: ProcessCanceledException) {
             // 单元测试保持严格语义：PCE 一律上抛（测试环境无 TS 服务 20s 超时，出现即异常）
             if (ApplicationManager.getApplication().isUnitTestMode) throw pce
