@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.pan"
-version = "1.16.8"
+version = "1.16.9"
 
 repositories {
     mavenCentral()
@@ -56,6 +56,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h4>1.16.9</h4>
+            <ul>
+                <li>Fix: an IntelliJ/TypeScript module-resolver NPE (thrown inside <code>Objects.requireNonNull</code> in <code>JSDefaultFileReferenceContext.actualDirectory</code>) no longer surfaces as an IDE error notification. The plugin calls <code>resolve()</code> from the inlay-toggle update on the UI thread, so the platform exception could bubble up to the event queue; it is now caught and degraded to the existing file-level structural-proof fallback. User cancellation and fatal VM errors still propagate</li>
+            </ul>
             <h4>1.16.8</h4>
             <ul>
                 <li>Fix: re-translating an already translated file no longer loses keys such as <code>第{versionNum}版</code>. The symbol-analysis cache generation now includes the PSI Document stamp in addition to the VFS stamp; plugin rewrites only bump the Document stamp, so the previous VFS-only key reused a stale, offset-keyed call analysis within the same IDE session and classified the rewritten <code>${'$'}t(...)</code> as non-translation. Restarting the IDE cleared the static cache, which is why a restart appeared to fix it</li>
